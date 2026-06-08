@@ -1,0 +1,86 @@
+{{- if and .Values.clickhouse.enabled .Values.clickhouse.seed.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "uvoo-dbviz.fullname" . }}-clickhouse-seed
+  labels:
+    {{- include "uvoo-dbviz.labels" . | nindent 4 }}
+    app.kubernetes.io/component: clickhouse-seed
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "uvoo-dbviz.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: clickhouse-seed
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: seed
+          image: {{ .Values.clickhouse.image | quote }}
+          env:
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "uvoo-dbviz.fullname" .) .Values.secret.existingSecret }}
+                  key: DBVIZ_CLICKHOUSE_PASSWORD
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              clickhouse-client --host {{ include "uvoo-dbviz.fullname" . }}-clickhouse --port 9000 --password "$CLICKHOUSE_PASSWORD" --multiquery <<'SQL'
+              CREATE TABLE IF NOT EXISTS otel_logs (
+                  tenant_id String,
+                  timestamp DateTime64(3, 'UTC'),
+                  service_name LowCardinality(String),
+                  severity LowCardinality(String),
+                  host_name LowCardinality(String),
+                  trace_id String,
+                  body String,
+                  attributes JSON
+              ) ENGINE = MergeTree
+              PARTITION BY toYYYYMM(timestamp)
+              ORDER BY (tenant_id, service_name, timestamp);
+
+              CREATE TABLE IF NOT EXISTS otel_traces (
+                  tenant_id String,
+                  timestamp DateTime64(3, 'UTC'),
+                  service_name LowCardinality(String),
+                  span_name LowCardinality(String),
+                  status_code LowCardinality(String),
+                  trace_id String,
+                  span_id String,
+                  duration_ms Float64,
+                  attributes JSON
+              ) ENGINE = MergeTree
+              PARTITION BY toYYYYMM(timestamp)
+              ORDER BY (tenant_id, service_name, timestamp, trace_id);
+
+              CREATE TABLE IF NOT EXISTS otel_metrics (
+                  tenant_id String,
+                  timestamp DateTime64(3, 'UTC'),
+                  service_name LowCardinality(String),
+                  metric_name LowCardinality(String),
+                  value Float64,
+                  attributes JSON
+              ) ENGINE = MergeTree
+              PARTITION BY toYYYYMM(timestamp)
+              ORDER BY (tenant_id, metric_name, timestamp);
+
+              INSERT INTO otel_logs (tenant_id, timestamp, service_name, severity, host_name, trace_id, body, attributes) VALUES
+              ('dev', now64(3) - INTERVAL 55 MINUTE, 'checkout', 'info', 'app-1', 'trace-a', 'cart opened', '{}'),
+              ('dev', now64(3) - INTERVAL 48 MINUTE, 'checkout', 'error', 'app-1', 'trace-b', 'payment retry', '{}'),
+              ('dev', now64(3) - INTERVAL 33 MINUTE, 'api', 'info', 'app-2', 'trace-c', 'request handled', '{}'),
+              ('dev', now64(3) - INTERVAL 14 MINUTE, 'api', 'warning', 'app-2', 'trace-d', 'slow upstream', '{}');
+
+              INSERT INTO otel_traces (tenant_id, timestamp, service_name, span_name, status_code, trace_id, span_id, duration_ms, attributes) VALUES
+              ('dev', now64(3) - INTERVAL 50 MINUTE, 'checkout', 'POST /cart', 'ok', 'trace-a', 'span-a', 42.1, '{}'),
+              ('dev', now64(3) - INTERVAL 45 MINUTE, 'checkout', 'POST /pay', 'error', 'trace-b', 'span-b', 180.4, '{}');
+
+              INSERT INTO otel_metrics (tenant_id, timestamp, service_name, metric_name, value, attributes) VALUES
+              ('dev', now64(3) - INTERVAL 55 MINUTE, 'checkout', 'http.requests', 41, '{}'),
+              ('dev', now64(3) - INTERVAL 45 MINUTE, 'checkout', 'http.requests', 66, '{}'),
+              ('dev', now64(3) - INTERVAL 30 MINUTE, 'api', 'http.requests', 120, '{}');
+              SQL
+{{- end }}

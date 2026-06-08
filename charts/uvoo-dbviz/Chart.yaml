@@ -1,0 +1,7 @@
+apiVersion: v2
+name: uvoo-dbviz
+description: Tenant-aware ClickHouse observability visualizer
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+

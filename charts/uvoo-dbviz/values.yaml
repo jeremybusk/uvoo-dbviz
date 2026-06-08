@@ -1,0 +1,86 @@
+replicaCount: 1
+
+image:
+  repository: ghcr.io/jeremybusk/uvoo-dbviz
+  pullPolicy: Always
+  tag: latest
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ""
+
+podSecurityContext:
+  fsGroup: 10001
+  fsGroupChangePolicy: OnRootMismatch
+
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: true
+  runAsGroup: 10001
+  runAsNonRoot: true
+  runAsUser: 10001
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8080
+
+config:
+  authDevMode: true
+  publicUrl: ""
+  postgrestUrl: ""
+  clickhouseUrl: ""
+  clickhouseDatabase: default
+  clickhouseUser: default
+  googleClientId: ""
+  microsoftClientId: ""
+  keycloakIssuer: ""
+  keycloakClientId: ""
+  extraEnv: []
+
+secret:
+  clickhousePassword: "clickhouse"
+  keycloakClientSecret: ""
+  existingSecret: ""
+
+clickhouse:
+  enabled: true
+  image: clickhouse/clickhouse-server:25.5-alpine
+  storageSize: 10Gi
+  storageClass: ""
+  seed:
+    enabled: true
+
+ingress:
+  enabled: false
+  className: nginx
+  annotations: {}
+  host: dbviz.example.com
+  path: /
+  pathType: Prefix
+  tls:
+    enabled: false
+    secretName: ""
+
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+probes:
+  liveness:
+    enabled: true
+    initialDelaySeconds: 20
+    periodSeconds: 20
+  readiness:
+    enabled: true
+    initialDelaySeconds: 5
+    periodSeconds: 10

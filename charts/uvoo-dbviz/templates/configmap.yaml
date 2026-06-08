@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "uvoo-dbviz.fullname" . }}
+  labels:
+    {{- include "uvoo-dbviz.labels" . | nindent 4 }}
+data:
+  DBVIZ_ADDR: ":8080"
+  DBVIZ_WEB_ROOT: "/app/web/dist"
+  DBVIZ_AUTH_DEV_MODE: {{ .Values.config.authDevMode | quote }}
+  DBVIZ_PUBLIC_URL: {{ .Values.config.publicUrl | quote }}
+  DBVIZ_CLICKHOUSE_URL: {{ include "uvoo-dbviz.clickhouseURL" . | quote }}
+  DBVIZ_CLICKHOUSE_DATABASE: {{ .Values.config.clickhouseDatabase | quote }}
+  DBVIZ_CLICKHOUSE_USER: {{ .Values.config.clickhouseUser | quote }}
+  DBVIZ_POSTGREST_URL: {{ .Values.config.postgrestUrl | quote }}
+  DBVIZ_OIDC_GOOGLE_CLIENT_ID: {{ .Values.config.googleClientId | quote }}
+  DBVIZ_OIDC_MICROSOFT_CLIENT_ID: {{ .Values.config.microsoftClientId | quote }}
+  DBVIZ_OIDC_KEYCLOAK_ISSUER: {{ .Values.config.keycloakIssuer | quote }}
+  DBVIZ_OIDC_KEYCLOAK_CLIENT_ID: {{ .Values.config.keycloakClientId | quote }}
+
