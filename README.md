@@ -41,9 +41,10 @@ Development auth is enabled by default in Compose. The seeded Keycloak users are
 - `alice` / `password`, tenant `dev`
 - `bob` / `password`, tenant `example.com`
 
-The UI can also use dev auth when `DBVIZ_AUTH_DEV_MODE=true`. PostgREST dashboard
-RPCs accept `X-Dev-Tenant: dev` for local development and JWT tenant claims for
-real OIDC sessions.
+The UI can also use dev auth when `DBVIZ_AUTH_DEV_MODE=true`. Browser state
+operations go through the Go API, which forwards bearer tokens or local dev
+tenant headers to PostgREST. PostgREST still enforces RLS with JWT tenant claims
+or `X-Dev-Tenant: dev` in local development.
 
 Run the OTel sample emitter after the stack is up:
 
@@ -78,13 +79,23 @@ cannot bypass tenant scoping with arbitrary SQL.
 
 ## Dashboards
 
-The frontend saves and opens dashboards through PostgREST RPCs:
+The frontend saves and opens dashboards through Go API endpoints backed by
+PostgREST RPCs:
 
+- `GET /api/dashboards`
+- `POST /api/dashboards`
 - `list_dashboards()`
 - `save_dashboard(dashboard_id uuid, dashboard_name text, dashboard_layout jsonb)`
 
 Those functions derive tenant context from JWT claims such as `tenant_id`,
 `tenant_slug`, Google `hd`, Microsoft `tid`, or the local `X-Dev-Tenant` header.
+
+Alert rule and contact management follows the same pattern:
+
+- `GET /api/alerts/rules`
+- `POST /api/alerts/rules`
+- `GET /api/alerts/contacts`
+- `POST /api/alerts/contacts`
 
 ## Alerts
 

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import * as echarts from 'echarts';
 import {
+  AlertRule,
+  ContactEndpoint,
   Dataset,
   Dashboard,
   Principal,
@@ -13,7 +15,6 @@ import {
   clearToken,
   getToken,
   randomVerifier,
-  postgrestRPC,
   setToken,
   sha256base64url
 } from './api';
@@ -36,6 +37,14 @@ function App() {
   const [tokenInput, setTokenInput] = useState('');
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
   const [dashboardName, setDashboardName] = useState('Sample Observability');
+  const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
+  const [contacts, setContacts] = useState<ContactEndpoint[]>([]);
+  const [alertName, setAlertName] = useState('High signal volume');
+  const [alertThreshold, setAlertThreshold] = useState('100');
+  const [contactName, setContactName] = useState('Primary webhook');
+  const [contactTarget, setContactTarget] = useState('');
+  const [contactKind, setContactKind] = useState<ContactEndpoint['kind']>('webhook');
+  const [selectedContact, setSelectedContact] = useState('');
   const [query, setQuery] = useState<QueryState>(() => {
     const to = new Date();
     const from = new Date(to.getTime() - 60 * 60 * 1000);
@@ -65,6 +74,7 @@ function App() {
   useEffect(() => {
     if (!config || !user) return;
     loadDashboards().catch((err) => setError(err.message));
+    loadAlertState().catch((err) => setError(err.message));
   }, [config, user]);
 
   async function handleOIDCCallback() {
@@ -122,13 +132,11 @@ function App() {
   }
 
   async function loadDashboards() {
-    if (!config?.postgrest.url) return;
-    const result = await postgrestRPC<Dashboard[]>(config.postgrest.url, 'list_dashboards', {});
+    const result = await apiGet<Dashboard[]>('/api/dashboards');
     setDashboards(result);
   }
 
   async function saveDashboard() {
-    if (!config?.postgrest.url) return;
     const layout = {
       version: 1,
       charts: [
@@ -138,12 +146,50 @@ function App() {
         }
       ]
     };
-    const saved = await postgrestRPC<Dashboard[]>(config.postgrest.url, 'save_dashboard', {
-      dashboard_id: null,
-      dashboard_name: dashboardName,
-      dashboard_layout: layout
+    const saved = await apiPost<Dashboard[]>('/api/dashboards', {
+      id: null,
+      name: dashboardName,
+      layout
     });
     setDashboards((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+  }
+
+  async function loadAlertState() {
+    const [rules, endpoints] = await Promise.all([
+      apiGet<AlertRule[]>('/api/alerts/rules'),
+      apiGet<ContactEndpoint[]>('/api/alerts/contacts')
+    ]);
+    setAlertRules(rules);
+    setContacts(endpoints);
+    if (!selectedContact && endpoints[0]) setSelectedContact(endpoints[0].id);
+  }
+
+  async function saveContact() {
+    const saved = await apiPost<ContactEndpoint[]>('/api/alerts/contacts', {
+      id: null,
+      name: contactName,
+      kind: contactKind,
+      target: contactTarget,
+      config: {}
+    });
+    setContacts((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    if (saved[0]) setSelectedContact(saved[0].id);
+  }
+
+  async function saveAlert() {
+    const saved = await apiPost<AlertRule[]>('/api/alerts/rules', {
+      id: null,
+      name: alertName,
+      query,
+      condition: {
+        operator: 'gt',
+        threshold: Number(alertThreshold)
+      },
+      intervalSeconds: 60,
+      enabled: true,
+      contactEndpointId: selectedContact || null
+    });
+    setAlertRules((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
   }
 
   function openDashboard(dashboard: Dashboard) {
@@ -248,6 +294,56 @@ function App() {
               <button key={dashboard.id} onClick={() => openDashboard(dashboard)}>{dashboard.name}</button>
             ))}
           </div>
+        </section>
+
+        <section className="panel">
+          <h2>Alerts</h2>
+          <label>
+            Rule
+            <input value={alertName} onChange={(event) => setAlertName(event.target.value)} />
+          </label>
+          <label>
+            Threshold
+            <input type="number" min="0" value={alertThreshold} onChange={(event) => setAlertThreshold(event.target.value)} />
+          </label>
+          <label>
+            Contact
+            <select value={selectedContact} onChange={(event) => setSelectedContact(event.target.value)}>
+              <option value="">None</option>
+              {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.name}</option>)}
+            </select>
+          </label>
+          <button disabled={!user} onClick={saveAlert}>Save rule</button>
+          <div className="dashboard-list">
+            {alertRules.map((rule) => (
+              <button key={rule.id} onClick={() => {
+                setAlertName(rule.name);
+                setAlertThreshold(String(rule.condition?.threshold ?? 0));
+                setSelectedContact(rule.contact_endpoint_id || '');
+              }}>{rule.name}</button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Contacts</h2>
+          <label>
+            Name
+            <input value={contactName} onChange={(event) => setContactName(event.target.value)} />
+          </label>
+          <label>
+            Kind
+            <select value={contactKind} onChange={(event) => setContactKind(event.target.value as ContactEndpoint['kind'])}>
+              <option value="webhook">Webhook</option>
+              <option value="pagerduty">PagerDuty</option>
+              <option value="email">Email</option>
+            </select>
+          </label>
+          <label>
+            Target
+            <input value={contactTarget} onChange={(event) => setContactTarget(event.target.value)} />
+          </label>
+          <button disabled={!user || !contactTarget} onClick={saveContact}>Save contact</button>
         </section>
       </aside>
 

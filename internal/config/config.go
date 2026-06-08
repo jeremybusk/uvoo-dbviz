@@ -86,7 +86,6 @@ type PublicProvider struct {
 }
 
 type PublicConfig struct {
-	PostgREST PostgRESTConfig  `json:"postgrest"`
 	Providers []PublicProvider `json:"providers"`
 	Datasets  []Dataset        `json:"datasets"`
 	DevMode   bool             `json:"devMode"`
@@ -256,7 +255,6 @@ func (c Config) Public() PublicConfig {
 		datasets = append(datasets, dataset)
 	}
 	return PublicConfig{
-		PostgREST: c.PostgREST,
 		Providers: providers,
 		Datasets:  datasets,
 		DevMode:   c.Auth.DevMode,

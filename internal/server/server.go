@@ -12,18 +12,20 @@ import (
 	"uvoo-dbviz/internal/auth"
 	"uvoo-dbviz/internal/clickhouse"
 	"uvoo-dbviz/internal/config"
+	"uvoo-dbviz/internal/state"
 )
 
 type App struct {
 	cfg    config.Config
 	authn  *auth.Manager
 	ch     *clickhouse.Client
+	state  *state.Client
 	logger *slog.Logger
 	mux    *http.ServeMux
 }
 
-func New(cfg config.Config, authn *auth.Manager, ch *clickhouse.Client, logger *slog.Logger) http.Handler {
-	app := &App{cfg: cfg, authn: authn, ch: ch, logger: logger, mux: http.NewServeMux()}
+func New(cfg config.Config, authn *auth.Manager, ch *clickhouse.Client, stateClient *state.Client, logger *slog.Logger) http.Handler {
+	app := &App{cfg: cfg, authn: authn, ch: ch, state: stateClient, logger: logger, mux: http.NewServeMux()}
 	app.routes()
 	return securityHeaders(app.mux)
 }
@@ -35,6 +37,12 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/oidc/{provider}/exchange", a.oidcExchange)
 	a.mux.HandleFunc("GET /api/me", a.requireAuth(a.me))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
+	a.mux.HandleFunc("GET /api/dashboards", a.requireAuth(a.listDashboards))
+	a.mux.HandleFunc("POST /api/dashboards", a.requireAuth(a.saveDashboard))
+	a.mux.HandleFunc("GET /api/alerts/rules", a.requireAuth(a.listAlertRules))
+	a.mux.HandleFunc("POST /api/alerts/rules", a.requireAuth(a.saveAlertRule))
+	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
+	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
 	a.mux.HandleFunc("/", a.static)
 }
 
@@ -100,6 +108,141 @@ func (a *App) query(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
+}
+
+func (a *App) listDashboards(w http.ResponseWriter, r *http.Request) {
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "list_dashboards", map[string]any{}, principal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) saveDashboard(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID     string         `json:"id"`
+		Name   string         `json:"name"`
+		Layout map[string]any `json:"layout"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, errors.New("dashboard name is required"))
+		return
+	}
+	var dashboardID any
+	if req.ID != "" {
+		dashboardID = req.ID
+	}
+	var rows []map[string]any
+	err := a.state.RPC(r.Context(), "save_dashboard", map[string]any{
+		"dashboard_id":     dashboardID,
+		"dashboard_name":   req.Name,
+		"dashboard_layout": req.Layout,
+	}, principal(r), r.Header.Get("Authorization"), &rows)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) listAlertRules(w http.ResponseWriter, r *http.Request) {
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "list_alert_rules", map[string]any{}, principal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID                string         `json:"id"`
+		Name              string         `json:"name"`
+		Query             map[string]any `json:"query"`
+		Condition         map[string]any `json:"condition"`
+		IntervalSeconds   int            `json:"intervalSeconds"`
+		Enabled           bool           `json:"enabled"`
+		ContactEndpointID string         `json:"contactEndpointId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, errors.New("alert name is required"))
+		return
+	}
+	var alertID, contactID any
+	if req.ID != "" {
+		alertID = req.ID
+	}
+	if req.ContactEndpointID != "" {
+		contactID = req.ContactEndpointID
+	}
+	var rows []map[string]any
+	err := a.state.RPC(r.Context(), "save_alert_rule", map[string]any{
+		"alert_id":         alertID,
+		"alert_name":       req.Name,
+		"alert_query":      req.Query,
+		"alert_condition":  req.Condition,
+		"alert_interval":   req.IntervalSeconds,
+		"alert_enabled":    req.Enabled,
+		"alert_contact_id": contactID,
+	}, principal(r), r.Header.Get("Authorization"), &rows)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) listContactEndpoints(w http.ResponseWriter, r *http.Request) {
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "list_contact_endpoints", map[string]any{}, principal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID     string         `json:"id"`
+		Name   string         `json:"name"`
+		Kind   string         `json:"kind"`
+		Target string         `json:"target"`
+		Config map[string]any `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Name == "" || req.Kind == "" || req.Target == "" {
+		writeError(w, http.StatusBadRequest, errors.New("contact name, kind, and target are required"))
+		return
+	}
+	var contactID any
+	if req.ID != "" {
+		contactID = req.ID
+	}
+	var rows []map[string]any
+	err := a.state.RPC(r.Context(), "save_contact_endpoint", map[string]any{
+		"contact_id":     contactID,
+		"contact_name":   req.Name,
+		"contact_kind":   req.Kind,
+		"contact_target": req.Target,
+		"contact_config": req.Config,
+	}, principal(r), r.Header.Get("Authorization"), &rows)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {

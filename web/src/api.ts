@@ -27,7 +27,6 @@ export type Dataset = {
 export type PublicConfig = {
   providers: Provider[];
   datasets: Dataset[];
-  postgrest: { url: string };
   devMode: boolean;
 };
 
@@ -59,6 +58,29 @@ export type Dashboard = {
   created_at: string;
 };
 
+export type ContactEndpoint = {
+  id: string;
+  name: string;
+  kind: 'email' | 'webhook' | 'pagerduty';
+  target: string;
+  config: Record<string, unknown>;
+  created_at: string;
+};
+
+export type AlertRule = {
+  id: string;
+  name: string;
+  query: unknown;
+  condition: {
+    operator: string;
+    threshold: number;
+  };
+  interval_seconds: number;
+  enabled: boolean;
+  contact_endpoint_id: string | null;
+  created_at: string;
+};
+
 const tokenKey = 'uvoo-dbviz-token';
 
 export function getToken(): string {
@@ -87,22 +109,6 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) });
-  if (!res.ok) throw new Error(await errorText(res));
-  return res.json();
-}
-
-export async function postgrestRPC<T>(baseURL: string, name: string, body: unknown, devTenant = 'dev'): Promise<T> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    'X-Dev-Tenant': devTenant
-  };
-  const token = getToken();
-  if (token) headers.Authorization = `Bearer ${token}`;
-  const res = await fetch(`${baseURL.replace(/\/$/, '')}/rpc/${name}`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body)
-  });
   if (!res.ok) throw new Error(await errorText(res));
   return res.json();
 }

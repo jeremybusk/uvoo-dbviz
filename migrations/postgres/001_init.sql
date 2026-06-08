@@ -220,3 +220,120 @@ $$;
 
 GRANT EXECUTE ON FUNCTION list_dashboards() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_dashboard(uuid, text, jsonb) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION list_contact_endpoints()
+RETURNS TABLE(id uuid, name text, kind text, target text, config jsonb, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT c.id, c.name, c.kind, c.target, c.config, c.created_at
+    FROM contact_endpoints c
+    WHERE c.tenant_id = request_tenant_id()
+    ORDER BY c.created_at DESC;
+$$;
+
+CREATE OR REPLACE FUNCTION save_contact_endpoint(contact_id uuid, contact_name text, contact_kind text, contact_target text, contact_config jsonb)
+RETURNS TABLE(id uuid, name text, kind text, target text, config jsonb, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_id uuid;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    IF contact_kind NOT IN ('email', 'webhook', 'pagerduty') THEN
+        RAISE EXCEPTION 'unsupported contact kind: %', contact_kind;
+    END IF;
+
+    IF contact_id IS NULL THEN
+        INSERT INTO contact_endpoints (tenant_id, name, kind, target, config)
+        VALUES (request_tenant_id(), contact_name, contact_kind, contact_target, COALESCE(contact_config, '{}'::jsonb))
+        RETURNING contact_endpoints.id INTO saved_id;
+    ELSE
+        UPDATE contact_endpoints
+        SET name = contact_name,
+            kind = contact_kind,
+            target = contact_target,
+            config = COALESCE(contact_config, '{}'::jsonb)
+        WHERE contact_endpoints.id = contact_id
+          AND contact_endpoints.tenant_id = request_tenant_id()
+        RETURNING contact_endpoints.id INTO saved_id;
+    END IF;
+
+    RETURN QUERY
+    SELECT c.id, c.name, c.kind, c.target, c.config, c.created_at
+    FROM contact_endpoints c
+    WHERE c.id = saved_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION list_alert_rules()
+RETURNS TABLE(id uuid, name text, query jsonb, condition jsonb, interval_seconds integer, enabled boolean, contact_endpoint_id uuid, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT a.id, a.name, a.query, a.condition, a.interval_seconds, a.enabled, a.contact_endpoint_id, a.created_at
+    FROM alert_rules a
+    WHERE a.tenant_id = request_tenant_id()
+    ORDER BY a.created_at DESC;
+$$;
+
+CREATE OR REPLACE FUNCTION save_alert_rule(
+    alert_id uuid,
+    alert_name text,
+    alert_query jsonb,
+    alert_condition jsonb,
+    alert_interval integer,
+    alert_enabled boolean,
+    alert_contact_id uuid
+)
+RETURNS TABLE(id uuid, name text, query jsonb, condition jsonb, interval_seconds integer, enabled boolean, contact_endpoint_id uuid, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_id uuid;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    IF alert_interval IS NULL OR alert_interval < 30 THEN
+        alert_interval := 60;
+    END IF;
+
+    IF alert_contact_id IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM contact_endpoints
+        WHERE contact_endpoints.id = alert_contact_id
+          AND contact_endpoints.tenant_id = request_tenant_id()
+    ) THEN
+        RAISE EXCEPTION 'contact endpoint is not available for tenant';
+    END IF;
+
+    IF alert_id IS NULL THEN
+        INSERT INTO alert_rules (tenant_id, name, query, condition, interval_seconds, enabled, contact_endpoint_id)
+        VALUES (request_tenant_id(), alert_name, alert_query, alert_condition, alert_interval, COALESCE(alert_enabled, true), alert_contact_id)
+        RETURNING alert_rules.id INTO saved_id;
+    ELSE
+        UPDATE alert_rules
+        SET name = alert_name,
+            query = alert_query,
+            condition = alert_condition,
+            interval_seconds = alert_interval,
+            enabled = COALESCE(alert_enabled, true),
+            contact_endpoint_id = alert_contact_id
+        WHERE alert_rules.id = alert_id
+          AND alert_rules.tenant_id = request_tenant_id()
+        RETURNING alert_rules.id INTO saved_id;
+    END IF;
+
+    RETURN QUERY
+    SELECT a.id, a.name, a.query, a.condition, a.interval_seconds, a.enabled, a.contact_endpoint_id, a.created_at
+    FROM alert_rules a
+    WHERE a.id = saved_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_contact_endpoints() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION save_contact_endpoint(uuid, text, text, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_alert_rules() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boolean, uuid) TO dbviz_web;
