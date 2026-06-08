@@ -87,7 +87,10 @@ type QueryRequest struct {
 	From          time.Time         `json:"from"`
 	To            time.Time         `json:"to"`
 	GroupBy       string            `json:"groupBy"`
+	Measure       string            `json:"measure"`
+	Aggregation   string            `json:"aggregation"`
 	Filters       map[string]string `json:"filters"`
+	FilterOps     map[string]string `json:"filterOps"`
 	BucketSeconds int               `json:"bucketSeconds"`
 	Limit         int               `json:"limit"`
 }
@@ -111,10 +114,20 @@ func BuildTimeseriesSQL(req QueryRequest, ds config.Dataset, tenantID string, ma
 	if req.BucketSeconds <= 0 {
 		req.BucketSeconds = bucketForRange(req.To.Sub(req.From))
 	}
+	if ds.MaxLookbackHours > 0 && req.To.Sub(req.From) > time.Duration(ds.MaxLookbackHours)*time.Hour {
+		return "", fmt.Errorf("query range exceeds dataset max lookback of %d hours", ds.MaxLookbackHours)
+	}
 	if req.Limit <= 0 || req.Limit > maxRows {
 		req.Limit = maxRows
 	}
+	if ds.MaxRows > 0 && req.Limit > ds.MaxRows {
+		req.Limit = ds.MaxRows
+	}
 	if err := validateIdentifier(ds.Table, ds.TimeColumn, ds.TenantColumn); err != nil {
+		return "", err
+	}
+	measureExpr, err := measureSQL(req.Measure, req.Aggregation, ds)
+	if err != nil {
 		return "", err
 	}
 	groupExpr := "'all'"
@@ -144,13 +157,20 @@ func BuildTimeseriesSQL(req QueryRequest, ds config.Dataset, tenantID string, ma
 		if err := validateIdentifier(key); err != nil {
 			return "", err
 		}
-		where = append(where, fmt.Sprintf("%s = %s", ident(key), quote(value)))
+		op := "eq"
+		if req.FilterOps != nil && req.FilterOps[key] != "" {
+			op = req.FilterOps[key]
+		}
+		if !operatorAllowed(ds, key, op) {
+			return "", fmt.Errorf("filter operator is not allowed for %s: %s", key, op)
+		}
+		where = append(where, filterSQL(key, op, value))
 	}
 
 	sql := fmt.Sprintf(`SELECT
   toUnixTimestamp(toStartOfInterval(%s, INTERVAL %d SECOND)) AS ts,
   toString(%s) AS %s,
-  toFloat64(count()) AS value
+  %s AS value
 FROM %s
 WHERE %s
 GROUP BY ts, %s
@@ -161,12 +181,75 @@ FORMAT JSONEachRow`,
 		req.BucketSeconds,
 		groupExpr,
 		groupAlias,
+		measureExpr,
 		ident(ds.Table),
 		strings.Join(where, " AND "),
 		groupAlias,
 		req.Limit,
 	)
 	return sql, nil
+}
+
+func measureSQL(measure, aggregation string, ds config.Dataset) (string, error) {
+	if measure == "" {
+		measure = ds.DefaultMeasure
+	}
+	if aggregation == "" {
+		aggregation = ds.DefaultAggregation
+	}
+	if measure == "" {
+		measure = "_rows"
+	}
+	if aggregation == "" {
+		aggregation = "count"
+	}
+	if !contains(ds.Measures, measure) {
+		return "", fmt.Errorf("measure is not allowed for dataset: %s", measure)
+	}
+	if !contains(ds.Aggregations, aggregation) {
+		return "", fmt.Errorf("aggregation is not allowed for dataset: %s", aggregation)
+	}
+	if aggregation == "count" {
+		return "toFloat64(count())", nil
+	}
+	if measure == "_rows" {
+		return "", errors.New("row count measure only supports count aggregation")
+	}
+	if err := validateIdentifier(measure); err != nil {
+		return "", err
+	}
+	switch aggregation {
+	case "avg":
+		return fmt.Sprintf("toFloat64(avg(%s))", ident(measure)), nil
+	case "sum":
+		return fmt.Sprintf("toFloat64(sum(%s))", ident(measure)), nil
+	case "min":
+		return fmt.Sprintf("toFloat64(min(%s))", ident(measure)), nil
+	case "max":
+		return fmt.Sprintf("toFloat64(max(%s))", ident(measure)), nil
+	case "p95":
+		return fmt.Sprintf("toFloat64(quantile(0.95)(%s))", ident(measure)), nil
+	default:
+		return "", fmt.Errorf("unsupported aggregation: %s", aggregation)
+	}
+}
+
+func operatorAllowed(ds config.Dataset, key, op string) bool {
+	if len(ds.FilterOperators) == 0 {
+		return op == "eq"
+	}
+	return contains(ds.FilterOperators[key], op)
+}
+
+func filterSQL(key, op, value string) string {
+	switch op {
+	case "contains":
+		return fmt.Sprintf("positionCaseInsensitive(toString(%s), %s) > 0", ident(key), quote(value))
+	case "prefix":
+		return fmt.Sprintf("startsWith(toString(%s), %s)", ident(key), quote(value))
+	default:
+		return fmt.Sprintf("%s = %s", ident(key), quote(value))
+	}
 }
 
 func bucketForRange(d time.Duration) int {

@@ -44,6 +44,9 @@ config:
   microsoftClientId: ""
   keycloakIssuer: ""
   keycloakClientId: ""
+  keycloakTenantClaim: tenant_slug
+  alertsEnabled: false
+  alertRulesJson: "[]"
   extraEnv: []
 
 secret:

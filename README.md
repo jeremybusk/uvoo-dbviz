@@ -33,10 +33,26 @@ Compose starts:
 - ClickHouse on <http://localhost:8123> with seeded `dev` tenant data
 - PostgreSQL on `localhost:5432`
 - PostgREST on <http://localhost:3000>
+- Keycloak on <http://localhost:8089> with realm `dbviz`
+- OpenTelemetry Collector on `localhost:4317` and `localhost:4318`
 
-Development auth is enabled by default in Compose. Paste any token is not needed;
-the API accepts `X-Dev-Tenant: dev` when `DBVIZ_AUTH_DEV_MODE=true`, and the UI
-can use real OIDC once a provider client ID is configured.
+Development auth is enabled by default in Compose. The seeded Keycloak users are:
+
+- `alice` / `password`, tenant `dev`
+- `bob` / `password`, tenant `example.com`
+
+The UI can also use dev auth when `DBVIZ_AUTH_DEV_MODE=true`. PostgREST dashboard
+RPCs accept `X-Dev-Tenant: dev` for local development and JWT tenant claims for
+real OIDC sessions.
+
+Run the OTel sample emitter after the stack is up:
+
+```sh
+docker compose run --rm otel-sample
+```
+
+It sends OTLP JSON to the collector and inserts matching normalized sample rows
+into ClickHouse so the default UI datasets can chart the data immediately.
 
 ## Build And Verify
 
@@ -56,5 +72,29 @@ sample observability rows live in `migrations/clickhouse` and
 `scripts/seed-clickhouse.sh`.
 
 The default query API supports `logs`, `traces`, and `metrics` datasets. Each
-dataset has explicit table, time, tenant, filter, and dimension allow-lists so a
-user request cannot bypass tenant scoping with arbitrary SQL.
+dataset has explicit table, time, tenant, filter, filter operator, dimension,
+measure, aggregation, max-lookback, and max-row allow-lists so a user request
+cannot bypass tenant scoping with arbitrary SQL.
+
+## Dashboards
+
+The frontend saves and opens dashboards through PostgREST RPCs:
+
+- `list_dashboards()`
+- `save_dashboard(dashboard_id uuid, dashboard_name text, dashboard_layout jsonb)`
+
+Those functions derive tenant context from JWT claims such as `tenant_id`,
+`tenant_slug`, Google `hd`, Microsoft `tid`, or the local `X-Dev-Tenant` header.
+
+## Alerts
+
+The alert worker is disabled by default. Enable it with:
+
+```sh
+DBVIZ_ALERTS_ENABLED=true
+DBVIZ_ALERT_RULES_JSON='[{"id":"log-volume","name":"High log volume","tenantId":"dev","enabled":true,"query":{"dataset":"logs","groupBy":"service_name","aggregation":"count"},"condition":{"operator":"gt","threshold":100},"intervalSeconds":60,"contacts":[{"kind":"webhook","target":"http://example-webhook:8080/alerts","config":{}}]}]'
+```
+
+The worker evaluates rules through the same constrained ClickHouse query builder
+used by the UI. Contact kinds are `webhook`, `pagerduty`, and `email`; email is
+currently logged until SMTP configuration is added.

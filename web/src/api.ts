@@ -15,6 +15,13 @@ export type Dataset = {
   tenantColumn: string;
   dimensions: string[];
   filters: string[];
+  filterOperators: Record<string, string[]>;
+  measures: string[];
+  aggregations: string[];
+  defaultMeasure: string;
+  defaultAggregation: string;
+  maxLookbackHours: number;
+  maxRows: number;
 };
 
 export type PublicConfig = {
@@ -36,6 +43,20 @@ export type QueryRow = {
   ts: number;
   series: string;
   value: number;
+};
+
+export type Dashboard = {
+  id: string;
+  name: string;
+  layout: {
+    version: number;
+    charts: Array<{
+      title: string;
+      query: unknown;
+    }>;
+  };
+  updated_at: string;
+  created_at: string;
 };
 
 const tokenKey = 'uvoo-dbviz-token';
@@ -70,6 +91,22 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   return res.json();
 }
 
+export async function postgrestRPC<T>(baseURL: string, name: string, body: unknown, devTenant = 'dev'): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'X-Dev-Tenant': devTenant
+  };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const res = await fetch(`${baseURL.replace(/\/$/, '')}/rpc/${name}`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body)
+  });
+  if (!res.ok) throw new Error(await errorText(res));
+  return res.json();
+}
+
 async function errorText(res: Response): Promise<string> {
   try {
     const parsed = await res.json();
@@ -96,4 +133,3 @@ function base64url(bytes: Uint8Array): string {
   for (const byte of bytes) raw += String.fromCharCode(byte);
   return btoa(raw).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
-

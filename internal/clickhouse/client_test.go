@@ -16,6 +16,13 @@ func TestBuildTimeseriesSQLScopesTenantAndAllowlistsColumns(t *testing.T) {
 		TenantColumn: "tenant_id",
 		Dimensions:   []string{"service_name"},
 		Filters:      []string{"severity"},
+		FilterOperators: map[string][]string{
+			"severity": {"eq"},
+		},
+		Measures:           []string{"_rows"},
+		Aggregations:       []string{"count"},
+		DefaultMeasure:     "_rows",
+		DefaultAggregation: "count",
 	}
 	sql, err := BuildTimeseriesSQL(QueryRequest{
 		Dataset:       "logs",
@@ -37,8 +44,34 @@ func TestBuildTimeseriesSQLScopesTenantAndAllowlistsColumns(t *testing.T) {
 }
 
 func TestBuildTimeseriesSQLRejectsUnexpectedFilter(t *testing.T) {
-	ds := config.Dataset{ID: "logs", Table: "otel_logs", TimeColumn: "timestamp", TenantColumn: "tenant_id"}
+	ds := config.Dataset{
+		ID:                 "logs",
+		Table:              "otel_logs",
+		TimeColumn:         "timestamp",
+		TenantColumn:       "tenant_id",
+		Measures:           []string{"_rows"},
+		Aggregations:       []string{"count"},
+		DefaultMeasure:     "_rows",
+		DefaultAggregation: "count",
+	}
 	_, err := BuildTimeseriesSQL(QueryRequest{Dataset: "logs", Filters: map[string]string{"1=1": "x"}}, ds, "tenant-a", 100)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+}
+
+func TestBuildTimeseriesSQLRejectsUnexpectedAggregation(t *testing.T) {
+	ds := config.Dataset{
+		ID:                 "metrics",
+		Table:              "otel_metrics",
+		TimeColumn:         "timestamp",
+		TenantColumn:       "tenant_id",
+		Measures:           []string{"value"},
+		Aggregations:       []string{"avg"},
+		DefaultMeasure:     "value",
+		DefaultAggregation: "avg",
+	}
+	_, err := BuildTimeseriesSQL(QueryRequest{Dataset: "metrics", Measure: "value", Aggregation: "sum"}, ds, "tenant-a", 100)
 	if err == nil {
 		t.Fatal("expected an error")
 	}

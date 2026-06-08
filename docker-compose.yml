@@ -7,6 +7,8 @@ services:
         condition: service_healthy
       clickhouse-seed:
         condition: service_completed_successfully
+      keycloak:
+        condition: service_started
       postgrest:
         condition: service_started
     ports:
@@ -19,6 +21,11 @@ services:
       DBVIZ_CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
       DBVIZ_CLICKHOUSE_DATABASE: default
       DBVIZ_POSTGREST_URL: http://localhost:3000
+      DBVIZ_OIDC_KEYCLOAK_ISSUER: http://localhost:8089/realms/dbviz
+      DBVIZ_OIDC_KEYCLOAK_CLIENT_ID: uvoo-dbviz-web
+      DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: tenant_slug
+      DBVIZ_ALERTS_ENABLED: ${DBVIZ_ALERTS_ENABLED:-false}
+      DBVIZ_ALERT_RULES_JSON: ${DBVIZ_ALERT_RULES_JSON:-[]}
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5-alpine
@@ -72,8 +79,45 @@ services:
     environment:
       PGRST_DB_URI: postgres://dbviz:dbviz@postgres:5432/dbviz
       PGRST_DB_SCHEMA: public
-      PGRST_DB_ANON_ROLE: dbviz
+      PGRST_DB_ANON_ROLE: dbviz_web
       PGRST_JWT_SECRET: "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:25.0
+    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    ports:
+      - "8089:8080"
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+    volumes:
+      - ./deploy/keycloak:/opt/keycloak/data/import:ro
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.128.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+    volumes:
+      - ./deploy/otel/collector.yaml:/etc/otelcol/config.yaml:ro
+
+  otel-sample:
+    image: clickhouse/clickhouse-server:25.5-alpine
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    volumes:
+      - ./scripts/sample-telemetry/emit.sh:/emit.sh:ro
+    entrypoint: ["/bin/sh", "/emit.sh"]
+    environment:
+      OTEL_ENDPOINT: http://otel-collector:4318
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "9000"
+      CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      TENANT_ID: dev
 
 volumes:
   clickhouse-data:

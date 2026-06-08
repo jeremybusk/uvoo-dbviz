@@ -105,6 +105,21 @@ label {
   gap: 8px;
 }
 
+.dashboard-list {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.dashboard-list button {
+  border-color: #c9d3dc;
+  background: #ffffff;
+  color: #245a73;
+  text-align: left;
+  padding-inline: 10px;
+}
+
 label {
   display: grid;
   gap: 5px;
@@ -174,4 +189,3 @@ textarea {
     min-height: 360px;
   }
 }
-

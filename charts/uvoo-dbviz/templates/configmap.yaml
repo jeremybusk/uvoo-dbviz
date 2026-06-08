@@ -17,4 +17,6 @@ data:
   DBVIZ_OIDC_MICROSOFT_CLIENT_ID: {{ .Values.config.microsoftClientId | quote }}
   DBVIZ_OIDC_KEYCLOAK_ISSUER: {{ .Values.config.keycloakIssuer | quote }}
   DBVIZ_OIDC_KEYCLOAK_CLIENT_ID: {{ .Values.config.keycloakClientId | quote }}
-
+  DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: {{ .Values.config.keycloakTenantClaim | quote }}
+  DBVIZ_ALERTS_ENABLED: {{ .Values.config.alertsEnabled | quote }}
+  DBVIZ_ALERT_RULES_JSON: {{ .Values.config.alertRulesJson | quote }}

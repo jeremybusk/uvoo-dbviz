@@ -16,6 +16,7 @@ type Config struct {
 	ClickHouse ClickHouseConfig
 	PostgREST  PostgRESTConfig
 	Datasets   map[string]Dataset
+	Alerts     AlertConfig
 }
 
 type AuthConfig struct {
@@ -53,14 +54,26 @@ type PostgRESTConfig struct {
 	URL string `json:"url"`
 }
 
+type AlertConfig struct {
+	Enabled bool
+	Rules   string
+}
+
 type Dataset struct {
-	ID           string   `json:"id"`
-	Name         string   `json:"name"`
-	Table        string   `json:"table"`
-	TimeColumn   string   `json:"timeColumn"`
-	TenantColumn string   `json:"tenantColumn"`
-	Dimensions   []string `json:"dimensions"`
-	Filters      []string `json:"filters"`
+	ID                 string              `json:"id"`
+	Name               string              `json:"name"`
+	Table              string              `json:"table"`
+	TimeColumn         string              `json:"timeColumn"`
+	TenantColumn       string              `json:"tenantColumn"`
+	Dimensions         []string            `json:"dimensions"`
+	Filters            []string            `json:"filters"`
+	FilterOperators    map[string][]string `json:"filterOperators"`
+	Measures           []string            `json:"measures"`
+	Aggregations       []string            `json:"aggregations"`
+	DefaultMeasure     string              `json:"defaultMeasure"`
+	DefaultAggregation string              `json:"defaultAggregation"`
+	MaxLookbackHours   int                 `json:"maxLookbackHours"`
+	MaxRows            int                 `json:"maxRows"`
 }
 
 type PublicProvider struct {
@@ -124,6 +137,10 @@ func Load() Config {
 			MaxQuerySeconds: envInt("DBVIZ_CLICKHOUSE_MAX_QUERY_SECONDS", 20),
 		},
 		PostgREST: PostgRESTConfig{URL: env("DBVIZ_POSTGREST_URL", "/state")},
+		Alerts: AlertConfig{
+			Enabled: envBool("DBVIZ_ALERTS_ENABLED", false),
+			Rules:   os.Getenv("DBVIZ_ALERT_RULES_JSON"),
+		},
 		Datasets: map[string]Dataset{
 			"logs": {
 				ID:           "logs",
@@ -133,6 +150,18 @@ func Load() Config {
 				TenantColumn: env("DBVIZ_CLICKHOUSE_LOGS_TENANT_COLUMN", "tenant_id"),
 				Dimensions:   csvDefault("DBVIZ_CLICKHOUSE_LOGS_DIMENSIONS", []string{"service_name", "severity", "host_name"}),
 				Filters:      csvDefault("DBVIZ_CLICKHOUSE_LOGS_FILTERS", []string{"service_name", "severity", "host_name", "trace_id"}),
+				FilterOperators: map[string][]string{
+					"service_name": {"eq", "contains"},
+					"severity":     {"eq"},
+					"host_name":    {"eq", "contains"},
+					"trace_id":     {"eq"},
+				},
+				Measures:           []string{"_rows"},
+				Aggregations:       []string{"count"},
+				DefaultMeasure:     "_rows",
+				DefaultAggregation: "count",
+				MaxLookbackHours:   envInt("DBVIZ_CLICKHOUSE_LOGS_MAX_LOOKBACK_HOURS", 168),
+				MaxRows:            envInt("DBVIZ_CLICKHOUSE_LOGS_MAX_ROWS", 5000),
 			},
 			"traces": {
 				ID:           "traces",
@@ -142,6 +171,18 @@ func Load() Config {
 				TenantColumn: env("DBVIZ_CLICKHOUSE_TRACES_TENANT_COLUMN", "tenant_id"),
 				Dimensions:   csvDefault("DBVIZ_CLICKHOUSE_TRACES_DIMENSIONS", []string{"service_name", "span_name", "status_code"}),
 				Filters:      csvDefault("DBVIZ_CLICKHOUSE_TRACES_FILTERS", []string{"service_name", "span_name", "status_code", "trace_id"}),
+				FilterOperators: map[string][]string{
+					"service_name": {"eq", "contains"},
+					"span_name":    {"eq", "contains"},
+					"status_code":  {"eq"},
+					"trace_id":     {"eq"},
+				},
+				Measures:           []string{"duration_ms", "_rows"},
+				Aggregations:       []string{"count", "avg", "max", "p95"},
+				DefaultMeasure:     "_rows",
+				DefaultAggregation: "count",
+				MaxLookbackHours:   envInt("DBVIZ_CLICKHOUSE_TRACES_MAX_LOOKBACK_HOURS", 168),
+				MaxRows:            envInt("DBVIZ_CLICKHOUSE_TRACES_MAX_ROWS", 5000),
 			},
 			"metrics": {
 				ID:           "metrics",
@@ -151,6 +192,16 @@ func Load() Config {
 				TenantColumn: env("DBVIZ_CLICKHOUSE_METRICS_TENANT_COLUMN", "tenant_id"),
 				Dimensions:   csvDefault("DBVIZ_CLICKHOUSE_METRICS_DIMENSIONS", []string{"service_name", "metric_name"}),
 				Filters:      csvDefault("DBVIZ_CLICKHOUSE_METRICS_FILTERS", []string{"service_name", "metric_name"}),
+				FilterOperators: map[string][]string{
+					"service_name": {"eq", "contains"},
+					"metric_name":  {"eq", "contains"},
+				},
+				Measures:           []string{"value"},
+				Aggregations:       []string{"avg", "sum", "max", "min", "p95"},
+				DefaultMeasure:     "value",
+				DefaultAggregation: "avg",
+				MaxLookbackHours:   envInt("DBVIZ_CLICKHOUSE_METRICS_MAX_LOOKBACK_HOURS", 720),
+				MaxRows:            envInt("DBVIZ_CLICKHOUSE_METRICS_MAX_ROWS", 10000),
 			},
 		},
 	}

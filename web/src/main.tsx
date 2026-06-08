@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import * as echarts from 'echarts';
 import {
   Dataset,
+  Dashboard,
   Principal,
   Provider,
   PublicConfig,
@@ -12,6 +13,7 @@ import {
   clearToken,
   getToken,
   randomVerifier,
+  postgrestRPC,
   setToken,
   sha256base64url
 } from './api';
@@ -20,6 +22,8 @@ import './style.css';
 type QueryState = {
   dataset: string;
   groupBy: string;
+  measure: string;
+  aggregation: string;
   from: string;
   to: string;
 };
@@ -30,10 +34,12 @@ function App() {
   const [rows, setRows] = useState<QueryRow[]>([]);
   const [error, setError] = useState('');
   const [tokenInput, setTokenInput] = useState('');
+  const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const [dashboardName, setDashboardName] = useState('Sample Observability');
   const [query, setQuery] = useState<QueryState>(() => {
     const to = new Date();
     const from = new Date(to.getTime() - 60 * 60 * 1000);
-    return { dataset: 'logs', groupBy: 'service_name', from: toInput(from), to: toInput(to) };
+    return { dataset: 'logs', groupBy: 'service_name', measure: '_rows', aggregation: 'count', from: toInput(from), to: toInput(to) };
   });
 
   useEffect(() => {
@@ -55,6 +61,11 @@ function App() {
   }, [config, user]);
 
   const dataset = useMemo(() => config?.datasets.find((item) => item.id === query.dataset), [config, query.dataset]);
+
+  useEffect(() => {
+    if (!config || !user) return;
+    loadDashboards().catch((err) => setError(err.message));
+  }, [config, user]);
 
   async function handleOIDCCallback() {
     const params = new URLSearchParams(location.search);
@@ -102,10 +113,45 @@ function App() {
     const result = await apiPost<{ rows: QueryRow[] }>('/api/query', {
       dataset: query.dataset,
       groupBy: query.groupBy,
+      measure: query.measure,
+      aggregation: query.aggregation,
       from: new Date(query.from).toISOString(),
       to: new Date(query.to).toISOString()
     });
     setRows(result.rows);
+  }
+
+  async function loadDashboards() {
+    if (!config?.postgrest.url) return;
+    const result = await postgrestRPC<Dashboard[]>(config.postgrest.url, 'list_dashboards', {});
+    setDashboards(result);
+  }
+
+  async function saveDashboard() {
+    if (!config?.postgrest.url) return;
+    const layout = {
+      version: 1,
+      charts: [
+        {
+          title: `${dataset?.name || query.dataset} by ${query.groupBy || 'all'}`,
+          query
+        }
+      ]
+    };
+    const saved = await postgrestRPC<Dashboard[]>(config.postgrest.url, 'save_dashboard', {
+      dashboard_id: null,
+      dashboard_name: dashboardName,
+      dashboard_layout: layout
+    });
+    setDashboards((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+  }
+
+  function openDashboard(dashboard: Dashboard) {
+    setDashboardName(dashboard.name);
+    const savedQuery = dashboard.layout?.charts?.[0]?.query as Partial<QueryState> | undefined;
+    if (savedQuery?.dataset) {
+      setQuery((current) => ({ ...current, ...savedQuery }));
+    }
   }
 
   function saveToken() {
@@ -147,7 +193,16 @@ function App() {
           <h2>Query</h2>
           <label>
             Dataset
-            <select value={query.dataset} onChange={(event) => setQuery({ ...query, dataset: event.target.value, groupBy: firstDimension(config, event.target.value) })}>
+            <select value={query.dataset} onChange={(event) => {
+              const next = config?.datasets.find((item) => item.id === event.target.value);
+              setQuery({
+                ...query,
+                dataset: event.target.value,
+                groupBy: firstDimension(config, event.target.value),
+                measure: next?.defaultMeasure || '_rows',
+                aggregation: next?.defaultAggregation || 'count'
+              });
+            }}>
               {config?.datasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
             </select>
           </label>
@@ -159,6 +214,18 @@ function App() {
             </select>
           </label>
           <label>
+            Measure
+            <select value={query.measure} onChange={(event) => setQuery({ ...query, measure: event.target.value })}>
+              {dataset?.measures.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <label>
+            Aggregation
+            <select value={query.aggregation} onChange={(event) => setQuery({ ...query, aggregation: event.target.value })}>
+              {dataset?.aggregations.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <label>
             From
             <input type="datetime-local" value={query.from} onChange={(event) => setQuery({ ...query, from: event.target.value })} />
           </label>
@@ -167,6 +234,20 @@ function App() {
             <input type="datetime-local" value={query.to} onChange={(event) => setQuery({ ...query, to: event.target.value })} />
           </label>
           <button disabled={!user} onClick={loadData}>Run</button>
+        </section>
+
+        <section className="panel">
+          <h2>Dashboards</h2>
+          <label>
+            Name
+            <input value={dashboardName} onChange={(event) => setDashboardName(event.target.value)} />
+          </label>
+          <button disabled={!user} onClick={saveDashboard}>Save</button>
+          <div className="dashboard-list">
+            {dashboards.map((dashboard) => (
+              <button key={dashboard.id} onClick={() => openDashboard(dashboard)}>{dashboard.name}</button>
+            ))}
+          </div>
         </section>
       </aside>
 
