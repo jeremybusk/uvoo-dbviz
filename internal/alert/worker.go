@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"sync"
@@ -47,6 +48,7 @@ type Worker struct {
 	logger   *slog.Logger
 	load     func(context.Context) ([]Rule, error)
 	record   func(context.Context, Rule, string, float64, map[string]any, string, int) (RecordResult, error)
+	delivery func(context.Context, Rule, string, ContactEndpoint, DeliveryResult, map[string]any) error
 	poll     time.Duration
 	dedupe   time.Duration
 	stop     chan struct{}
@@ -54,12 +56,23 @@ type Worker struct {
 }
 
 type RecordResult struct {
+	IncidentID   string
 	Deduped      bool
 	ShouldNotify bool
 }
 
+type DeliveryResult struct {
+	Status     string
+	StatusCode int
+	Error      string
+}
+
 func (w *Worker) SetIncidentRecorder(record func(context.Context, Rule, string, float64, map[string]any, string, int) (RecordResult, error)) {
 	w.record = record
+}
+
+func (w *Worker) SetNotificationRecorder(record func(context.Context, Rule, string, ContactEndpoint, DeliveryResult, map[string]any) error) {
+	w.delivery = record
 }
 
 func (w *Worker) SetDedupeWindow(window time.Duration) {
@@ -256,12 +269,14 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 		"firedAt":     time.Now().UTC().Format(time.RFC3339),
 	}
 	shouldNotify := true
+	incidentID := ""
 	if w.record != nil {
 		result, err := w.record(ctx, rule, "firing", value, incident, fingerprint, int(w.dedupe.Seconds()))
 		if err != nil {
 			w.logger.Warn("alert incident record failed", "rule", rule.Name, "error", err)
 		} else {
 			shouldNotify = result.ShouldNotify
+			incidentID = result.IncidentID
 		}
 	}
 	if !shouldNotify {
@@ -269,8 +284,14 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 		return
 	}
 	for _, contact := range rule.Contacts {
-		if err := w.notify(ctx, contact, incident); err != nil {
-			w.logger.Warn("alert notification failed", "rule", rule.Name, "kind", contact.Kind, "error", err)
+		result := w.notify(ctx, contact, incident)
+		if w.delivery != nil {
+			if err := w.delivery(ctx, rule, incidentID, contact, result, incident); err != nil {
+				w.logger.Warn("alert notification delivery record failed", "rule", rule.Name, "kind", contact.Kind, "error", err)
+			}
+		}
+		if result.Status == "failed" {
+			w.logger.Warn("alert notification failed", "rule", rule.Name, "kind", contact.Kind, "error", result.Error)
 			if w.record != nil {
 				failed := map[string]any{}
 				for key, item := range incident {
@@ -278,7 +299,8 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 				}
 				failed["contactKind"] = contact.Kind
 				failed["contactTarget"] = contact.Target
-				failed["error"] = err.Error()
+				failed["statusCode"] = result.StatusCode
+				failed["error"] = result.Error
 				if _, recordErr := w.record(ctx, rule, "notify_failed", value, failed, fingerprint+":notify:"+contact.Kind+":"+contact.Target, int(w.dedupe.Seconds())); recordErr != nil {
 					w.logger.Warn("alert notification failure record failed", "rule", rule.Name, "error", recordErr)
 				}
@@ -294,13 +316,13 @@ func ruleFingerprint(rule Rule) string {
 	return rule.TenantID + ":" + rule.Name + ":" + rule.Query.Dataset + ":" + rule.Query.GroupBy
 }
 
-func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident map[string]any) error {
+func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident map[string]any) DeliveryResult {
 	switch contact.Kind {
 	case "webhook", "pagerduty":
 		body, _ := json.Marshal(incident)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, contact.Target, bytes.NewReader(body))
 		if err != nil {
-			return err
+			return DeliveryResult{Status: "failed", Error: err.Error()}
 		}
 		req.Header.Set("Content-Type", "application/json")
 		if token := contact.Config["token"]; token != "" {
@@ -308,18 +330,23 @@ func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident m
 		}
 		resp, err := w.http.Do(req)
 		if err != nil {
-			return err
+			return DeliveryResult{Status: "failed", Error: err.Error()}
 		}
 		defer resp.Body.Close()
+		responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		if resp.StatusCode >= 300 {
-			return fmt.Errorf("webhook returned %s", resp.Status)
+			errText := fmt.Sprintf("webhook returned %s", resp.Status)
+			if len(responseBody) > 0 {
+				errText = errText + ": " + string(responseBody)
+			}
+			return DeliveryResult{Status: "failed", StatusCode: resp.StatusCode, Error: errText}
 		}
-		return nil
+		return DeliveryResult{Status: "success", StatusCode: resp.StatusCode}
 	case "email":
 		w.logger.Info("email alert contact configured; SMTP sender not enabled yet", "target", contact.Target)
-		return nil
+		return DeliveryResult{Status: "skipped", Error: "email delivery is not configured"}
 	default:
-		return fmt.Errorf("unsupported contact kind: %s", contact.Kind)
+		return DeliveryResult{Status: "failed", Error: fmt.Sprintf("unsupported contact kind: %s", contact.Kind)}
 	}
 }
 

@@ -70,6 +70,19 @@ type AlertIncident struct {
 	ShouldNotify    bool           `json:"should_notify,omitempty"`
 }
 
+type AlertNotification struct {
+	ID              string         `json:"id"`
+	AlertRuleID     *string        `json:"alert_rule_id"`
+	AlertIncidentID *string        `json:"alert_incident_id"`
+	ContactKind     string         `json:"contact_kind"`
+	ContactTarget   string         `json:"contact_target"`
+	Status          string         `json:"status"`
+	StatusCode      int            `json:"status_code"`
+	Error           string         `json:"error"`
+	Payload         map[string]any `json:"payload"`
+	CreatedAt       string         `json:"created_at"`
+}
+
 func NewClient(cfg config.PostgRESTConfig, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
@@ -174,6 +187,14 @@ func (c *Client) ListAlertIncidents(ctx context.Context, user auth.Principal, be
 	return rows, err
 }
 
+func (c *Client) ListAlertNotifications(ctx context.Context, user auth.Principal, bearer string, limit int) ([]AlertNotification, error) {
+	var rows []AlertNotification
+	err := c.RPC(ctx, "list_alert_notifications", map[string]any{
+		"notification_limit": limit,
+	}, user, bearer, &rows)
+	return rows, err
+}
+
 func (c *Client) RecordAlertIncident(ctx context.Context, workerKey, ruleID, tenantID, status string, value float64, payload map[string]any, fingerprint string, cooldownSeconds int) (AlertIncident, error) {
 	var normalizedRuleID any
 	if uuidPattern.MatchString(ruleID) {
@@ -195,6 +216,37 @@ func (c *Client) RecordAlertIncident(ctx context.Context, workerKey, ruleID, ten
 	}
 	if len(rows) == 0 {
 		return AlertIncident{}, nil
+	}
+	return rows[0], nil
+}
+
+func (c *Client) RecordAlertNotification(ctx context.Context, workerKey, ruleID, tenantID, incidentID, contactKind, contactTarget, status string, statusCode int, errorText string, payload map[string]any) (AlertNotification, error) {
+	var normalizedRuleID any
+	if uuidPattern.MatchString(ruleID) {
+		normalizedRuleID = ruleID
+	}
+	var normalizedIncidentID any
+	if uuidPattern.MatchString(incidentID) {
+		normalizedIncidentID = incidentID
+	}
+	var rows []AlertNotification
+	err := c.RPC(ctx, "record_alert_notification_for_worker", map[string]any{
+		"worker_key":                  workerKey,
+		"rule_id":                     normalizedRuleID,
+		"tenant_slug":                 tenantID,
+		"incident_id":                 normalizedIncidentID,
+		"notification_contact_kind":   contactKind,
+		"notification_contact_target": contactTarget,
+		"delivery_status":             status,
+		"delivery_status_code":        statusCode,
+		"delivery_error":              errorText,
+		"delivery_payload":            payload,
+	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+	if err != nil {
+		return AlertNotification{}, err
+	}
+	if len(rows) == 0 {
+		return AlertNotification{}, nil
 	}
 	return rows[0], nil
 }

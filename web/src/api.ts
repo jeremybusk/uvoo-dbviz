@@ -177,6 +177,19 @@ export type AlertIncident = {
   created_at: string;
 };
 
+export type AlertNotification = {
+  id: string;
+  alert_rule_id: string | null;
+  alert_incident_id: string | null;
+  contact_kind: string;
+  contact_target: string;
+  status: 'success' | 'failed' | 'skipped';
+  status_code: number;
+  error: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
 export type TenantInvite = {
   id: string;
   email: string;

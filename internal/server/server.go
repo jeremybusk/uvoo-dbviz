@@ -58,6 +58,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
 	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
 	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
+	a.mux.HandleFunc("GET /api/alerts/notifications", a.requireAuth(a.listAlertNotifications))
 	a.mux.HandleFunc("POST /api/alerts/incidents/resolve", a.requireAuth(a.resolveAlertIncident))
 	a.mux.HandleFunc("GET /api/members", a.requireAuth(a.listMembers))
 	a.mux.HandleFunc("POST /api/members/role", a.requireAuth(a.updateMemberRole))
@@ -681,6 +682,18 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) listAlertIncidents(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.state.ListAlertIncidents(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), 100)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) listAlertNotifications(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor", "viewer") {
+		return
+	}
+	rows, err := a.state.ListAlertNotifications(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), 100)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return

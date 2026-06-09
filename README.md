@@ -142,6 +142,7 @@ Alert rule and contact management follows the same pattern:
 - `GET /api/alerts/contacts`
 - `POST /api/alerts/contacts`
 - `GET /api/alerts/incidents`
+- `GET /api/alerts/notifications`
 - `GET /api/session/profile`
 - `GET /api/session/memberships`
 - `GET /api/audit/events`
@@ -177,5 +178,7 @@ stable fingerprint, `occurrence_count` and `last_seen_at` are updated on repeat
 fires, and contact delivery is suppressed until `DBVIZ_ALERT_DEDUPE_SECONDS`
 passes. When the condition clears, the worker marks the open incident
 `resolved`; operators can also resolve incidents with
-`POST /api/alerts/incidents/resolve`. Notification failures are recorded as
-`notify_failed` incidents with the failed contact and error in the payload.
+`POST /api/alerts/incidents/resolve`. Every contact delivery attempt is recorded
+in `alert_notifications` with status, HTTP status code, contact target, and
+error text. Notification failures are also recorded as `notify_failed` incidents
+with the failed contact and error in the payload.

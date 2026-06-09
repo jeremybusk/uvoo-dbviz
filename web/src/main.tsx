@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import * as echarts from 'echarts';
 import {
   AlertIncident,
+  AlertNotification,
   AlertRule,
   AuditEvent,
   ContactEndpoint,
@@ -75,6 +76,7 @@ function App() {
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
   const [contacts, setContacts] = useState<ContactEndpoint[]>([]);
   const [incidents, setIncidents] = useState<AlertIncident[]>([]);
+  const [notifications, setNotifications] = useState<AlertNotification[]>([]);
   const [invites, setInvites] = useState<TenantInvite[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<TenantInvite['role']>('viewer');
@@ -299,14 +301,16 @@ function App() {
   }
 
   async function loadAlertState() {
-    const [rules, endpoints, recentIncidents] = await Promise.all([
+    const [rules, endpoints, recentIncidents, recentNotifications] = await Promise.all([
       apiGet<AlertRule[]>('/api/alerts/rules'),
       apiGet<ContactEndpoint[]>('/api/alerts/contacts'),
-      apiGet<AlertIncident[]>('/api/alerts/incidents')
+      apiGet<AlertIncident[]>('/api/alerts/incidents'),
+      apiGet<AlertNotification[]>('/api/alerts/notifications')
     ]);
     setAlertRules(rules);
     setContacts(endpoints);
     setIncidents(recentIncidents);
+    setNotifications(recentNotifications);
     if (!selectedContact && endpoints[0]) setSelectedContact(endpoints[0].id);
   }
 
@@ -728,6 +732,21 @@ function App() {
                 {incident.status === 'firing' && (
                   <button onClick={() => resolveIncident(incident)}>Resolve</button>
                 )}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Notifications</h2>
+          <div className="notification-list">
+            {notifications.slice(0, 8).map((notification) => (
+              <div className={notification.status === 'failed' ? 'notification failed' : 'notification'} key={notification.id}>
+                <strong>{notification.status}</strong>
+                <span>{notification.contact_kind}{notification.status_code ? ` - ${notification.status_code}` : ''}</span>
+                <small>{notification.contact_target}</small>
+                {notification.error && <small>{notification.error}</small>}
+                <small>{new Date(notification.created_at).toLocaleString()}</small>
               </div>
             ))}
           </div>

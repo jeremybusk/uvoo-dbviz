@@ -209,6 +209,34 @@ label {
   min-height: 32px;
 }
 
+.notification-list {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.notification {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid #d8e0e6;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.notification.failed {
+  border-color: #d67b6b;
+}
+
+.notification span,
+.notification small {
+  overflow: hidden;
+  color: #6b7785;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .member-list {
   display: grid;
   gap: 8px;

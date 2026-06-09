@@ -128,6 +128,20 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS alert_notifications (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    alert_rule_id uuid REFERENCES alert_rules(id) ON DELETE SET NULL,
+    alert_incident_id uuid REFERENCES alert_incidents(id) ON DELETE SET NULL,
+    contact_kind text NOT NULL DEFAULT '',
+    contact_target text NOT NULL DEFAULT '',
+    status text NOT NULL CHECK (status IN ('success', 'failed', 'skipped')),
+    status_code integer NOT NULL DEFAULT 0,
+    error text NOT NULL DEFAULT '',
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS query_history (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -178,11 +192,12 @@ CREATE INDEX IF NOT EXISTS alert_rules_enabled_idx ON alert_rules(tenant_id, ena
 CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents(tenant_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS alert_incidents_open_fingerprint_idx ON alert_incidents(tenant_id, fingerprint)
     WHERE status = 'firing' AND resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS alert_notifications_tenant_created_idx ON alert_notifications(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS audit_events_tenant_created_idx ON audit_events(tenant_id, created_at DESC);
 
 GRANT USAGE ON SCHEMA public TO dbviz_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, alert_rules, alert_incidents, query_history, audit_events TO dbviz_web;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, alert_rules, alert_incidents, alert_notifications, query_history, audit_events TO dbviz_web;
 
 INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
@@ -222,6 +237,7 @@ ALTER TABLE charts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contact_endpoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_incidents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alert_notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE query_history ENABLE ROW LEVEL SECURITY;
 ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
 
@@ -330,6 +346,11 @@ CREATE POLICY alert_rules_tenant_isolation ON alert_rules
 
 DROP POLICY IF EXISTS alert_incidents_tenant_isolation ON alert_incidents;
 CREATE POLICY alert_incidents_tenant_isolation ON alert_incidents
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
+DROP POLICY IF EXISTS alert_notifications_tenant_isolation ON alert_notifications;
+CREATE POLICY alert_notifications_tenant_isolation ON alert_notifications
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
@@ -726,6 +747,38 @@ AS $$
     LIMIT LEAST(GREATEST(COALESCE(incident_limit, 100), 1), 500);
 $$;
 
+CREATE OR REPLACE FUNCTION list_alert_notifications(notification_limit integer DEFAULT 100)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    alert_incident_id uuid,
+    contact_kind text,
+    contact_target text,
+    status text,
+    status_code integer,
+    error text,
+    payload jsonb,
+    created_at timestamptz
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        n.id,
+        n.alert_rule_id,
+        n.alert_incident_id,
+        n.contact_kind,
+        n.contact_target,
+        n.status,
+        n.status_code,
+        n.error,
+        n.payload,
+        n.created_at
+    FROM alert_notifications n
+    WHERE n.tenant_id = request_tenant_id()
+    ORDER BY n.created_at DESC
+    LIMIT LEAST(GREATEST(COALESCE(notification_limit, 100), 1), 500);
+$$;
+
 CREATE OR REPLACE FUNCTION resolve_alert_incident(actor_subject text, actor_provider text, incident_id uuid)
 RETURNS TABLE(
     id uuid,
@@ -836,6 +889,7 @@ GRANT EXECUTE ON FUNCTION save_contact_endpoint(uuid, text, text, text, jsonb) T
 GRANT EXECUTE ON FUNCTION list_alert_rules() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boolean, uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_alert_notifications(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION resolve_alert_incident(text, text, uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_enabled_alert_rules_for_worker(worker_key text)
@@ -1031,6 +1085,99 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION record_alert_notification_for_worker(
+    worker_key text,
+    rule_id uuid,
+    tenant_slug text,
+    incident_id uuid,
+    notification_contact_kind text,
+    notification_contact_target text,
+    delivery_status text,
+    delivery_status_code integer,
+    delivery_error text,
+    delivery_payload jsonb
+)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    alert_incident_id uuid,
+    contact_kind text,
+    contact_target text,
+    status text,
+    status_code integer,
+    error text,
+    payload jsonb,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+    normalized_status text;
+    saved_id uuid;
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    SELECT tenants.id INTO resolved_tenant_id
+    FROM tenants
+    WHERE tenants.slug = tenant_slug;
+
+    IF resolved_tenant_id IS NULL THEN
+        RAISE EXCEPTION 'tenant not found: %', tenant_slug;
+    END IF;
+
+    normalized_status := COALESCE(NULLIF(delivery_status, ''), 'failed');
+    IF normalized_status NOT IN ('success', 'failed', 'skipped') THEN
+        normalized_status := 'failed';
+    END IF;
+
+    INSERT INTO alert_notifications (
+        tenant_id,
+        alert_rule_id,
+        alert_incident_id,
+        contact_kind,
+        contact_target,
+        status,
+        status_code,
+        error,
+        payload
+    )
+    VALUES (
+        resolved_tenant_id,
+        rule_id,
+        incident_id,
+        COALESCE(notification_contact_kind, ''),
+        COALESCE(notification_contact_target, ''),
+        normalized_status,
+        GREATEST(COALESCE(delivery_status_code, 0), 0),
+        LEFT(COALESCE(delivery_error, ''), 2000),
+        COALESCE(delivery_payload, '{}'::jsonb)
+    )
+    RETURNING alert_notifications.id INTO saved_id;
+
+    RETURN QUERY
+    SELECT
+        n.id,
+        n.alert_rule_id,
+        n.alert_incident_id,
+        n.contact_kind,
+        n.contact_target,
+        n.status,
+        n.status_code,
+        n.error,
+        n.payload,
+        n.created_at
+    FROM alert_notifications n
+    WHERE n.id = saved_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION record_alert_notification_for_worker(text, uuid, text, uuid, text, text, text, integer, text, jsonb) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION sync_current_user(user_subject text, user_email text, user_name text, user_provider text, tenant_slug text, tenant_name text)
 RETURNS TABLE(id uuid, tenant_id uuid, subject text, email text, display_name text, provider text, role text)
