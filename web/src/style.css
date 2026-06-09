@@ -129,6 +129,10 @@ h2.ant-typography {
   vertical-align: top;
 }
 
+.events-filter {
+  max-width: 360px;
+}
+
 .events-table .ant-table-cell:nth-child(n) {
   max-width: 460px;
 }

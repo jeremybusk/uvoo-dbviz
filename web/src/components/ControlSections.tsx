@@ -204,7 +204,14 @@ export function QuerySection(props: {
       <Field label="From"><Input type="datetime-local" value={q.from} onChange={(event) => props.onQuery({ ...q, from: event.target.value })} /></Field>
       <Field label="To"><Input type="datetime-local" value={q.to} onChange={(event) => props.onQuery({ ...q, to: event.target.value })} /></Field>
       <Field label="Search">
-        <Input allowClear value={q.search} onChange={(event) => props.onQuery({ ...q, search: event.target.value })} placeholder="Search log body, service, trace id" />
+        <Input.Search
+          allowClear
+          enterButton="Run"
+          value={q.search}
+          onChange={(event) => props.onQuery({ ...q, search: event.target.value })}
+          onSearch={props.onRun}
+          placeholder="Search log body, service, trace id"
+        />
       </Field>
       <Field label="Event rows">
         <InputNumber className="full" min={10} max={1000} value={q.limit} onChange={(value) => props.onQuery({ ...q, limit: Number(value || 100) })} />

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, ConfigProvider, Flex, Layout, Space, Spin, Switch, Table, Tabs, Typography, theme } from 'antd';
+import { Alert, Button, ConfigProvider, Flex, Input, Layout, Space, Spin, Switch, Table, Tabs, Typography, theme } from 'antd';
 import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import {
   AlertIncident,
@@ -569,6 +569,12 @@ function App() {
 }
 
 function EventsTable({ rows }: { rows: Record<string, unknown>[] }) {
+  const [filter, setFilter] = useState('');
+  const filteredRows = useMemo(() => {
+    const term = filter.trim().toLowerCase();
+    if (!term) return rows;
+    return rows.filter((row) => Object.values(row).some((value) => formatCell(value, '').toLowerCase().includes(term)));
+  }, [filter, rows]);
   const columns = useMemo(() => {
     const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
     return keys.map((key) => ({
@@ -582,15 +588,27 @@ function EventsTable({ rows }: { rows: Record<string, unknown>[] }) {
   }, [rows]);
 
   return (
-    <Table
-      className="events-table"
-      size="small"
-      rowKey={(_, index) => String(index)}
-      columns={columns}
-      dataSource={rows}
-      pagination={{ pageSize: 25, showSizeChanger: true }}
-      scroll={{ x: 'max-content', y: 520 }}
-    />
+    <Space direction="vertical" size={10} className="full">
+      <Flex align="center" justify="space-between" gap={12} wrap="wrap">
+        <Input.Search
+          allowClear
+          className="events-filter"
+          value={filter}
+          onChange={(event) => setFilter(event.target.value)}
+          placeholder="Filter loaded rows"
+        />
+        <Typography.Text type="secondary">{filteredRows.length} of {rows.length} rows</Typography.Text>
+      </Flex>
+      <Table
+        className="events-table"
+        size="small"
+        rowKey={(_, index) => String(index)}
+        columns={columns}
+        dataSource={filteredRows}
+        pagination={{ pageSize: 25, showSizeChanger: true }}
+        scroll={{ x: 'max-content', y: 520 }}
+      />
+    </Space>
   );
 }
 
