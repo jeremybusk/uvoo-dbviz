@@ -4,6 +4,7 @@ import * as echarts from 'echarts';
 import {
   AlertIncident,
   AlertRule,
+  AuditEvent,
   ContactEndpoint,
   DataSource,
   Dataset,
@@ -48,6 +49,7 @@ function App() {
   const [activeTenant, setActiveTenantState] = useState(getActiveTenant());
   const [memberships, setMemberships] = useState<TenantMembership[]>([]);
   const [members, setMembers] = useState<TenantMember[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [rows, setRows] = useState<QueryRow[]>([]);
   const [error, setError] = useState('');
   const [tokenInput, setTokenInput] = useState('');
@@ -127,6 +129,7 @@ function App() {
     loadAlertState().catch((err) => setError(err.message));
     loadInvites().catch(() => undefined);
     loadMembers().catch(() => setMembers([]));
+    loadAuditEvents().catch(() => setAuditEvents([]));
   }, [config, user, activeTenant]);
 
   async function handleOIDCCallback() {
@@ -203,6 +206,7 @@ function App() {
       }
     });
     setDataSources((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
     if (saved[0]) {
       setEditingSourceId(saved[0].id);
       setQuery((current) => ({ ...current, sourceId: saved[0].id }));
@@ -248,6 +252,11 @@ function App() {
     setMembers(result);
   }
 
+  async function loadAuditEvents() {
+    const result = await apiGet<AuditEvent[]>('/api/audit/events');
+    setAuditEvents(result);
+  }
+
   async function saveDashboard() {
     const panels = dashboardPanels.length > 0 ? dashboardPanels : [currentDashboardPanel()];
     const layout = {
@@ -260,6 +269,7 @@ function App() {
       layout
     });
     setDashboards((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
     if (saved[0]) {
       setEditingDashboardId(saved[0].id);
       setDashboardPanels(saved[0].layout?.charts || panels);
@@ -274,6 +284,7 @@ function App() {
       query: queryPayload()
     });
     setSavedQueries((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
     if (saved[0]) {
       setEditingSavedQueryId(saved[0].id);
       setSavedQueryName(saved[0].name);
@@ -308,6 +319,7 @@ function App() {
       config: {}
     });
     setContacts((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
     if (saved[0]) setSelectedContact(saved[0].id);
   }
 
@@ -325,11 +337,13 @@ function App() {
       contactEndpointId: selectedContact || null
     });
     setAlertRules((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
   }
 
   async function resolveIncident(incident: AlertIncident) {
     const saved = await apiPost<AlertIncident[]>('/api/alerts/incidents/resolve', { id: incident.id });
     setIncidents((current) => current.map((item) => item.id === incident.id ? (saved[0] || item) : item));
+    loadAuditEvents().catch(() => undefined);
   }
 
   async function loadInvites() {
@@ -344,6 +358,7 @@ function App() {
     });
     setInvites((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     setInviteEmail('');
+    loadAuditEvents().catch(() => undefined);
   }
 
   async function acceptInvite() {
@@ -359,6 +374,14 @@ function App() {
   async function updateMemberRole(member: TenantMember, role: TenantMember['role']) {
     const saved = await apiPost<TenantMember[]>('/api/members/role', { id: member.id, role });
     setMembers((current) => current.map((item) => item.id === member.id ? (saved[0] || item) : item));
+    loadAuditEvents().catch(() => undefined);
+  }
+
+  async function deactivateMember(member: TenantMember) {
+    const saved = await apiPost<TenantMember[]>('/api/members/deactivate', { id: member.id });
+    setMembers((current) => current.map((item) => item.id === member.id ? (saved[0] || item) : item));
+    loadAccessState().catch(() => undefined);
+    loadAuditEvents().catch(() => undefined);
   }
 
   function selectTenant(tenant: string) {
@@ -741,17 +764,32 @@ function App() {
           <h2>Members</h2>
           <div className="member-list">
             {members.map((member) => (
-              <div className="member" key={member.id}>
+              <div className={member.disabled_at ? 'member disabled' : 'member'} key={member.id}>
                 <div>
                   <strong>{member.display_name || member.email}</strong>
-                  <small>{member.provider}</small>
+                  <small>{member.provider}{member.disabled_at ? ' - disabled' : ''}</small>
                 </div>
-                <select value={member.role} onChange={(event) => updateMemberRole(member, event.target.value as TenantMember['role'])}>
+                <select disabled={Boolean(member.disabled_at)} value={member.role} onChange={(event) => updateMemberRole(member, event.target.value as TenantMember['role'])}>
                   <option value="owner">Owner</option>
                   <option value="admin">Admin</option>
                   <option value="editor">Editor</option>
                   <option value="viewer">Viewer</option>
                 </select>
+                {!member.disabled_at && <button onClick={() => deactivateMember(member)}>Deactivate</button>}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Audit</h2>
+          <div className="audit-list">
+            {auditEvents.slice(0, 10).map((event) => (
+              <div className="audit-event" key={event.id}>
+                <strong>{event.action}</strong>
+                <span>{event.actor_email || 'system'}</span>
+                <small>{event.target_type}{event.target_id ? ` - ${event.target_id}` : ''}</small>
+                <small>{new Date(event.created_at).toLocaleString()}</small>
               </div>
             ))}
           </div>

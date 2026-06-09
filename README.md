@@ -50,9 +50,10 @@ On successful sign-in, the UI calls `POST /api/session/sync`. The backend record
 or updates the current tenant/user in PostgreSQL, making later role and invite
 rules explicit instead of keeping identity only in browser state.
 
-Write operations for dashboards, alert rules, and contact endpoints are checked
-against the synced PostgreSQL role. `owner`, `admin`, and `editor` can write;
-`viewer` can read. Tenant invite management is limited to `owner` and `admin`.
+Write operations for dashboards, saved queries, data sources, alert rules, and
+contact endpoints are checked against the synced PostgreSQL role. `owner`,
+`admin`, and `editor` can write; `viewer` can read. Tenant invite, member
+deactivation, and audit event access is limited to `owner` and `admin`.
 
 Users can belong to a tenant even when their public IdP does not emit that
 tenant as a claim. Owners and admins create an invite, the invited user signs in
@@ -61,6 +62,10 @@ identity to the invited tenant. The UI then sends `X-DBViz-Tenant` for the
 selected active tenant; the Go API forwards it to PostgREST with the verified
 subject/provider headers, and PostgreSQL only resolves the tenant when a
 matching membership exists.
+
+Admins can deactivate members without deleting historical ownership metadata.
+Disabled users no longer satisfy tenant membership or role checks, and owner
+changes/deactivation guard against removing the last active owner.
 
 Run the OTel sample emitter after the stack is up:
 
@@ -139,8 +144,10 @@ Alert rule and contact management follows the same pattern:
 - `GET /api/alerts/incidents`
 - `GET /api/session/profile`
 - `GET /api/session/memberships`
+- `GET /api/audit/events`
 - `GET /api/members`
 - `POST /api/members/role`
+- `POST /api/members/deactivate`
 - `GET /api/invites`
 - `POST /api/invites`
 - `POST /api/invites/accept`

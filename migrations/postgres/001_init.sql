@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name text NOT NULL DEFAULT '',
     provider text NOT NULL,
     role text NOT NULL DEFAULT 'viewer' CHECK (role IN ('owner', 'admin', 'editor', 'viewer')),
+    disabled_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(provider, subject),
     UNIQUE(tenant_id, email)
@@ -140,6 +141,21 @@ CREATE TABLE IF NOT EXISTS query_history (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS audit_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    actor_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+    actor_subject text NOT NULL DEFAULT '',
+    actor_provider text NOT NULL DEFAULT '',
+    actor_email text NOT NULL DEFAULT '',
+    action text NOT NULL,
+    target_type text NOT NULL DEFAULT '',
+    target_id text NOT NULL DEFAULT '',
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
 ALTER TABLE data_sources ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS fingerprint text NOT NULL DEFAULT '';
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS occurrence_count integer NOT NULL DEFAULT 1;
@@ -163,9 +179,10 @@ CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents
 CREATE UNIQUE INDEX IF NOT EXISTS alert_incidents_open_fingerprint_idx ON alert_incidents(tenant_id, fingerprint)
     WHERE status = 'firing' AND resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_events_tenant_created_idx ON audit_events(tenant_id, created_at DESC);
 
 GRANT USAGE ON SCHEMA public TO dbviz_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, alert_rules, alert_incidents, query_history TO dbviz_web;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, alert_rules, alert_incidents, query_history, audit_events TO dbviz_web;
 
 INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
@@ -206,6 +223,7 @@ ALTER TABLE contact_endpoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_incidents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE query_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION request_tenant_id() RETURNS uuid
 LANGUAGE plpgsql STABLE
@@ -254,6 +272,7 @@ BEGIN
             WHERE u.tenant_id = resolved_tenant_id
               AND u.subject = requested_subject
               AND u.provider = requested_provider
+              AND u.disabled_at IS NULL
         ) THEN
             RETURN resolved_tenant_id;
         END IF;
@@ -316,6 +335,11 @@ CREATE POLICY alert_incidents_tenant_isolation ON alert_incidents
 
 DROP POLICY IF EXISTS query_history_tenant_isolation ON query_history;
 CREATE POLICY query_history_tenant_isolation ON query_history
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
+DROP POLICY IF EXISTS audit_events_tenant_isolation ON audit_events;
+CREATE POLICY audit_events_tenant_isolation ON audit_events
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
@@ -442,6 +466,64 @@ GRANT EXECUTE ON FUNCTION get_data_source(uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_data_source(uuid, text, text, jsonb) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_query_history(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION record_query_history(text, text, text, jsonb, integer, integer, text, text) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION list_audit_events(event_limit integer DEFAULT 100)
+RETURNS TABLE(id uuid, actor_email text, action text, target_type text, target_id text, payload jsonb, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT ae.id, ae.actor_email, ae.action, ae.target_type, ae.target_id, ae.payload, ae.created_at
+    FROM audit_events ae
+    WHERE ae.tenant_id = request_tenant_id()
+    ORDER BY ae.created_at DESC
+    LIMIT LEAST(GREATEST(COALESCE(event_limit, 100), 1), 500);
+$$;
+
+CREATE OR REPLACE FUNCTION record_audit_event(
+    actor_subject text,
+    actor_provider text,
+    actor_email text,
+    event_action text,
+    event_target_type text,
+    event_target_id text,
+    event_payload jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    resolved_user_id uuid;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+    IF event_action IS NULL OR event_action = '' THEN
+        RAISE EXCEPTION 'audit action is required';
+    END IF;
+
+    SELECT u.id INTO resolved_user_id
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = actor_subject
+      AND u.provider = actor_provider
+    LIMIT 1;
+
+    INSERT INTO audit_events (tenant_id, actor_user_id, actor_subject, actor_provider, actor_email, action, target_type, target_id, payload)
+    VALUES (
+        request_tenant_id(),
+        resolved_user_id,
+        COALESCE(actor_subject, ''),
+        COALESCE(actor_provider, ''),
+        COALESCE(actor_email, ''),
+        event_action,
+        COALESCE(event_target_type, ''),
+        COALESCE(event_target_id, ''),
+        COALESCE(event_payload, '{}'::jsonb)
+    );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_audit_events(integer) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION record_audit_event(text, text, text, text, text, text, jsonb) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_dashboards()
 RETURNS TABLE(id uuid, name text, layout jsonb, updated_at timestamptz, created_at timestamptz)
@@ -1009,6 +1091,7 @@ AS $$
     WHERE u.tenant_id = request_tenant_id()
       AND u.subject = user_subject
       AND u.provider = user_provider
+      AND u.disabled_at IS NULL
     LIMIT 1;
 $$;
 
@@ -1022,6 +1105,7 @@ AS $$
         WHERE u.tenant_id = request_tenant_id()
           AND u.subject = user_subject
           AND u.provider = user_provider
+          AND u.disabled_at IS NULL
           AND u.role = ANY(allowed_roles)
     );
 $$;
@@ -1040,11 +1124,15 @@ AS $$
     JOIN tenants t ON t.id = u.tenant_id
     WHERE u.subject = user_subject
       AND u.provider = user_provider
+      AND u.disabled_at IS NULL
     ORDER BY t.name;
 $$;
 
+DROP FUNCTION IF EXISTS list_tenant_members(text, text);
+DROP FUNCTION IF EXISTS update_tenant_member_role(text, text, uuid, text);
+
 CREATE OR REPLACE FUNCTION list_tenant_members(actor_subject text, actor_provider text)
-RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, created_at timestamptz)
+RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, disabled_at timestamptz, created_at timestamptz)
 LANGUAGE plpgsql STABLE
 AS $$
 BEGIN
@@ -1053,7 +1141,7 @@ BEGIN
     END IF;
 
     RETURN QUERY
-    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.created_at
+    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.disabled_at, u.created_at
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
     ORDER BY u.created_at ASC;
@@ -1061,7 +1149,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION update_tenant_member_role(actor_subject text, actor_provider text, member_id uuid, member_role text)
-RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, created_at timestamptz)
+RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, disabled_at timestamptz, created_at timestamptz)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -1073,7 +1161,8 @@ BEGIN
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
       AND u.subject = actor_subject
-      AND u.provider = actor_provider;
+      AND u.provider = actor_provider
+      AND u.disabled_at IS NULL;
 
     IF actor_role NOT IN ('owner', 'admin') THEN
         RAISE EXCEPTION 'insufficient role';
@@ -1086,7 +1175,8 @@ BEGIN
     SELECT u.role INTO target_role
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
-      AND u.id = member_id;
+      AND u.id = member_id
+      AND u.disabled_at IS NULL;
 
     IF target_role IS NULL THEN
         RAISE EXCEPTION 'member is not available for tenant';
@@ -1099,7 +1189,8 @@ BEGIN
     SELECT count(*) INTO owner_count
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
-      AND u.role = 'owner';
+      AND u.role = 'owner'
+      AND u.disabled_at IS NULL;
 
     IF target_role = 'owner' AND member_role <> 'owner' AND owner_count <= 1 THEN
         RAISE EXCEPTION 'cannot remove the last owner';
@@ -1111,7 +1202,64 @@ BEGIN
       AND users.id = member_id;
 
     RETURN QUERY
-    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.created_at
+    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.disabled_at, u.created_at
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.id = member_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION deactivate_tenant_member(actor_subject text, actor_provider text, member_id uuid)
+RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, disabled_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    actor_role text;
+    target_role text;
+    owner_count integer;
+BEGIN
+    SELECT u.role INTO actor_role
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = actor_subject
+      AND u.provider = actor_provider
+      AND u.disabled_at IS NULL;
+
+    IF actor_role NOT IN ('owner', 'admin') THEN
+        RAISE EXCEPTION 'insufficient role';
+    END IF;
+
+    SELECT u.role INTO target_role
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.id = member_id
+      AND u.disabled_at IS NULL;
+
+    IF target_role IS NULL THEN
+        RAISE EXCEPTION 'member is not active for tenant';
+    END IF;
+
+    IF target_role = 'owner' AND actor_role <> 'owner' THEN
+        RAISE EXCEPTION 'owner deactivation requires owner access';
+    END IF;
+
+    SELECT count(*) INTO owner_count
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.role = 'owner'
+      AND u.disabled_at IS NULL;
+
+    IF target_role = 'owner' AND owner_count <= 1 THEN
+        RAISE EXCEPTION 'cannot deactivate the last owner';
+    END IF;
+
+    UPDATE users
+    SET disabled_at = now()
+    WHERE users.tenant_id = request_tenant_id()
+      AND users.id = member_id;
+
+    RETURN QUERY
+    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.disabled_at, u.created_at
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
       AND u.id = member_id;
@@ -1121,6 +1269,7 @@ $$;
 GRANT EXECUTE ON FUNCTION list_user_memberships(text, text) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_tenant_members(text, text) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION update_tenant_member_role(text, text, uuid, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION deactivate_tenant_member(text, text, uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_tenant_invites()
 RETURNS TABLE(id uuid, email text, role text, accepted_at timestamptz, expires_at timestamptz, created_at timestamptz)
@@ -1208,7 +1357,8 @@ BEGIN
     SET tenant_id = EXCLUDED.tenant_id,
         email = EXCLUDED.email,
         display_name = EXCLUDED.display_name,
-        role = EXCLUDED.role
+        role = EXCLUDED.role,
+        disabled_at = NULL
     RETURNING users.id INTO saved_id;
 
     UPDATE tenant_invites

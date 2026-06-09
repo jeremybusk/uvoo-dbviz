@@ -227,6 +227,18 @@ label {
   background: #ffffff;
 }
 
+.member.disabled {
+  opacity: 0.68;
+}
+
+.member button {
+  grid-column: 1 / -1;
+  min-height: 32px;
+  border-color: #c9d3dc;
+  background: #ffffff;
+  color: #7c2419;
+}
+
 .member strong,
 .member small {
   display: block;
@@ -237,6 +249,30 @@ label {
 
 .member small {
   color: #6b7785;
+}
+
+.audit-list {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.audit-event {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid #d8e0e6;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.audit-event span,
+.audit-event small {
+  overflow: hidden;
+  color: #6b7785;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 label {

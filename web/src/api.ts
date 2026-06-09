@@ -62,6 +62,7 @@ export type TenantMember = {
   display_name: string;
   provider: string;
   role: 'owner' | 'admin' | 'editor' | 'viewer';
+  disabled_at: string | null;
   created_at: string;
 };
 
@@ -95,6 +96,16 @@ export type QueryHistory = {
   duration_ms: number;
   status: 'success' | 'failed';
   error: string;
+  created_at: string;
+};
+
+export type AuditEvent = {
+  id: string;
+  actor_email: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  payload: Record<string, unknown>;
   created_at: string;
 };
 
