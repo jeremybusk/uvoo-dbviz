@@ -120,6 +120,35 @@ label {
   padding-inline: 10px;
 }
 
+.panel-list {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.dashboard-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  gap: 6px;
+}
+
+.dashboard-panel button {
+  min-height: 34px;
+  border-color: #c9d3dc;
+  background: #ffffff;
+  color: #245a73;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-panel button:last-child {
+  color: #7c2419;
+  text-align: center;
+}
+
 .history-list {
   display: grid;
   gap: 6px;

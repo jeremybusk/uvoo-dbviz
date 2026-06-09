@@ -45,6 +45,8 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/session/memberships", a.requireAuth(a.listMemberships))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
 	a.mux.HandleFunc("GET /api/query/history", a.requireAuth(a.listQueryHistory))
+	a.mux.HandleFunc("GET /api/saved-queries", a.requireAuth(a.listSavedQueries))
+	a.mux.HandleFunc("POST /api/saved-queries", a.requireAuth(a.saveSavedQuery))
 	a.mux.HandleFunc("GET /api/data-sources", a.requireAuth(a.listDataSources))
 	a.mux.HandleFunc("POST /api/data-sources", a.requireAuth(a.saveDataSource))
 	a.mux.HandleFunc("POST /api/data-sources/test", a.requireAuth(a.testDataSource))
@@ -189,6 +191,58 @@ func (a *App) listQueryHistory(w http.ResponseWriter, r *http.Request) {
 	var rows []map[string]any
 	if err := a.state.RPC(r.Context(), "list_query_history", map[string]any{
 		"history_limit": 50,
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) listSavedQueries(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor", "viewer") {
+		return
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "list_saved_queries", map[string]any{}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) saveSavedQuery(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID          string         `json:"id"`
+		Name        string         `json:"name"`
+		Description string         `json:"description"`
+		Query       map[string]any `json:"query"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, errors.New("saved query name is required"))
+		return
+	}
+	if err := a.validateQueryPayload(req.Query, statePrincipal(r).TenantID); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var savedQueryID any
+	if req.ID != "" {
+		savedQueryID = req.ID
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "save_saved_query", map[string]any{
+		"saved_query_id":          savedQueryID,
+		"saved_query_name":        req.Name,
+		"saved_query_description": req.Description,
+		"saved_query_payload":     req.Query,
 	}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -467,22 +521,7 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert name is required"))
 		return
 	}
-	queryBytes, err := json.Marshal(req.Query)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	var alertQuery clickhouse.QueryRequest
-	if err := json.Unmarshal(queryBytes, &alertQuery); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	ds, ok := a.cfg.Datasets[alertQuery.Dataset]
-	if !ok {
-		writeError(w, http.StatusBadRequest, errors.New("unknown alert dataset"))
-		return
-	}
-	if _, err := clickhouse.BuildTimeseriesSQL(alertQuery, ds, statePrincipal(r).TenantID, a.cfg.ClickHouse.MaxRows); err != nil {
+	if err := a.validateQueryPayload(req.Query, statePrincipal(r).TenantID); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -504,7 +543,7 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		contactID = req.ContactEndpointID
 	}
 	var rows []map[string]any
-	err = a.state.RPC(r.Context(), "save_alert_rule", map[string]any{
+	err := a.state.RPC(r.Context(), "save_alert_rule", map[string]any{
 		"alert_id":         alertID,
 		"alert_name":       req.Name,
 		"alert_query":      req.Query,
@@ -518,6 +557,26 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) validateQueryPayload(payload map[string]any, tenantID string) error {
+	if payload == nil {
+		return errors.New("query payload is required")
+	}
+	queryBytes, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	var query clickhouse.QueryRequest
+	if err := json.Unmarshal(queryBytes, &query); err != nil {
+		return err
+	}
+	ds, ok := a.cfg.Datasets[query.Dataset]
+	if !ok {
+		return errors.New("unknown query dataset")
+	}
+	_, err = clickhouse.BuildTimeseriesSQL(query, ds, tenantID, a.cfg.ClickHouse.MaxRows)
+	return err
 }
 
 func numericValue(value any) (float64, bool) {

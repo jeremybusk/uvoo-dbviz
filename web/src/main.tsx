@@ -8,11 +8,13 @@ import {
   DataSource,
   Dataset,
   Dashboard,
+  DashboardChart,
   Principal,
   Provider,
   PublicConfig,
   QueryHistory,
   QueryRow,
+  SavedQuery,
   TenantInvite,
   TenantMember,
   TenantMembership,
@@ -50,9 +52,17 @@ function App() {
   const [error, setError] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [queryHistory, setQueryHistory] = useState<QueryHistory[]>([]);
+  const [editingDashboardId, setEditingDashboardId] = useState('');
   const [dashboardName, setDashboardName] = useState('Sample Observability');
+  const [dashboardPanels, setDashboardPanels] = useState<DashboardChart[]>([]);
+  const [panelTitle, setPanelTitle] = useState('Log volume');
+  const [panelVisualization, setPanelVisualization] = useState<'line' | 'bar' | 'area'>('line');
+  const [editingSavedQueryId, setEditingSavedQueryId] = useState('');
+  const [savedQueryName, setSavedQueryName] = useState('Current query');
+  const [savedQueryDescription, setSavedQueryDescription] = useState('');
   const [editingSourceId, setEditingSourceId] = useState('');
   const [sourceName, setSourceName] = useState('Default ClickHouse');
   const [sourceURL, setSourceURL] = useState('http://clickhouse:8123');
@@ -112,6 +122,7 @@ function App() {
     loadAccessState().catch((err) => setError(err.message));
     loadDataSources().catch((err) => setError(err.message));
     loadQueryHistory().catch(() => undefined);
+    loadSavedQueries().catch(() => undefined);
     loadDashboards().catch((err) => setError(err.message));
     loadAlertState().catch((err) => setError(err.message));
     loadInvites().catch(() => undefined);
@@ -165,15 +176,7 @@ function App() {
 
   async function loadData() {
     setError('');
-    const result = await apiPost<{ rows: QueryRow[] }>('/api/query', {
-      dataset: query.dataset,
-      sourceId: query.sourceId || undefined,
-      groupBy: query.groupBy,
-      measure: query.measure,
-      aggregation: query.aggregation,
-      from: new Date(query.from).toISOString(),
-      to: new Date(query.to).toISOString()
-    });
+    const result = await apiPost<{ rows: QueryRow[] }>('/api/query', queryPayload());
     setRows(result.rows);
     loadQueryHistory().catch(() => undefined);
   }
@@ -221,6 +224,11 @@ function App() {
     setQueryHistory(result);
   }
 
+  async function loadSavedQueries() {
+    const result = await apiGet<SavedQuery[]>('/api/saved-queries');
+    setSavedQueries(result);
+  }
+
   async function loadDashboards() {
     const result = await apiGet<Dashboard[]>('/api/dashboards');
     setDashboards(result);
@@ -241,21 +249,42 @@ function App() {
   }
 
   async function saveDashboard() {
+    const panels = dashboardPanels.length > 0 ? dashboardPanels : [currentDashboardPanel()];
     const layout = {
       version: 1,
-      charts: [
-        {
-          title: `${dataset?.name || query.dataset} by ${query.groupBy || 'all'}`,
-          query
-        }
-      ]
+      charts: panels
     };
     const saved = await apiPost<Dashboard[]>('/api/dashboards', {
-      id: null,
+      id: editingDashboardId || null,
       name: dashboardName,
       layout
     });
     setDashboards((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    if (saved[0]) {
+      setEditingDashboardId(saved[0].id);
+      setDashboardPanels(saved[0].layout?.charts || panels);
+    }
+  }
+
+  async function saveSavedQuery() {
+    const saved = await apiPost<SavedQuery[]>('/api/saved-queries', {
+      id: editingSavedQueryId || null,
+      name: savedQueryName,
+      description: savedQueryDescription,
+      query: queryPayload()
+    });
+    setSavedQueries((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    if (saved[0]) {
+      setEditingSavedQueryId(saved[0].id);
+      setSavedQueryName(saved[0].name);
+      setSavedQueryDescription(saved[0].description || '');
+    }
+  }
+
+  function addPanelToDashboard() {
+    const panel = currentDashboardPanel();
+    setDashboardPanels((current) => [...current, panel]);
+    setPanelTitle(defaultPanelTitle());
   }
 
   async function loadAlertState() {
@@ -286,7 +315,7 @@ function App() {
     const saved = await apiPost<AlertRule[]>('/api/alerts/rules', {
       id: null,
       name: alertName,
-      query,
+      query: queryPayload(),
       condition: {
         operator: 'gt',
         threshold: Number(alertThreshold)
@@ -338,11 +367,32 @@ function App() {
   }
 
   function openDashboard(dashboard: Dashboard) {
+    setEditingDashboardId(dashboard.id);
     setDashboardName(dashboard.name);
-    const savedQuery = dashboard.layout?.charts?.[0]?.query as Partial<QueryState> | undefined;
-    if (savedQuery?.dataset) {
-      setQuery((current) => ({ ...current, ...savedQuery }));
+    const charts = dashboard.layout?.charts || [];
+    setDashboardPanels(charts);
+    if (charts[0]) {
+      setPanelTitle(charts[0].title || defaultPanelTitle());
+      setPanelVisualization((charts[0].visualization?.type as 'line' | 'bar' | 'area') || 'line');
+      applyQuery(charts[0].query);
     }
+  }
+
+  function openSavedQuery(savedQuery: SavedQuery) {
+    setEditingSavedQueryId(savedQuery.id);
+    setSavedQueryName(savedQuery.name);
+    setSavedQueryDescription(savedQuery.description || '');
+    applyQuery(savedQuery.query);
+  }
+
+  function openPanel(panel: DashboardChart) {
+    setPanelTitle(panel.title || defaultPanelTitle());
+    setPanelVisualization((panel.visualization?.type as 'line' | 'bar' | 'area') || 'line');
+    applyQuery(panel.query);
+  }
+
+  function removePanel(index: number) {
+    setDashboardPanels((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
   function fillDataSource(source: DataSource) {
@@ -357,7 +407,36 @@ function App() {
   }
 
   function openHistory(history: QueryHistory) {
-    setQuery((current) => ({ ...current, ...(history.query as Partial<QueryState>) }));
+    applyQuery(history.query);
+  }
+
+  function applyQuery(payload: unknown) {
+    const savedQuery = editableQuery(payload as Partial<QueryState>);
+    if (savedQuery.dataset) {
+      setQuery((current) => ({ ...current, ...savedQuery }));
+    }
+  }
+
+  function queryPayload(): QueryState {
+    return {
+      ...query,
+      sourceId: query.sourceId || '',
+      from: new Date(query.from).toISOString(),
+      to: new Date(query.to).toISOString()
+    };
+  }
+
+  function defaultPanelTitle() {
+    return `${dataset?.name || query.dataset} by ${query.groupBy || 'all'}`;
+  }
+
+  function currentDashboardPanel(): DashboardChart {
+    return {
+      id: crypto.randomUUID(),
+      title: panelTitle.trim() || defaultPanelTitle(),
+      query: queryPayload(),
+      visualization: { type: panelVisualization }
+    };
   }
 
   function saveToken() {
@@ -511,12 +590,53 @@ function App() {
         </section>
 
         <section className="panel">
+          <h2>Saved Queries</h2>
+          <label>
+            Name
+            <input value={savedQueryName} onChange={(event) => setSavedQueryName(event.target.value)} />
+          </label>
+          <label>
+            Description
+            <textarea value={savedQueryDescription} onChange={(event) => setSavedQueryDescription(event.target.value)} />
+          </label>
+          <button disabled={!user || !savedQueryName} onClick={saveSavedQuery}>Save query</button>
+          <div className="dashboard-list">
+            {savedQueries.map((savedQuery) => (
+              <button key={savedQuery.id} onClick={() => openSavedQuery(savedQuery)}>
+                {savedQuery.name}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
           <h2>Dashboards</h2>
           <label>
             Name
             <input value={dashboardName} onChange={(event) => setDashboardName(event.target.value)} />
           </label>
-          <button disabled={!user} onClick={saveDashboard}>Save</button>
+          <label>
+            Panel title
+            <input value={panelTitle} onChange={(event) => setPanelTitle(event.target.value)} />
+          </label>
+          <label>
+            Visualization
+            <select value={panelVisualization} onChange={(event) => setPanelVisualization(event.target.value as 'line' | 'bar' | 'area')}>
+              <option value="line">Line</option>
+              <option value="area">Area</option>
+              <option value="bar">Bar</option>
+            </select>
+          </label>
+          <button disabled={!user} onClick={addPanelToDashboard}>Add panel</button>
+          <button disabled={!user || !dashboardName} onClick={saveDashboard}>Save dashboard</button>
+          <div className="panel-list">
+            {dashboardPanels.map((panel, index) => (
+              <div className="dashboard-panel" key={panel.id || `${panel.title}-${index}`}>
+                <button onClick={() => openPanel(panel)}>{panel.title}</button>
+                <button aria-label={`Remove ${panel.title}`} onClick={() => removePanel(index)}>Remove</button>
+              </div>
+            ))}
+          </div>
           <div className="dashboard-list">
             {dashboards.map((dashboard) => (
               <button key={dashboard.id} onClick={() => openDashboard(dashboard)}>{dashboard.name}</button>
@@ -647,13 +767,13 @@ function App() {
           <span>{rows.length} rows</span>
         </div>
         {error && <div className="error">{error}</div>}
-        <Chart rows={rows} />
+        <Chart rows={rows} type={panelVisualization} />
       </section>
     </main>
   );
 }
 
-function Chart({ rows }: { rows: QueryRow[] }) {
+function Chart({ rows, type }: { rows: QueryRow[]; type: 'line' | 'bar' | 'area' }) {
   const ref = React.useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!ref.current) return;
@@ -666,7 +786,8 @@ function Chart({ rows }: { rows: QueryRow[] }) {
       yAxis: { type: 'value' },
       series: seriesNames.map((name) => ({
         name,
-        type: 'line',
+        type: type === 'bar' ? 'bar' : 'line',
+        areaStyle: type === 'area' ? {} : undefined,
         showSymbol: false,
         data: rows.filter((row) => (row.series || 'all') === name).map((row) => [row.ts * 1000, row.value])
       }))
@@ -677,8 +798,21 @@ function Chart({ rows }: { rows: QueryRow[] }) {
       window.removeEventListener('resize', resize);
       chart.dispose();
     };
-  }, [rows]);
+  }, [rows, type]);
   return <div className="chart" ref={ref} />;
+}
+
+function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {
+  const next = { ...payload };
+  if (typeof next.from === 'string') {
+    const from = new Date(next.from);
+    if (!Number.isNaN(from.getTime())) next.from = toInput(from);
+  }
+  if (typeof next.to === 'string') {
+    const to = new Date(next.to);
+    if (!Number.isNaN(to.getTime())) next.to = toInput(to);
+  }
+  return next;
 }
 
 function firstDimension(config: PublicConfig | null, datasetID: string): string {

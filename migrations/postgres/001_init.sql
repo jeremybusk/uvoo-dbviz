@@ -65,6 +65,18 @@ CREATE TABLE IF NOT EXISTS dashboards (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS saved_queries (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name text NOT NULL,
+    description text NOT NULL DEFAULT '',
+    query jsonb NOT NULL,
+    created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS charts (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -144,6 +156,7 @@ CREATE INDEX IF NOT EXISTS users_tenant_id_idx ON users(tenant_id);
 CREATE INDEX IF NOT EXISTS tenant_invites_tenant_id_idx ON tenant_invites(tenant_id);
 CREATE INDEX IF NOT EXISTS data_sources_tenant_id_idx ON data_sources(tenant_id);
 CREATE INDEX IF NOT EXISTS dashboards_tenant_id_idx ON dashboards(tenant_id);
+CREATE INDEX IF NOT EXISTS saved_queries_tenant_updated_idx ON saved_queries(tenant_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS charts_dashboard_id_idx ON charts(dashboard_id);
 CREATE INDEX IF NOT EXISTS alert_rules_enabled_idx ON alert_rules(tenant_id, enabled);
 CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents(tenant_id, created_at DESC);
@@ -152,14 +165,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS alert_incidents_open_fingerprint_idx ON alert_
 CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(tenant_id, created_at DESC);
 
 GRANT USAGE ON SCHEMA public TO dbviz_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, charts, contact_endpoints, alert_rules, alert_incidents, query_history TO dbviz_web;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, alert_rules, alert_incidents, query_history TO dbviz_web;
 
 INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
 ON CONFLICT (slug) DO NOTHING;
 
 INSERT INTO dashboards (tenant_id, name, layout)
-SELECT id, 'Sample Observability', '{"version":1,"charts":[{"title":"Log volume","dataset":"logs","groupBy":"service_name"}]}'::jsonb
+SELECT id, 'Sample Observability', '{"version":1,"charts":[{"title":"Log volume","query":{"dataset":"logs","groupBy":"service_name","measure":"_rows","aggregation":"count"},"visualization":{"type":"line"}}]}'::jsonb
 FROM tenants
 WHERE slug = 'dev'
   AND NOT EXISTS (
@@ -169,6 +182,12 @@ WHERE slug = 'dev'
         AND dashboards.name = 'Sample Observability'
 )
 ON CONFLICT DO NOTHING;
+
+INSERT INTO saved_queries (tenant_id, name, description, query)
+SELECT id, 'Log volume by service', 'Count log rows grouped by service name', '{"dataset":"logs","groupBy":"service_name","measure":"_rows","aggregation":"count"}'::jsonb
+FROM tenants
+WHERE slug = 'dev'
+ON CONFLICT (tenant_id, name) DO NOTHING;
 
 INSERT INTO data_sources (tenant_id, name, kind, config)
 SELECT id, 'Default ClickHouse', 'clickhouse', '{"url":"http://clickhouse:8123","database":"default","username":"default","passwordSecretRef":"clickhouse-default"}'::jsonb
@@ -181,6 +200,7 @@ ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_invites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE data_sources ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dashboards ENABLE ROW LEVEL SECURITY;
+ALTER TABLE saved_queries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE charts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contact_endpoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
@@ -266,6 +286,11 @@ CREATE POLICY data_sources_tenant_isolation ON data_sources
 
 DROP POLICY IF EXISTS dashboards_tenant_isolation ON dashboards;
 CREATE POLICY dashboards_tenant_isolation ON dashboards
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
+DROP POLICY IF EXISTS saved_queries_tenant_isolation ON saved_queries;
+CREATE POLICY saved_queries_tenant_isolation ON saved_queries
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
@@ -462,6 +487,67 @@ $$;
 
 GRANT EXECUTE ON FUNCTION list_dashboards() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_dashboard(uuid, text, jsonb) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION list_saved_queries()
+RETURNS TABLE(id uuid, name text, description text, query jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT sq.id, sq.name, sq.description, sq.query, sq.updated_at, sq.created_at
+    FROM saved_queries sq
+    WHERE sq.tenant_id = request_tenant_id()
+    ORDER BY sq.updated_at DESC;
+$$;
+
+CREATE OR REPLACE FUNCTION save_saved_query(saved_query_id uuid, saved_query_name text, saved_query_description text, saved_query_payload jsonb)
+RETURNS TABLE(id uuid, name text, description text, query jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_id uuid;
+    resolved_user_id uuid;
+    request_headers jsonb;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    request_headers := COALESCE(NULLIF(current_setting('request.headers', true), '')::jsonb, '{}'::jsonb);
+
+    SELECT u.id INTO resolved_user_id
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = request_headers->>'x-dbviz-subject'
+      AND u.provider = request_headers->>'x-dbviz-provider'
+    LIMIT 1;
+
+    IF saved_query_id IS NULL THEN
+        INSERT INTO saved_queries (tenant_id, name, description, query, created_by)
+        VALUES (request_tenant_id(), saved_query_name, COALESCE(saved_query_description, ''), saved_query_payload, resolved_user_id)
+        ON CONFLICT ON CONSTRAINT saved_queries_tenant_id_name_key DO UPDATE
+        SET description = EXCLUDED.description,
+            query = EXCLUDED.query,
+            updated_at = now()
+        RETURNING saved_queries.id INTO saved_id;
+    ELSE
+        UPDATE saved_queries
+        SET name = saved_query_name,
+            description = COALESCE(saved_query_description, ''),
+            query = saved_query_payload,
+            updated_at = now()
+        WHERE saved_queries.id = saved_query_id
+          AND saved_queries.tenant_id = request_tenant_id()
+        RETURNING saved_queries.id INTO saved_id;
+    END IF;
+
+    RETURN QUERY
+    SELECT sq.id, sq.name, sq.description, sq.query, sq.updated_at, sq.created_at
+    FROM saved_queries sq
+    WHERE sq.id = saved_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_saved_queries() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION save_saved_query(uuid, text, text, jsonb) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_contact_endpoints()
 RETURNS TABLE(id uuid, name text, kind text, target text, config jsonb, created_at timestamptz)

@@ -105,12 +105,23 @@ variable by uppercasing and replacing non-alphanumerics with `_`, prefixed with
 ## Dashboards
 
 The frontend saves and opens dashboards through Go API endpoints backed by
-PostgREST RPCs:
+PostgREST RPCs. Dashboard layouts are JSONB documents with a `version` and a
+`charts` array. Each chart stores a title, visualization config, and a full
+validated query payload, so dashboards can carry multiple reusable panels
+without schema churn.
 
 - `GET /api/dashboards`
 - `POST /api/dashboards`
 - `list_dashboards()`
 - `save_dashboard(dashboard_id uuid, dashboard_name text, dashboard_layout jsonb)`
+
+Saved queries use the same tenant-scoped control-plane path and validate query
+payloads against configured datasets before persisting them:
+
+- `GET /api/saved-queries`
+- `POST /api/saved-queries`
+- `list_saved_queries()`
+- `save_saved_query(saved_query_id uuid, saved_query_name text, saved_query_description text, saved_query_payload jsonb)`
 
 Those functions derive tenant context from JWT claims such as `tenant_id`,
 `tenant_slug`, Google `hd`, Microsoft `tid`, or the local `X-Dev-Tenant` header.
