@@ -120,6 +120,35 @@ label {
   padding-inline: 10px;
 }
 
+.panel-list {
+  display: grid;
+  gap: 6px;
+  max-height: 180px;
+  overflow: auto;
+}
+
+.dashboard-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 86px;
+  gap: 6px;
+}
+
+.dashboard-panel button {
+  min-height: 34px;
+  border-color: #c9d3dc;
+  background: #ffffff;
+  color: #245a73;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboard-panel button:last-child {
+  color: #7c2419;
+  text-align: center;
+}
+
 .history-list {
   display: grid;
   gap: 6px;
@@ -180,6 +209,34 @@ label {
   min-height: 32px;
 }
 
+.notification-list {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.notification {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid #d8e0e6;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.notification.failed {
+  border-color: #d67b6b;
+}
+
+.notification span,
+.notification small {
+  overflow: hidden;
+  color: #6b7785;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .member-list {
   display: grid;
   gap: 8px;
@@ -198,6 +255,18 @@ label {
   background: #ffffff;
 }
 
+.member.disabled {
+  opacity: 0.68;
+}
+
+.member button {
+  grid-column: 1 / -1;
+  min-height: 32px;
+  border-color: #c9d3dc;
+  background: #ffffff;
+  color: #7c2419;
+}
+
 .member strong,
 .member small {
   display: block;
@@ -208,6 +277,30 @@ label {
 
 .member small {
   color: #6b7785;
+}
+
+.audit-list {
+  display: grid;
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.audit-event {
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  border: 1px solid #d8e0e6;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.audit-event span,
+.audit-event small {
+  overflow: hidden;
+  color: #6b7785;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 label {

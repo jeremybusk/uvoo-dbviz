@@ -21,8 +21,9 @@ services:
       DBVIZ_CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
       DBVIZ_SECRET_CLICKHOUSE_DEFAULT: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
       DBVIZ_CLICKHOUSE_DATABASE: default
-      DBVIZ_POSTGREST_URL: http://localhost:3000
+      DBVIZ_POSTGREST_URL: http://postgrest:3000
       DBVIZ_OIDC_KEYCLOAK_ISSUER: http://localhost:8089/realms/dbviz
+      DBVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: http://keycloak:8080/realms/dbviz
       DBVIZ_OIDC_KEYCLOAK_CLIENT_ID: uvoo-dbviz-web
       DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: tenant_slug
       DBVIZ_ALERTS_ENABLED: ${DBVIZ_ALERTS_ENABLED:-false}
@@ -89,7 +90,7 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
-    command: ["start-dev", "--import-realm", "--http-port=8080"]
+    command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://localhost:8089"]
     ports:
       - "8089:8080"
     environment:
@@ -101,9 +102,14 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.128.0
     command: ["--config=/etc/otelcol/config.yaml"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
     ports:
       - "4317:4317"
       - "4318:4318"
+    environment:
+      CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
     volumes:
       - ./deploy/otel/collector.yaml:/etc/otelcol/config.yaml:ro
 

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name text NOT NULL DEFAULT '',
     provider text NOT NULL,
     role text NOT NULL DEFAULT 'viewer' CHECK (role IN ('owner', 'admin', 'editor', 'viewer')),
+    disabled_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(provider, subject),
     UNIQUE(tenant_id, email)
@@ -63,6 +64,18 @@ CREATE TABLE IF NOT EXISTS dashboards (
     created_by uuid REFERENCES users(id) ON DELETE SET NULL,
     updated_at timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS saved_queries (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name text NOT NULL,
+    description text NOT NULL DEFAULT '',
+    query jsonb NOT NULL,
+    created_by uuid REFERENCES users(id) ON DELETE SET NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id, name)
 );
 
 CREATE TABLE IF NOT EXISTS charts (
@@ -115,6 +128,20 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS alert_notifications (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    alert_rule_id uuid REFERENCES alert_rules(id) ON DELETE SET NULL,
+    alert_incident_id uuid REFERENCES alert_incidents(id) ON DELETE SET NULL,
+    contact_kind text NOT NULL DEFAULT '',
+    contact_target text NOT NULL DEFAULT '',
+    status text NOT NULL CHECK (status IN ('success', 'failed', 'skipped')),
+    status_code integer NOT NULL DEFAULT 0,
+    error text NOT NULL DEFAULT '',
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE TABLE IF NOT EXISTS query_history (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -128,6 +155,21 @@ CREATE TABLE IF NOT EXISTS query_history (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS audit_events (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    actor_user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+    actor_subject text NOT NULL DEFAULT '',
+    actor_provider text NOT NULL DEFAULT '',
+    actor_email text NOT NULL DEFAULT '',
+    action text NOT NULL,
+    target_type text NOT NULL DEFAULT '',
+    target_id text NOT NULL DEFAULT '',
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
 ALTER TABLE data_sources ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS fingerprint text NOT NULL DEFAULT '';
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS occurrence_count integer NOT NULL DEFAULT 1;
@@ -144,22 +186,25 @@ CREATE INDEX IF NOT EXISTS users_tenant_id_idx ON users(tenant_id);
 CREATE INDEX IF NOT EXISTS tenant_invites_tenant_id_idx ON tenant_invites(tenant_id);
 CREATE INDEX IF NOT EXISTS data_sources_tenant_id_idx ON data_sources(tenant_id);
 CREATE INDEX IF NOT EXISTS dashboards_tenant_id_idx ON dashboards(tenant_id);
+CREATE INDEX IF NOT EXISTS saved_queries_tenant_updated_idx ON saved_queries(tenant_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS charts_dashboard_id_idx ON charts(dashboard_id);
 CREATE INDEX IF NOT EXISTS alert_rules_enabled_idx ON alert_rules(tenant_id, enabled);
 CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents(tenant_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS alert_incidents_open_fingerprint_idx ON alert_incidents(tenant_id, fingerprint)
     WHERE status = 'firing' AND resolved_at IS NULL;
+CREATE INDEX IF NOT EXISTS alert_notifications_tenant_created_idx ON alert_notifications(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS audit_events_tenant_created_idx ON audit_events(tenant_id, created_at DESC);
 
 GRANT USAGE ON SCHEMA public TO dbviz_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, charts, contact_endpoints, alert_rules, alert_incidents, query_history TO dbviz_web;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, alert_rules, alert_incidents, alert_notifications, query_history, audit_events TO dbviz_web;
 
 INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
 ON CONFLICT (slug) DO NOTHING;
 
 INSERT INTO dashboards (tenant_id, name, layout)
-SELECT id, 'Sample Observability', '{"version":1,"charts":[{"title":"Log volume","dataset":"logs","groupBy":"service_name"}]}'::jsonb
+SELECT id, 'Sample Observability', '{"version":1,"charts":[{"title":"Log volume","query":{"dataset":"logs","groupBy":"service_name","measure":"_rows","aggregation":"count"},"visualization":{"type":"line"}}]}'::jsonb
 FROM tenants
 WHERE slug = 'dev'
   AND NOT EXISTS (
@@ -169,6 +214,12 @@ WHERE slug = 'dev'
         AND dashboards.name = 'Sample Observability'
 )
 ON CONFLICT DO NOTHING;
+
+INSERT INTO saved_queries (tenant_id, name, description, query)
+SELECT id, 'Log volume by service', 'Count log rows grouped by service name', '{"dataset":"logs","groupBy":"service_name","measure":"_rows","aggregation":"count"}'::jsonb
+FROM tenants
+WHERE slug = 'dev'
+ON CONFLICT (tenant_id, name) DO NOTHING;
 
 INSERT INTO data_sources (tenant_id, name, kind, config)
 SELECT id, 'Default ClickHouse', 'clickhouse', '{"url":"http://clickhouse:8123","database":"default","username":"default","passwordSecretRef":"clickhouse-default"}'::jsonb
@@ -181,11 +232,14 @@ ALTER TABLE users ENABLE ROW LEVEL SECURITY;
 ALTER TABLE tenant_invites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE data_sources ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dashboards ENABLE ROW LEVEL SECURITY;
+ALTER TABLE saved_queries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE charts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contact_endpoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_incidents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alert_notifications ENABLE ROW LEVEL SECURITY;
 ALTER TABLE query_history ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_events ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION request_tenant_id() RETURNS uuid
 LANGUAGE plpgsql STABLE
@@ -234,6 +288,7 @@ BEGIN
             WHERE u.tenant_id = resolved_tenant_id
               AND u.subject = requested_subject
               AND u.provider = requested_provider
+              AND u.disabled_at IS NULL
         ) THEN
             RETURN resolved_tenant_id;
         END IF;
@@ -269,6 +324,11 @@ CREATE POLICY dashboards_tenant_isolation ON dashboards
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
+DROP POLICY IF EXISTS saved_queries_tenant_isolation ON saved_queries;
+CREATE POLICY saved_queries_tenant_isolation ON saved_queries
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
 DROP POLICY IF EXISTS charts_tenant_isolation ON charts;
 CREATE POLICY charts_tenant_isolation ON charts
     FOR ALL USING (tenant_id = request_tenant_id())
@@ -289,8 +349,18 @@ CREATE POLICY alert_incidents_tenant_isolation ON alert_incidents
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
+DROP POLICY IF EXISTS alert_notifications_tenant_isolation ON alert_notifications;
+CREATE POLICY alert_notifications_tenant_isolation ON alert_notifications
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
 DROP POLICY IF EXISTS query_history_tenant_isolation ON query_history;
 CREATE POLICY query_history_tenant_isolation ON query_history
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
+DROP POLICY IF EXISTS audit_events_tenant_isolation ON audit_events;
+CREATE POLICY audit_events_tenant_isolation ON audit_events
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
@@ -418,6 +488,64 @@ GRANT EXECUTE ON FUNCTION save_data_source(uuid, text, text, jsonb) TO dbviz_web
 GRANT EXECUTE ON FUNCTION list_query_history(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION record_query_history(text, text, text, jsonb, integer, integer, text, text) TO dbviz_web;
 
+CREATE OR REPLACE FUNCTION list_audit_events(event_limit integer DEFAULT 100)
+RETURNS TABLE(id uuid, actor_email text, action text, target_type text, target_id text, payload jsonb, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT ae.id, ae.actor_email, ae.action, ae.target_type, ae.target_id, ae.payload, ae.created_at
+    FROM audit_events ae
+    WHERE ae.tenant_id = request_tenant_id()
+    ORDER BY ae.created_at DESC
+    LIMIT LEAST(GREATEST(COALESCE(event_limit, 100), 1), 500);
+$$;
+
+CREATE OR REPLACE FUNCTION record_audit_event(
+    actor_subject text,
+    actor_provider text,
+    actor_email text,
+    event_action text,
+    event_target_type text,
+    event_target_id text,
+    event_payload jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    resolved_user_id uuid;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+    IF event_action IS NULL OR event_action = '' THEN
+        RAISE EXCEPTION 'audit action is required';
+    END IF;
+
+    SELECT u.id INTO resolved_user_id
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = actor_subject
+      AND u.provider = actor_provider
+    LIMIT 1;
+
+    INSERT INTO audit_events (tenant_id, actor_user_id, actor_subject, actor_provider, actor_email, action, target_type, target_id, payload)
+    VALUES (
+        request_tenant_id(),
+        resolved_user_id,
+        COALESCE(actor_subject, ''),
+        COALESCE(actor_provider, ''),
+        COALESCE(actor_email, ''),
+        event_action,
+        COALESCE(event_target_type, ''),
+        COALESCE(event_target_id, ''),
+        COALESCE(event_payload, '{}'::jsonb)
+    );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_audit_events(integer) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION record_audit_event(text, text, text, text, text, text, jsonb) TO dbviz_web;
+
 CREATE OR REPLACE FUNCTION list_dashboards()
 RETURNS TABLE(id uuid, name text, layout jsonb, updated_at timestamptz, created_at timestamptz)
 LANGUAGE sql STABLE
@@ -462,6 +590,67 @@ $$;
 
 GRANT EXECUTE ON FUNCTION list_dashboards() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_dashboard(uuid, text, jsonb) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION list_saved_queries()
+RETURNS TABLE(id uuid, name text, description text, query jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT sq.id, sq.name, sq.description, sq.query, sq.updated_at, sq.created_at
+    FROM saved_queries sq
+    WHERE sq.tenant_id = request_tenant_id()
+    ORDER BY sq.updated_at DESC;
+$$;
+
+CREATE OR REPLACE FUNCTION save_saved_query(saved_query_id uuid, saved_query_name text, saved_query_description text, saved_query_payload jsonb)
+RETURNS TABLE(id uuid, name text, description text, query jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_id uuid;
+    resolved_user_id uuid;
+    request_headers jsonb;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    request_headers := COALESCE(NULLIF(current_setting('request.headers', true), '')::jsonb, '{}'::jsonb);
+
+    SELECT u.id INTO resolved_user_id
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = request_headers->>'x-dbviz-subject'
+      AND u.provider = request_headers->>'x-dbviz-provider'
+    LIMIT 1;
+
+    IF saved_query_id IS NULL THEN
+        INSERT INTO saved_queries (tenant_id, name, description, query, created_by)
+        VALUES (request_tenant_id(), saved_query_name, COALESCE(saved_query_description, ''), saved_query_payload, resolved_user_id)
+        ON CONFLICT ON CONSTRAINT saved_queries_tenant_id_name_key DO UPDATE
+        SET description = EXCLUDED.description,
+            query = EXCLUDED.query,
+            updated_at = now()
+        RETURNING saved_queries.id INTO saved_id;
+    ELSE
+        UPDATE saved_queries
+        SET name = saved_query_name,
+            description = COALESCE(saved_query_description, ''),
+            query = saved_query_payload,
+            updated_at = now()
+        WHERE saved_queries.id = saved_query_id
+          AND saved_queries.tenant_id = request_tenant_id()
+        RETURNING saved_queries.id INTO saved_id;
+    END IF;
+
+    RETURN QUERY
+    SELECT sq.id, sq.name, sq.description, sq.query, sq.updated_at, sq.created_at
+    FROM saved_queries sq
+    WHERE sq.id = saved_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_saved_queries() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION save_saved_query(uuid, text, text, jsonb) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_contact_endpoints()
 RETURNS TABLE(id uuid, name text, kind text, target text, config jsonb, created_at timestamptz)
@@ -556,6 +745,38 @@ AS $$
     WHERE i.tenant_id = request_tenant_id()
     ORDER BY i.last_seen_at DESC
     LIMIT LEAST(GREATEST(COALESCE(incident_limit, 100), 1), 500);
+$$;
+
+CREATE OR REPLACE FUNCTION list_alert_notifications(notification_limit integer DEFAULT 100)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    alert_incident_id uuid,
+    contact_kind text,
+    contact_target text,
+    status text,
+    status_code integer,
+    error text,
+    payload jsonb,
+    created_at timestamptz
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        n.id,
+        n.alert_rule_id,
+        n.alert_incident_id,
+        n.contact_kind,
+        n.contact_target,
+        n.status,
+        n.status_code,
+        n.error,
+        n.payload,
+        n.created_at
+    FROM alert_notifications n
+    WHERE n.tenant_id = request_tenant_id()
+    ORDER BY n.created_at DESC
+    LIMIT LEAST(GREATEST(COALESCE(notification_limit, 100), 1), 500);
 $$;
 
 CREATE OR REPLACE FUNCTION resolve_alert_incident(actor_subject text, actor_provider text, incident_id uuid)
@@ -668,6 +889,7 @@ GRANT EXECUTE ON FUNCTION save_contact_endpoint(uuid, text, text, text, jsonb) T
 GRANT EXECUTE ON FUNCTION list_alert_rules() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boolean, uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_alert_notifications(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION resolve_alert_incident(text, text, uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_enabled_alert_rules_for_worker(worker_key text)
@@ -864,6 +1086,99 @@ $$;
 
 GRANT EXECUTE ON FUNCTION record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer) TO dbviz_web;
 
+CREATE OR REPLACE FUNCTION record_alert_notification_for_worker(
+    worker_key text,
+    rule_id uuid,
+    tenant_slug text,
+    incident_id uuid,
+    notification_contact_kind text,
+    notification_contact_target text,
+    delivery_status text,
+    delivery_status_code integer,
+    delivery_error text,
+    delivery_payload jsonb
+)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    alert_incident_id uuid,
+    contact_kind text,
+    contact_target text,
+    status text,
+    status_code integer,
+    error text,
+    payload jsonb,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+    normalized_status text;
+    saved_id uuid;
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    SELECT tenants.id INTO resolved_tenant_id
+    FROM tenants
+    WHERE tenants.slug = tenant_slug;
+
+    IF resolved_tenant_id IS NULL THEN
+        RAISE EXCEPTION 'tenant not found: %', tenant_slug;
+    END IF;
+
+    normalized_status := COALESCE(NULLIF(delivery_status, ''), 'failed');
+    IF normalized_status NOT IN ('success', 'failed', 'skipped') THEN
+        normalized_status := 'failed';
+    END IF;
+
+    INSERT INTO alert_notifications (
+        tenant_id,
+        alert_rule_id,
+        alert_incident_id,
+        contact_kind,
+        contact_target,
+        status,
+        status_code,
+        error,
+        payload
+    )
+    VALUES (
+        resolved_tenant_id,
+        rule_id,
+        incident_id,
+        COALESCE(notification_contact_kind, ''),
+        COALESCE(notification_contact_target, ''),
+        normalized_status,
+        GREATEST(COALESCE(delivery_status_code, 0), 0),
+        LEFT(COALESCE(delivery_error, ''), 2000),
+        COALESCE(delivery_payload, '{}'::jsonb)
+    )
+    RETURNING alert_notifications.id INTO saved_id;
+
+    RETURN QUERY
+    SELECT
+        n.id,
+        n.alert_rule_id,
+        n.alert_incident_id,
+        n.contact_kind,
+        n.contact_target,
+        n.status,
+        n.status_code,
+        n.error,
+        n.payload,
+        n.created_at
+    FROM alert_notifications n
+    WHERE n.id = saved_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION record_alert_notification_for_worker(text, uuid, text, uuid, text, text, text, integer, text, jsonb) TO dbviz_web;
+
 CREATE OR REPLACE FUNCTION sync_current_user(user_subject text, user_email text, user_name text, user_provider text, tenant_slug text, tenant_name text)
 RETURNS TABLE(id uuid, tenant_id uuid, subject text, email text, display_name text, provider text, role text)
 LANGUAGE plpgsql
@@ -923,6 +1238,7 @@ AS $$
     WHERE u.tenant_id = request_tenant_id()
       AND u.subject = user_subject
       AND u.provider = user_provider
+      AND u.disabled_at IS NULL
     LIMIT 1;
 $$;
 
@@ -936,6 +1252,7 @@ AS $$
         WHERE u.tenant_id = request_tenant_id()
           AND u.subject = user_subject
           AND u.provider = user_provider
+          AND u.disabled_at IS NULL
           AND u.role = ANY(allowed_roles)
     );
 $$;
@@ -954,11 +1271,15 @@ AS $$
     JOIN tenants t ON t.id = u.tenant_id
     WHERE u.subject = user_subject
       AND u.provider = user_provider
+      AND u.disabled_at IS NULL
     ORDER BY t.name;
 $$;
 
+DROP FUNCTION IF EXISTS list_tenant_members(text, text);
+DROP FUNCTION IF EXISTS update_tenant_member_role(text, text, uuid, text);
+
 CREATE OR REPLACE FUNCTION list_tenant_members(actor_subject text, actor_provider text)
-RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, created_at timestamptz)
+RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, disabled_at timestamptz, created_at timestamptz)
 LANGUAGE plpgsql STABLE
 AS $$
 BEGIN
@@ -967,7 +1288,7 @@ BEGIN
     END IF;
 
     RETURN QUERY
-    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.created_at
+    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.disabled_at, u.created_at
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
     ORDER BY u.created_at ASC;
@@ -975,7 +1296,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION update_tenant_member_role(actor_subject text, actor_provider text, member_id uuid, member_role text)
-RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, created_at timestamptz)
+RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, disabled_at timestamptz, created_at timestamptz)
 LANGUAGE plpgsql
 AS $$
 DECLARE
@@ -987,7 +1308,8 @@ BEGIN
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
       AND u.subject = actor_subject
-      AND u.provider = actor_provider;
+      AND u.provider = actor_provider
+      AND u.disabled_at IS NULL;
 
     IF actor_role NOT IN ('owner', 'admin') THEN
         RAISE EXCEPTION 'insufficient role';
@@ -1000,7 +1322,8 @@ BEGIN
     SELECT u.role INTO target_role
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
-      AND u.id = member_id;
+      AND u.id = member_id
+      AND u.disabled_at IS NULL;
 
     IF target_role IS NULL THEN
         RAISE EXCEPTION 'member is not available for tenant';
@@ -1013,7 +1336,8 @@ BEGIN
     SELECT count(*) INTO owner_count
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
-      AND u.role = 'owner';
+      AND u.role = 'owner'
+      AND u.disabled_at IS NULL;
 
     IF target_role = 'owner' AND member_role <> 'owner' AND owner_count <= 1 THEN
         RAISE EXCEPTION 'cannot remove the last owner';
@@ -1025,7 +1349,64 @@ BEGIN
       AND users.id = member_id;
 
     RETURN QUERY
-    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.created_at
+    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.disabled_at, u.created_at
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.id = member_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION deactivate_tenant_member(actor_subject text, actor_provider text, member_id uuid)
+RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, disabled_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    actor_role text;
+    target_role text;
+    owner_count integer;
+BEGIN
+    SELECT u.role INTO actor_role
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = actor_subject
+      AND u.provider = actor_provider
+      AND u.disabled_at IS NULL;
+
+    IF actor_role NOT IN ('owner', 'admin') THEN
+        RAISE EXCEPTION 'insufficient role';
+    END IF;
+
+    SELECT u.role INTO target_role
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.id = member_id
+      AND u.disabled_at IS NULL;
+
+    IF target_role IS NULL THEN
+        RAISE EXCEPTION 'member is not active for tenant';
+    END IF;
+
+    IF target_role = 'owner' AND actor_role <> 'owner' THEN
+        RAISE EXCEPTION 'owner deactivation requires owner access';
+    END IF;
+
+    SELECT count(*) INTO owner_count
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.role = 'owner'
+      AND u.disabled_at IS NULL;
+
+    IF target_role = 'owner' AND owner_count <= 1 THEN
+        RAISE EXCEPTION 'cannot deactivate the last owner';
+    END IF;
+
+    UPDATE users
+    SET disabled_at = now()
+    WHERE users.tenant_id = request_tenant_id()
+      AND users.id = member_id;
+
+    RETURN QUERY
+    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.disabled_at, u.created_at
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
       AND u.id = member_id;
@@ -1035,6 +1416,7 @@ $$;
 GRANT EXECUTE ON FUNCTION list_user_memberships(text, text) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_tenant_members(text, text) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION update_tenant_member_role(text, text, uuid, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION deactivate_tenant_member(text, text, uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_tenant_invites()
 RETURNS TABLE(id uuid, email text, role text, accepted_at timestamptz, expires_at timestamptz, created_at timestamptz)
@@ -1122,7 +1504,8 @@ BEGIN
     SET tenant_id = EXCLUDED.tenant_id,
         email = EXCLUDED.email,
         display_name = EXCLUDED.display_name,
-        role = EXCLUDED.role
+        role = EXCLUDED.role,
+        disabled_at = NULL
     RETURNING users.id INTO saved_id;
 
     UPDATE tenant_invites

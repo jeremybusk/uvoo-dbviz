@@ -57,7 +57,11 @@ func main() {
 			if err != nil {
 				return alert.RecordResult{}, err
 			}
-			return alert.RecordResult{Deduped: incident.Deduped, ShouldNotify: incident.ShouldNotify}, nil
+			return alert.RecordResult{IncidentID: incident.ID, Deduped: incident.Deduped, ShouldNotify: incident.ShouldNotify}, nil
+		})
+		worker.SetNotificationRecorder(func(ctx context.Context, rule alert.Rule, incidentID string, contact alert.ContactEndpoint, result alert.DeliveryResult, payload map[string]any) error {
+			_, err := stateClient.RecordAlertNotification(ctx, cfg.Alerts.WorkerKey, rule.ID, rule.TenantID, incidentID, contact.Kind, contact.Target, result.Status, result.StatusCode, result.Error, payload)
+			return err
 		})
 		worker.Start(context.Background())
 		logger.Info("alert worker started", "static_rules", len(staticRules), "load_persisted", cfg.Alerts.LoadPersisted)

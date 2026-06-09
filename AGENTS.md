@@ -9,7 +9,7 @@ Here is a recommended, highly performant stack tailored for a minimalist, turn-k
 ### The Recommended Stack
 
 * **Frontend:** React + Apache ECharts
-* React provides the component-driven architecture needed for a complex UI. Apache ECharts is incredibly performant for time-series data and handles high-cardinality charts efficiently, especially when rendering to a Canvas element instead of SVG for massive datasets.
+* React provides the component-driven architecture needed for a complex UI. Apache ECharts is incredibly performant for time-series data and handles high-cardinality charts efficiently, especially when rendering to a Canvas element instead of SVG for massive datasets. Use Antd with dark and light theme.
 
 
 * **API & Alerting Engine:** Go

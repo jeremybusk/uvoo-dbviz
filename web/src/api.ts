@@ -62,6 +62,7 @@ export type TenantMember = {
   display_name: string;
   provider: string;
   role: 'owner' | 'admin' | 'editor' | 'viewer';
+  disabled_at: string | null;
   created_at: string;
 };
 
@@ -98,15 +99,41 @@ export type QueryHistory = {
   created_at: string;
 };
 
+export type AuditEvent = {
+  id: string;
+  actor_email: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type SavedQuery = {
+  id: string;
+  name: string;
+  description: string;
+  query: Record<string, unknown>;
+  updated_at: string;
+  created_at: string;
+};
+
+export type DashboardChart = {
+  id?: string;
+  title: string;
+  query: unknown;
+  visualization?: {
+    type?: 'line' | 'bar' | 'area';
+    [key: string]: unknown;
+  };
+};
+
 export type Dashboard = {
   id: string;
   name: string;
   layout: {
     version: number;
-    charts: Array<{
-      title: string;
-      query: unknown;
-    }>;
+    charts: DashboardChart[];
   };
   updated_at: string;
   created_at: string;
@@ -147,6 +174,19 @@ export type AlertIncident = {
   last_seen_at: string;
   last_notified_at: string | null;
   resolved_at: string | null;
+  created_at: string;
+};
+
+export type AlertNotification = {
+  id: string;
+  alert_rule_id: string | null;
+  alert_incident_id: string | null;
+  contact_kind: string;
+  contact_target: string;
+  status: 'success' | 'failed' | 'skipped';
+  status_code: number;
+  error: string;
+  payload: Record<string, unknown>;
   created_at: string;
 };
 

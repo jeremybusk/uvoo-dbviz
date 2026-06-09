@@ -36,6 +36,12 @@ Compose starts:
 - Keycloak on <http://localhost:8089> with realm `dbviz`
 - OpenTelemetry Collector on `localhost:4317` and `localhost:4318`
 
+The OpenTelemetry Collector exports received OTLP logs, traces, and metrics to
+ClickHouse using collector-managed raw tables named `otelcol_*`. The current UI
+datasets query the normalized demo tables `otel_logs`, `otel_traces`, and
+`otel_metrics`; those are created by the ClickHouse migration and populated by
+the sample telemetry script.
+
 Development auth is enabled by default in Compose. The seeded Keycloak users are:
 
 - `alice` / `password`, tenant `dev`
@@ -50,9 +56,10 @@ On successful sign-in, the UI calls `POST /api/session/sync`. The backend record
 or updates the current tenant/user in PostgreSQL, making later role and invite
 rules explicit instead of keeping identity only in browser state.
 
-Write operations for dashboards, alert rules, and contact endpoints are checked
-against the synced PostgreSQL role. `owner`, `admin`, and `editor` can write;
-`viewer` can read. Tenant invite management is limited to `owner` and `admin`.
+Write operations for dashboards, saved queries, data sources, alert rules, and
+contact endpoints are checked against the synced PostgreSQL role. `owner`,
+`admin`, and `editor` can write; `viewer` can read. Tenant invite, member
+deactivation, and audit event access is limited to `owner` and `admin`.
 
 Users can belong to a tenant even when their public IdP does not emit that
 tenant as a claim. Owners and admins create an invite, the invited user signs in
@@ -61,6 +68,10 @@ identity to the invited tenant. The UI then sends `X-DBViz-Tenant` for the
 selected active tenant; the Go API forwards it to PostgREST with the verified
 subject/provider headers, and PostgreSQL only resolves the tenant when a
 matching membership exists.
+
+Admins can deactivate members without deleting historical ownership metadata.
+Disabled users no longer satisfy tenant membership or role checks, and owner
+changes/deactivation guard against removing the last active owner.
 
 Run the OTel sample emitter after the stack is up:
 
@@ -105,12 +116,23 @@ variable by uppercasing and replacing non-alphanumerics with `_`, prefixed with
 ## Dashboards
 
 The frontend saves and opens dashboards through Go API endpoints backed by
-PostgREST RPCs:
+PostgREST RPCs. Dashboard layouts are JSONB documents with a `version` and a
+`charts` array. Each chart stores a title, visualization config, and a full
+validated query payload, so dashboards can carry multiple reusable panels
+without schema churn.
 
 - `GET /api/dashboards`
 - `POST /api/dashboards`
 - `list_dashboards()`
 - `save_dashboard(dashboard_id uuid, dashboard_name text, dashboard_layout jsonb)`
+
+Saved queries use the same tenant-scoped control-plane path and validate query
+payloads against configured datasets before persisting them:
+
+- `GET /api/saved-queries`
+- `POST /api/saved-queries`
+- `list_saved_queries()`
+- `save_saved_query(saved_query_id uuid, saved_query_name text, saved_query_description text, saved_query_payload jsonb)`
 
 Those functions derive tenant context from JWT claims such as `tenant_id`,
 `tenant_slug`, Google `hd`, Microsoft `tid`, or the local `X-Dev-Tenant` header.
@@ -126,10 +148,13 @@ Alert rule and contact management follows the same pattern:
 - `GET /api/alerts/contacts`
 - `POST /api/alerts/contacts`
 - `GET /api/alerts/incidents`
+- `GET /api/alerts/notifications`
 - `GET /api/session/profile`
 - `GET /api/session/memberships`
+- `GET /api/audit/events`
 - `GET /api/members`
 - `POST /api/members/role`
+- `POST /api/members/deactivate`
 - `GET /api/invites`
 - `POST /api/invites`
 - `POST /api/invites/accept`
@@ -159,5 +184,7 @@ stable fingerprint, `occurrence_count` and `last_seen_at` are updated on repeat
 fires, and contact delivery is suppressed until `DBVIZ_ALERT_DEDUPE_SECONDS`
 passes. When the condition clears, the worker marks the open incident
 `resolved`; operators can also resolve incidents with
-`POST /api/alerts/incidents/resolve`. Notification failures are recorded as
-`notify_failed` incidents with the failed contact and error in the payload.
+`POST /api/alerts/incidents/resolve`. Every contact delivery attempt is recorded
+in `alert_notifications` with status, HTTP status code, contact target, and
+error text. Notification failures are also recorded as `notify_failed` incidents
+with the failed contact and error in the payload.

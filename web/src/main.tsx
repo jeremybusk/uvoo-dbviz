@@ -3,16 +3,20 @@ import { createRoot } from 'react-dom/client';
 import * as echarts from 'echarts';
 import {
   AlertIncident,
+  AlertNotification,
   AlertRule,
+  AuditEvent,
   ContactEndpoint,
   DataSource,
   Dataset,
   Dashboard,
+  DashboardChart,
   Principal,
   Provider,
   PublicConfig,
   QueryHistory,
   QueryRow,
+  SavedQuery,
   TenantInvite,
   TenantMember,
   TenantMembership,
@@ -46,13 +50,22 @@ function App() {
   const [activeTenant, setActiveTenantState] = useState(getActiveTenant());
   const [memberships, setMemberships] = useState<TenantMembership[]>([]);
   const [members, setMembers] = useState<TenantMember[]>([]);
+  const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [rows, setRows] = useState<QueryRow[]>([]);
   const [error, setError] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const [savedQueries, setSavedQueries] = useState<SavedQuery[]>([]);
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [queryHistory, setQueryHistory] = useState<QueryHistory[]>([]);
+  const [editingDashboardId, setEditingDashboardId] = useState('');
   const [dashboardName, setDashboardName] = useState('Sample Observability');
+  const [dashboardPanels, setDashboardPanels] = useState<DashboardChart[]>([]);
+  const [panelTitle, setPanelTitle] = useState('Log volume');
+  const [panelVisualization, setPanelVisualization] = useState<'line' | 'bar' | 'area'>('line');
+  const [editingSavedQueryId, setEditingSavedQueryId] = useState('');
+  const [savedQueryName, setSavedQueryName] = useState('Current query');
+  const [savedQueryDescription, setSavedQueryDescription] = useState('');
   const [editingSourceId, setEditingSourceId] = useState('');
   const [sourceName, setSourceName] = useState('Default ClickHouse');
   const [sourceURL, setSourceURL] = useState('http://clickhouse:8123');
@@ -63,6 +76,7 @@ function App() {
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
   const [contacts, setContacts] = useState<ContactEndpoint[]>([]);
   const [incidents, setIncidents] = useState<AlertIncident[]>([]);
+  const [notifications, setNotifications] = useState<AlertNotification[]>([]);
   const [invites, setInvites] = useState<TenantInvite[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<TenantInvite['role']>('viewer');
@@ -112,10 +126,12 @@ function App() {
     loadAccessState().catch((err) => setError(err.message));
     loadDataSources().catch((err) => setError(err.message));
     loadQueryHistory().catch(() => undefined);
+    loadSavedQueries().catch(() => undefined);
     loadDashboards().catch((err) => setError(err.message));
     loadAlertState().catch((err) => setError(err.message));
     loadInvites().catch(() => undefined);
     loadMembers().catch(() => setMembers([]));
+    loadAuditEvents().catch(() => setAuditEvents([]));
   }, [config, user, activeTenant]);
 
   async function handleOIDCCallback() {
@@ -165,15 +181,7 @@ function App() {
 
   async function loadData() {
     setError('');
-    const result = await apiPost<{ rows: QueryRow[] }>('/api/query', {
-      dataset: query.dataset,
-      sourceId: query.sourceId || undefined,
-      groupBy: query.groupBy,
-      measure: query.measure,
-      aggregation: query.aggregation,
-      from: new Date(query.from).toISOString(),
-      to: new Date(query.to).toISOString()
-    });
+    const result = await apiPost<{ rows: QueryRow[] }>('/api/query', queryPayload());
     setRows(result.rows);
     loadQueryHistory().catch(() => undefined);
   }
@@ -200,6 +208,7 @@ function App() {
       }
     });
     setDataSources((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
     if (saved[0]) {
       setEditingSourceId(saved[0].id);
       setQuery((current) => ({ ...current, sourceId: saved[0].id }));
@@ -221,6 +230,11 @@ function App() {
     setQueryHistory(result);
   }
 
+  async function loadSavedQueries() {
+    const result = await apiGet<SavedQuery[]>('/api/saved-queries');
+    setSavedQueries(result);
+  }
+
   async function loadDashboards() {
     const result = await apiGet<Dashboard[]>('/api/dashboards');
     setDashboards(result);
@@ -240,33 +254,63 @@ function App() {
     setMembers(result);
   }
 
+  async function loadAuditEvents() {
+    const result = await apiGet<AuditEvent[]>('/api/audit/events');
+    setAuditEvents(result);
+  }
+
   async function saveDashboard() {
+    const panels = dashboardPanels.length > 0 ? dashboardPanels : [currentDashboardPanel()];
     const layout = {
       version: 1,
-      charts: [
-        {
-          title: `${dataset?.name || query.dataset} by ${query.groupBy || 'all'}`,
-          query
-        }
-      ]
+      charts: panels
     };
     const saved = await apiPost<Dashboard[]>('/api/dashboards', {
-      id: null,
+      id: editingDashboardId || null,
       name: dashboardName,
       layout
     });
     setDashboards((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
+    if (saved[0]) {
+      setEditingDashboardId(saved[0].id);
+      setDashboardPanels(saved[0].layout?.charts || panels);
+    }
+  }
+
+  async function saveSavedQuery() {
+    const saved = await apiPost<SavedQuery[]>('/api/saved-queries', {
+      id: editingSavedQueryId || null,
+      name: savedQueryName,
+      description: savedQueryDescription,
+      query: queryPayload()
+    });
+    setSavedQueries((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
+    if (saved[0]) {
+      setEditingSavedQueryId(saved[0].id);
+      setSavedQueryName(saved[0].name);
+      setSavedQueryDescription(saved[0].description || '');
+    }
+  }
+
+  function addPanelToDashboard() {
+    const panel = currentDashboardPanel();
+    setDashboardPanels((current) => [...current, panel]);
+    setPanelTitle(defaultPanelTitle());
   }
 
   async function loadAlertState() {
-    const [rules, endpoints, recentIncidents] = await Promise.all([
+    const [rules, endpoints, recentIncidents, recentNotifications] = await Promise.all([
       apiGet<AlertRule[]>('/api/alerts/rules'),
       apiGet<ContactEndpoint[]>('/api/alerts/contacts'),
-      apiGet<AlertIncident[]>('/api/alerts/incidents')
+      apiGet<AlertIncident[]>('/api/alerts/incidents'),
+      apiGet<AlertNotification[]>('/api/alerts/notifications')
     ]);
     setAlertRules(rules);
     setContacts(endpoints);
     setIncidents(recentIncidents);
+    setNotifications(recentNotifications);
     if (!selectedContact && endpoints[0]) setSelectedContact(endpoints[0].id);
   }
 
@@ -279,6 +323,7 @@ function App() {
       config: {}
     });
     setContacts((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
     if (saved[0]) setSelectedContact(saved[0].id);
   }
 
@@ -286,7 +331,7 @@ function App() {
     const saved = await apiPost<AlertRule[]>('/api/alerts/rules', {
       id: null,
       name: alertName,
-      query,
+      query: queryPayload(),
       condition: {
         operator: 'gt',
         threshold: Number(alertThreshold)
@@ -296,11 +341,13 @@ function App() {
       contactEndpointId: selectedContact || null
     });
     setAlertRules((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
   }
 
   async function resolveIncident(incident: AlertIncident) {
     const saved = await apiPost<AlertIncident[]>('/api/alerts/incidents/resolve', { id: incident.id });
     setIncidents((current) => current.map((item) => item.id === incident.id ? (saved[0] || item) : item));
+    loadAuditEvents().catch(() => undefined);
   }
 
   async function loadInvites() {
@@ -315,6 +362,7 @@ function App() {
     });
     setInvites((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     setInviteEmail('');
+    loadAuditEvents().catch(() => undefined);
   }
 
   async function acceptInvite() {
@@ -330,6 +378,14 @@ function App() {
   async function updateMemberRole(member: TenantMember, role: TenantMember['role']) {
     const saved = await apiPost<TenantMember[]>('/api/members/role', { id: member.id, role });
     setMembers((current) => current.map((item) => item.id === member.id ? (saved[0] || item) : item));
+    loadAuditEvents().catch(() => undefined);
+  }
+
+  async function deactivateMember(member: TenantMember) {
+    const saved = await apiPost<TenantMember[]>('/api/members/deactivate', { id: member.id });
+    setMembers((current) => current.map((item) => item.id === member.id ? (saved[0] || item) : item));
+    loadAccessState().catch(() => undefined);
+    loadAuditEvents().catch(() => undefined);
   }
 
   function selectTenant(tenant: string) {
@@ -338,11 +394,32 @@ function App() {
   }
 
   function openDashboard(dashboard: Dashboard) {
+    setEditingDashboardId(dashboard.id);
     setDashboardName(dashboard.name);
-    const savedQuery = dashboard.layout?.charts?.[0]?.query as Partial<QueryState> | undefined;
-    if (savedQuery?.dataset) {
-      setQuery((current) => ({ ...current, ...savedQuery }));
+    const charts = dashboard.layout?.charts || [];
+    setDashboardPanels(charts);
+    if (charts[0]) {
+      setPanelTitle(charts[0].title || defaultPanelTitle());
+      setPanelVisualization((charts[0].visualization?.type as 'line' | 'bar' | 'area') || 'line');
+      applyQuery(charts[0].query);
     }
+  }
+
+  function openSavedQuery(savedQuery: SavedQuery) {
+    setEditingSavedQueryId(savedQuery.id);
+    setSavedQueryName(savedQuery.name);
+    setSavedQueryDescription(savedQuery.description || '');
+    applyQuery(savedQuery.query);
+  }
+
+  function openPanel(panel: DashboardChart) {
+    setPanelTitle(panel.title || defaultPanelTitle());
+    setPanelVisualization((panel.visualization?.type as 'line' | 'bar' | 'area') || 'line');
+    applyQuery(panel.query);
+  }
+
+  function removePanel(index: number) {
+    setDashboardPanels((current) => current.filter((_, itemIndex) => itemIndex !== index));
   }
 
   function fillDataSource(source: DataSource) {
@@ -357,7 +434,36 @@ function App() {
   }
 
   function openHistory(history: QueryHistory) {
-    setQuery((current) => ({ ...current, ...(history.query as Partial<QueryState>) }));
+    applyQuery(history.query);
+  }
+
+  function applyQuery(payload: unknown) {
+    const savedQuery = editableQuery(payload as Partial<QueryState>);
+    if (savedQuery.dataset) {
+      setQuery((current) => ({ ...current, ...savedQuery }));
+    }
+  }
+
+  function queryPayload(): QueryState {
+    return {
+      ...query,
+      sourceId: query.sourceId || '',
+      from: new Date(query.from).toISOString(),
+      to: new Date(query.to).toISOString()
+    };
+  }
+
+  function defaultPanelTitle() {
+    return `${dataset?.name || query.dataset} by ${query.groupBy || 'all'}`;
+  }
+
+  function currentDashboardPanel(): DashboardChart {
+    return {
+      id: crypto.randomUUID(),
+      title: panelTitle.trim() || defaultPanelTitle(),
+      query: queryPayload(),
+      visualization: { type: panelVisualization }
+    };
   }
 
   function saveToken() {
@@ -511,12 +617,53 @@ function App() {
         </section>
 
         <section className="panel">
+          <h2>Saved Queries</h2>
+          <label>
+            Name
+            <input value={savedQueryName} onChange={(event) => setSavedQueryName(event.target.value)} />
+          </label>
+          <label>
+            Description
+            <textarea value={savedQueryDescription} onChange={(event) => setSavedQueryDescription(event.target.value)} />
+          </label>
+          <button disabled={!user || !savedQueryName} onClick={saveSavedQuery}>Save query</button>
+          <div className="dashboard-list">
+            {savedQueries.map((savedQuery) => (
+              <button key={savedQuery.id} onClick={() => openSavedQuery(savedQuery)}>
+                {savedQuery.name}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
           <h2>Dashboards</h2>
           <label>
             Name
             <input value={dashboardName} onChange={(event) => setDashboardName(event.target.value)} />
           </label>
-          <button disabled={!user} onClick={saveDashboard}>Save</button>
+          <label>
+            Panel title
+            <input value={panelTitle} onChange={(event) => setPanelTitle(event.target.value)} />
+          </label>
+          <label>
+            Visualization
+            <select value={panelVisualization} onChange={(event) => setPanelVisualization(event.target.value as 'line' | 'bar' | 'area')}>
+              <option value="line">Line</option>
+              <option value="area">Area</option>
+              <option value="bar">Bar</option>
+            </select>
+          </label>
+          <button disabled={!user} onClick={addPanelToDashboard}>Add panel</button>
+          <button disabled={!user || !dashboardName} onClick={saveDashboard}>Save dashboard</button>
+          <div className="panel-list">
+            {dashboardPanels.map((panel, index) => (
+              <div className="dashboard-panel" key={panel.id || `${panel.title}-${index}`}>
+                <button onClick={() => openPanel(panel)}>{panel.title}</button>
+                <button aria-label={`Remove ${panel.title}`} onClick={() => removePanel(index)}>Remove</button>
+              </div>
+            ))}
+          </div>
           <div className="dashboard-list">
             {dashboards.map((dashboard) => (
               <button key={dashboard.id} onClick={() => openDashboard(dashboard)}>{dashboard.name}</button>
@@ -591,6 +738,21 @@ function App() {
         </section>
 
         <section className="panel">
+          <h2>Notifications</h2>
+          <div className="notification-list">
+            {notifications.slice(0, 8).map((notification) => (
+              <div className={notification.status === 'failed' ? 'notification failed' : 'notification'} key={notification.id}>
+                <strong>{notification.status}</strong>
+                <span>{notification.contact_kind}{notification.status_code ? ` - ${notification.status_code}` : ''}</span>
+                <small>{notification.contact_target}</small>
+                {notification.error && <small>{notification.error}</small>}
+                <small>{new Date(notification.created_at).toLocaleString()}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
           <h2>Invites</h2>
           <label>
             Accept token
@@ -621,17 +783,32 @@ function App() {
           <h2>Members</h2>
           <div className="member-list">
             {members.map((member) => (
-              <div className="member" key={member.id}>
+              <div className={member.disabled_at ? 'member disabled' : 'member'} key={member.id}>
                 <div>
                   <strong>{member.display_name || member.email}</strong>
-                  <small>{member.provider}</small>
+                  <small>{member.provider}{member.disabled_at ? ' - disabled' : ''}</small>
                 </div>
-                <select value={member.role} onChange={(event) => updateMemberRole(member, event.target.value as TenantMember['role'])}>
+                <select disabled={Boolean(member.disabled_at)} value={member.role} onChange={(event) => updateMemberRole(member, event.target.value as TenantMember['role'])}>
                   <option value="owner">Owner</option>
                   <option value="admin">Admin</option>
                   <option value="editor">Editor</option>
                   <option value="viewer">Viewer</option>
                 </select>
+                {!member.disabled_at && <button onClick={() => deactivateMember(member)}>Deactivate</button>}
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Audit</h2>
+          <div className="audit-list">
+            {auditEvents.slice(0, 10).map((event) => (
+              <div className="audit-event" key={event.id}>
+                <strong>{event.action}</strong>
+                <span>{event.actor_email || 'system'}</span>
+                <small>{event.target_type}{event.target_id ? ` - ${event.target_id}` : ''}</small>
+                <small>{new Date(event.created_at).toLocaleString()}</small>
               </div>
             ))}
           </div>
@@ -647,13 +824,13 @@ function App() {
           <span>{rows.length} rows</span>
         </div>
         {error && <div className="error">{error}</div>}
-        <Chart rows={rows} />
+        <Chart rows={rows} type={panelVisualization} />
       </section>
     </main>
   );
 }
 
-function Chart({ rows }: { rows: QueryRow[] }) {
+function Chart({ rows, type }: { rows: QueryRow[]; type: 'line' | 'bar' | 'area' }) {
   const ref = React.useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (!ref.current) return;
@@ -666,7 +843,8 @@ function Chart({ rows }: { rows: QueryRow[] }) {
       yAxis: { type: 'value' },
       series: seriesNames.map((name) => ({
         name,
-        type: 'line',
+        type: type === 'bar' ? 'bar' : 'line',
+        areaStyle: type === 'area' ? {} : undefined,
         showSymbol: false,
         data: rows.filter((row) => (row.series || 'all') === name).map((row) => [row.ts * 1000, row.value])
       }))
@@ -677,8 +855,21 @@ function Chart({ rows }: { rows: QueryRow[] }) {
       window.removeEventListener('resize', resize);
       chart.dispose();
     };
-  }, [rows]);
+  }, [rows, type]);
   return <div className="chart" ref={ref} />;
+}
+
+function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {
+  const next = { ...payload };
+  if (typeof next.from === 'string') {
+    const from = new Date(next.from);
+    if (!Number.isNaN(from.getTime())) next.from = toInput(from);
+  }
+  if (typeof next.to === 'string') {
+    const to = new Date(next.to);
+    if (!Number.isNaN(to.getTime())) next.to = toInput(to);
+  }
+  return next;
 }
 
 function firstDimension(config: PublicConfig | null, datasetID: string): string {
