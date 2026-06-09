@@ -102,9 +102,14 @@ services:
   otel-collector:
     image: otel/opentelemetry-collector-contrib:0.128.0
     command: ["--config=/etc/otelcol/config.yaml"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
     ports:
       - "4317:4317"
       - "4318:4318"
+    environment:
+      CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
     volumes:
       - ./deploy/otel/collector.yaml:/etc/otelcol/config.yaml:ro
 

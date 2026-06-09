@@ -36,6 +36,12 @@ Compose starts:
 - Keycloak on <http://localhost:8089> with realm `dbviz`
 - OpenTelemetry Collector on `localhost:4317` and `localhost:4318`
 
+The OpenTelemetry Collector exports received OTLP logs, traces, and metrics to
+ClickHouse using collector-managed raw tables named `otelcol_*`. The current UI
+datasets query the normalized demo tables `otel_logs`, `otel_traces`, and
+`otel_metrics`; those are created by the ClickHouse migration and populated by
+the sample telemetry script.
+
 Development auth is enabled by default in Compose. The seeded Keycloak users are:
 
 - `alice` / `password`, tenant `dev`

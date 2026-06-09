@@ -1,6 +1,7 @@
 package clickhouse
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -74,5 +75,19 @@ func TestBuildTimeseriesSQLRejectsUnexpectedAggregation(t *testing.T) {
 	_, err := BuildTimeseriesSQL(QueryRequest{Dataset: "metrics", Measure: "value", Aggregation: "sum"}, ds, "tenant-a", 100)
 	if err == nil {
 		t.Fatal("expected an error")
+	}
+}
+
+func TestNewClientDoesNotMutateProvidedHTTPClient(t *testing.T) {
+	shared := &http.Client{}
+	client := NewClient(config.ClickHouseConfig{Timeout: 5 * time.Second}, shared)
+	if shared.Timeout != 0 {
+		t.Fatalf("shared timeout = %s, want zero", shared.Timeout)
+	}
+	if client.http == shared {
+		t.Fatal("expected NewClient to copy the provided HTTP client")
+	}
+	if client.http.Timeout != 5*time.Second {
+		t.Fatalf("client timeout = %s, want 5s", client.http.Timeout)
 	}
 }

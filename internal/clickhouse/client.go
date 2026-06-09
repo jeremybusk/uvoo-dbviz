@@ -23,6 +23,9 @@ type Client struct {
 func NewClient(cfg config.ClickHouseConfig, client *http.Client) *Client {
 	if client == nil {
 		client = &http.Client{Timeout: cfg.Timeout}
+	} else {
+		copied := *client
+		client = &copied
 	}
 	if client.Timeout == 0 {
 		client.Timeout = cfg.Timeout

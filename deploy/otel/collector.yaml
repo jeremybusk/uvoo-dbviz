@@ -11,21 +11,43 @@ processors:
     timeout: 2s
 
 exporters:
-  debug:
-    verbosity: basic
+  clickhouse:
+    endpoint: tcp://clickhouse:9000?dial_timeout=10s
+    database: default
+    username: default
+    password: ${env:CLICKHOUSE_PASSWORD}
+    create_schema: true
+    logs_table_name: otelcol_logs
+    traces_table_name: otelcol_traces
+    metrics_tables:
+      gauge:
+        name: otelcol_metrics_gauge
+      sum:
+        name: otelcol_metrics_sum
+      summary:
+        name: otelcol_metrics_summary
+      histogram:
+        name: otelcol_metrics_histogram
+      exponential_histogram:
+        name: otelcol_metrics_exp_histogram
+    timeout: 5s
+    retry_on_failure:
+      enabled: true
+      initial_interval: 5s
+      max_interval: 30s
+      max_elapsed_time: 300s
 
 service:
   pipelines:
     logs:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [clickhouse]
     traces:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
+      exporters: [clickhouse]
     metrics:
       receivers: [otlp]
       processors: [batch]
-      exporters: [debug]
-
+      exporters: [clickhouse]
