@@ -290,7 +290,7 @@ export function QuerySection(props: {
           enterButton="Run"
           value={q.search}
           onChange={(event) => props.onQuery({ ...q, search: event.target.value })}
-          onSearch={props.onRun}
+          onSearch={() => props.onRun()}
           placeholder="Search log body, service, trace id"
         />
       </Field>
@@ -298,7 +298,7 @@ export function QuerySection(props: {
         <InputNumber className="full" min={10} max={1000} value={q.limit} onChange={(value) => props.onQuery({ ...q, limit: Number(value || 100) })} />
       </Field>
       <Flex gap={8}>
-        <Button type="primary" icon={<PlayCircleOutlined />} disabled={!props.user} onClick={props.onRun}>Run</Button>
+        <Button type="primary" icon={<PlayCircleOutlined />} disabled={!props.user} onClick={() => props.onRun()}>Run</Button>
       </Flex>
     </Section>
   );

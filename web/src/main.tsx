@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, ConfigProvider, Flex, Input, Layout, Space, Spin, Switch, Table, Tabs, Typography, theme } from 'antd';
-import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
+import { Alert, Button, ConfigProvider, Dropdown, Flex, Input, Layout, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, theme } from 'antd';
+import { BulbOutlined, DownOutlined, FilterOutlined, MoonOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import {
   AlertIncident,
   AlertNotification,
@@ -71,6 +71,9 @@ function App() {
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [rows, setRows] = useState<QueryRow[]>([]);
   const [eventRows, setEventRows] = useState<Record<string, unknown>[]>([]);
+  const [activeTab, setActiveTab] = useState('chart');
+  const [refreshSeconds, setRefreshSeconds] = useState(0);
+  const [lastUpdated, setLastUpdated] = useState('');
   const [error, setError] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
@@ -151,6 +154,16 @@ function App() {
     loadAuditEvents().catch(() => setAuditEvents([]));
   }, [config, user, activeTenant]);
 
+  useEffect(() => {
+    if (!user || refreshSeconds <= 0) return;
+    const interval = window.setInterval(() => {
+      const nextQuery = queryWithRelativeRange(query, relativeRange);
+      setQuery(nextQuery);
+      loadData(nextQuery).catch((err) => setError(err.message));
+    }, refreshSeconds * 1000);
+    return () => window.clearInterval(interval);
+  }, [user, refreshSeconds, query, relativeRange]);
+
   async function handleOIDCCallback() {
     const params = new URLSearchParams(location.search);
     const code = params.get('code');
@@ -205,14 +218,15 @@ function App() {
     apiPost('/api/session/sync', {}).then(() => loadAccessState()).catch(() => undefined);
   }
 
-  async function loadData() {
+  async function loadData(nextQuery: QueryState = query) {
     setError('');
     const [series, events] = await Promise.all([
-      apiPost<{ rows: QueryRow[] }>('/api/query', queryPayload()),
-      apiPost<{ rows: Record<string, unknown>[] }>('/api/events', queryPayload())
+      apiPost<{ rows: QueryRow[] }>('/api/query', queryPayload(nextQuery)),
+      apiPost<{ rows: Record<string, unknown>[] }>('/api/events', queryPayload(nextQuery))
     ]);
     setRows(series.rows);
     setEventRows(events.rows);
+    setLastUpdated(new Date().toISOString());
     loadQueryHistory().catch(() => undefined);
   }
 
@@ -308,6 +322,23 @@ function App() {
       setSavedQueryName(saved[0].name);
       setSavedQueryDescription(saved[0].description || '');
     }
+  }
+
+  async function saveCurrentView() {
+    const name = `${dataset?.name || query.dataset} view ${new Date().toLocaleString()}`;
+    const saved = await apiPost<SavedQuery[]>('/api/saved-queries', {
+      id: null,
+      name,
+      description: compactQueryDescription(query),
+      query: queryPayload()
+    });
+    setSavedQueries((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    if (saved[0]) {
+      setEditingSavedQueryId(saved[0].id);
+      setSavedQueryName(saved[0].name);
+      setSavedQueryDescription(saved[0].description || '');
+    }
+    loadAuditEvents().catch(() => undefined);
   }
 
   async function loadAlertState() {
@@ -424,6 +455,17 @@ function App() {
     applyQuery(savedQuery.query);
   }
 
+  function openSavedView(savedQuery: SavedQuery) {
+    const savedQueryPayload = editableQuery(savedQuery.query as Partial<QueryState>);
+    if (!savedQueryPayload.dataset) return;
+    const nextQuery = { ...query, ...savedQueryPayload } as QueryState;
+    setEditingSavedQueryId(savedQuery.id);
+    setSavedQueryName(savedQuery.name);
+    setSavedQueryDescription(savedQuery.description || '');
+    setQuery(nextQuery);
+    loadData(nextQuery).catch((err) => setError(err.message));
+  }
+
   function openPanel(panel: DashboardChart) {
     setPanelTitle(panel.title || defaultPanelTitle());
     setPanelVisualization((panel.visualization?.type as VisualizationType) || 'line');
@@ -450,8 +492,17 @@ function App() {
     if (savedQuery.dataset) setQuery((current) => ({ ...current, ...savedQuery }));
   }
 
-  function queryPayload(): QueryState {
-    return { ...query, sourceId: query.sourceId || '', from: new Date(query.from).toISOString(), to: new Date(query.to).toISOString() };
+  function applyEventFilter(field: string, value: unknown) {
+    const term = formatCell(value, field).trim();
+    if (!term) return;
+    const nextQuery = { ...query, search: term };
+    setQuery(nextQuery);
+    setActiveTab('events');
+    loadData(nextQuery).catch((err) => setError(err.message));
+  }
+
+  function queryPayload(nextQuery: QueryState = query): QueryState {
+    return { ...nextQuery, sourceId: nextQuery.sourceId || '', from: new Date(nextQuery.from).toISOString(), to: new Date(nextQuery.to).toISOString() };
   }
 
   function changeTheme(nextTheme: ThemeMode) {
@@ -461,10 +512,8 @@ function App() {
 
   function applyRelativeRange(value: number, unit: RelativeRangeUnit) {
     const nextRange = { value: Math.max(1, Math.trunc(value || 1)), unit };
-    const to = new Date();
-    const from = subtractRelativeRange(to, nextRange);
     setRelativeRange(nextRange);
-    setQuery((current) => ({ ...current, from: toInput(from), to: toInput(to) }));
+    setQuery((current) => queryWithRelativeRange(current, nextRange));
   }
 
   function defaultPanelTitle() {
@@ -493,7 +542,7 @@ function App() {
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} jwtClaims={jwtClaims} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} /> },
-    { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={setQuery} onSource={fillDataSource} onRun={loadData} onRelativeRange={applyRelativeRange} /> },
+    { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={setQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
     { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
@@ -505,6 +554,10 @@ function App() {
     { key: 'members', label: 'Members', children: <MembersSection members={members} onRole={updateMemberRole} onDeactivate={deactivateMember} /> },
     { key: 'audit', label: 'Audit', children: <AuditSection auditEvents={auditEvents} /> }
   ];
+  const savedViewItems = savedQueries.slice(0, 12).map((savedQuery) => ({
+    key: savedQuery.id,
+    label: savedQuery.name
+  }));
 
   return (
     <ConfigProvider
@@ -550,11 +603,44 @@ function App() {
               <Typography.Title level={2}>Explore</Typography.Title>
               <Typography.Text type="secondary">{dataset?.table || 'Waiting for configuration'}</Typography.Text>
             </div>
-            <Button>{rows.length} rows</Button>
+            <Flex align="center" gap={8} wrap="wrap">
+              <Segmented
+                size="small"
+                value={refreshSeconds}
+                options={[
+                  { label: 'Off', value: 0 },
+                  { label: '10s', value: 10 },
+                  { label: '30s', value: 30 },
+                  { label: '1m', value: 60 },
+                  { label: '5m', value: 300 }
+                ]}
+                onChange={(value) => setRefreshSeconds(Number(value))}
+              />
+              <Dropdown
+                trigger={['click']}
+                menu={{
+                  items: savedViewItems.length > 0 ? savedViewItems : [{ key: 'empty', label: 'No saved views', disabled: true }],
+                  onClick: ({ key }) => {
+                    const savedQuery = savedQueries.find((item) => item.id === key);
+                    if (savedQuery) openSavedView(savedQuery);
+                  }
+                }}
+              >
+                <Button>
+                  Saved views <DownOutlined />
+                </Button>
+              </Dropdown>
+              <Button icon={<SaveOutlined />} disabled={!user} onClick={() => saveCurrentView().catch((err) => setError(err.message))}>Save view</Button>
+              <Button icon={<ReloadOutlined />} disabled={!user} onClick={() => loadData().catch((err) => setError(err.message))}>{rows.length} rows</Button>
+            </Flex>
           </Flex>
           {error && <Alert type="error" showIcon closable message={error} onClose={() => setError('')} />}
+          <QuerySummary query={query} datasetName={dataset?.name || query.dataset} tenant={activeTenant || user?.tenantId || ''} refreshSeconds={refreshSeconds} lastUpdated={lastUpdated} />
+          <LogBreakdown rows={eventRows} onFilter={applyEventFilter} />
           <Tabs
             className="workspace-tabs"
+            activeKey={activeTab}
+            onChange={setActiveTab}
             items={[
               {
                 key: 'chart',
@@ -568,7 +654,7 @@ function App() {
               {
                 key: 'events',
                 label: `Events (${eventRows.length})`,
-                children: <EventsTable rows={eventRows} />
+                children: <EventsTable rows={eventRows} onFilter={applyEventFilter} onTrace={(value) => applyEventFilter('trace_id', value)} />
               }
             ]}
           />
@@ -578,24 +664,108 @@ function App() {
   );
 }
 
-function EventsTable({ rows }: { rows: Record<string, unknown>[] }) {
+function QuerySummary(props: {
+  query: QueryState;
+  datasetName: string;
+  tenant: string;
+  refreshSeconds: number;
+  lastUpdated: string;
+}) {
+  return (
+    <Flex className="query-summary" align="center" gap={8} wrap="wrap">
+      <Tag color="blue">{props.datasetName}</Tag>
+      <Tag>{props.tenant || 'default tenant'}</Tag>
+      <Tag>{formatRange(props.query.from, props.query.to)}</Tag>
+      {props.query.search && <Tag icon={<FilterOutlined />}>{props.query.search}</Tag>}
+      <Tag>{props.query.limit} event rows</Tag>
+      <Tag>{props.refreshSeconds > 0 ? `refresh ${formatRefresh(props.refreshSeconds)}` : 'manual refresh'}</Tag>
+      {props.lastUpdated && <Typography.Text type="secondary">Updated {new Date(props.lastUpdated).toLocaleTimeString()}</Typography.Text>}
+    </Flex>
+  );
+}
+
+function LogBreakdown({ rows, onFilter }: { rows: Record<string, unknown>[]; onFilter: (field: string, value: unknown) => void }) {
+  const breakdown = useMemo(() => {
+    const severities = countValues(rows, 'severity');
+    const services = countValues(rows, 'service_name');
+    const hosts = countValues(rows, 'host_name');
+    const errors = rows.filter((row) => formatCell(row.severity, 'severity').toLowerCase().includes('error')).length;
+    const warnings = rows.filter((row) => formatCell(row.severity, 'severity').toLowerCase().includes('warn')).length;
+    return {
+      total: rows.length,
+      errors,
+      warnings,
+      services: services.slice(0, 4),
+      hosts: hosts.slice(0, 3),
+      severities: severities.slice(0, 4)
+    };
+  }, [rows]);
+
+  return (
+    <Flex className="log-breakdown" align="center" gap={8} wrap="wrap">
+      <MetricPill label="events" value={breakdown.total} />
+      <MetricPill label="errors" value={breakdown.errors} tone={breakdown.errors > 0 ? 'danger' : undefined} />
+      <MetricPill label="warnings" value={breakdown.warnings} tone={breakdown.warnings > 0 ? 'warn' : undefined} />
+      {breakdown.severities.map(([value, count]) => (
+        <Button key={`severity-${value}`} size="small" onClick={() => onFilter('severity', value)}>{value} {count}</Button>
+      ))}
+      {breakdown.services.map(([value, count]) => (
+        <Button key={`service-${value}`} size="small" onClick={() => onFilter('service_name', value)}>{value} {count}</Button>
+      ))}
+      {breakdown.hosts.map(([value, count]) => (
+        <Button key={`host-${value}`} size="small" onClick={() => onFilter('host_name', value)}>{value} {count}</Button>
+      ))}
+    </Flex>
+  );
+}
+
+function MetricPill({ label, value, tone }: { label: string; value: number; tone?: 'danger' | 'warn' }) {
+  return (
+    <span className={`metric-pill ${tone ? `metric-pill-${tone}` : ''}`}>
+      <strong>{value}</strong>
+      <span>{label}</span>
+    </span>
+  );
+}
+
+function EventsTable({
+  rows,
+  onFilter,
+  onTrace
+}: {
+  rows: Record<string, unknown>[];
+  onFilter: (field: string, value: unknown) => void;
+  onTrace: (value: unknown) => void;
+}) {
   const [filter, setFilter] = useState('');
+  const [visibleColumns, setVisibleColumns] = useState<string[]>([]);
+  const allKeys = useMemo(() => Array.from(new Set(rows.flatMap((row) => Object.keys(row)))), [rows]);
+  const selectedColumns = visibleColumns.length > 0 ? visibleColumns : allKeys;
   const filteredRows = useMemo(() => {
     const term = filter.trim().toLowerCase();
     if (!term) return rows;
     return rows.filter((row) => Object.values(row).some((value) => formatCell(value, '').toLowerCase().includes(term)));
   }, [filter, rows]);
   const columns = useMemo(() => {
-    const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
-    return keys.map((key) => ({
+    return selectedColumns.map((key) => ({
       title: key,
       dataIndex: key,
       key,
       width: key === 'body' || key === 'attributes' ? 420 : 170,
       ellipsis: key !== 'body',
-      render: (value: unknown) => formatCell(value, key)
+      render: (value: unknown) => {
+        const display = formatCell(value, key);
+        if (!display) return '';
+        if (key === 'trace_id') {
+          return <Button className="cell-action" type="link" size="small" onClick={() => onTrace(value)}>{display}</Button>;
+        }
+        if (key === 'service_name' || key === 'severity' || key === 'host_name') {
+          return <Button className="cell-action" type="link" size="small" onClick={() => onFilter(key, value)}>{display}</Button>;
+        }
+        return display;
+      }
     }));
-  }, [rows]);
+  }, [onFilter, onTrace, selectedColumns]);
 
   return (
     <Space direction="vertical" size={10} className="full">
@@ -607,7 +777,19 @@ function EventsTable({ rows }: { rows: Record<string, unknown>[] }) {
           onChange={(event) => setFilter(event.target.value)}
           placeholder="Filter loaded rows"
         />
-        <Typography.Text type="secondary">{filteredRows.length} of {rows.length} rows</Typography.Text>
+        <Flex align="center" gap={8} wrap="wrap">
+          <Select
+            mode="multiple"
+            className="column-select"
+            maxTagCount="responsive"
+            value={selectedColumns}
+            options={allKeys.map((key) => ({ label: key, value: key }))}
+            onChange={(values) => setVisibleColumns(values)}
+            placeholder="Columns"
+          />
+          <Button size="small" onClick={() => setVisibleColumns([])}>All</Button>
+          <Typography.Text type="secondary">{filteredRows.length} of {rows.length} rows</Typography.Text>
+        </Flex>
       </Flex>
       <Table
         className="events-table"
@@ -629,6 +811,37 @@ function formatCell(value: unknown, key: string) {
   return String(value);
 }
 
+function countValues(rows: Record<string, unknown>[], key: string): [string, number][] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const value = formatCell(row[key], key);
+    if (!value) continue;
+    counts.set(value, (counts.get(value) || 0) + 1);
+  }
+  return Array.from(counts.entries()).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
+}
+
+function formatRange(from: string, to: string): string {
+  const fromDate = new Date(from);
+  const toDate = new Date(to);
+  if (Number.isNaN(fromDate.getTime()) || Number.isNaN(toDate.getTime())) return `${from} to ${to}`;
+  return `${fromDate.toLocaleString()} to ${toDate.toLocaleString()}`;
+}
+
+function formatRefresh(seconds: number): string {
+  if (seconds >= 60) return `${seconds / 60}m`;
+  return `${seconds}s`;
+}
+
+function compactQueryDescription(query: QueryState): string {
+  return [
+    query.dataset,
+    query.groupBy ? `by ${query.groupBy}` : '',
+    query.search ? `search ${query.search}` : '',
+    formatRange(query.from, query.to)
+  ].filter(Boolean).join(' - ');
+}
+
 function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {
   const next = { ...payload };
   if (typeof next.from === 'string') {
@@ -640,6 +853,12 @@ function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {
     if (!Number.isNaN(to.getTime())) next.to = toInput(to);
   }
   return next;
+}
+
+function queryWithRelativeRange(query: QueryState, range: RelativeRange): QueryState {
+  const to = new Date();
+  const from = subtractRelativeRange(to, range);
+  return { ...query, from: toInput(from), to: toInput(to) };
 }
 
 function subtractRelativeRange(to: Date, range: RelativeRange): Date {
