@@ -32,6 +32,18 @@ CREATE TABLE IF NOT EXISTS users (
     UNIQUE(tenant_id, email)
 );
 
+CREATE TABLE IF NOT EXISTS tenant_invites (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    email text NOT NULL,
+    role text NOT NULL DEFAULT 'viewer' CHECK (role IN ('admin', 'editor', 'viewer')),
+    token text NOT NULL UNIQUE DEFAULT encode(gen_random_bytes(24), 'hex'),
+    accepted_at timestamptz,
+    expires_at timestamptz NOT NULL DEFAULT now() + interval '7 days',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE(tenant_id, email)
+);
+
 CREATE TABLE IF NOT EXISTS data_sources (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -86,13 +98,25 @@ CREATE TABLE IF NOT EXISTS alert_rules (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS alert_incidents (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    alert_rule_id uuid REFERENCES alert_rules(id) ON DELETE SET NULL,
+    status text NOT NULL DEFAULT 'firing' CHECK (status IN ('firing', 'resolved', 'notify_failed')),
+    value double precision NOT NULL DEFAULT 0,
+    payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
 CREATE INDEX IF NOT EXISTS users_tenant_id_idx ON users(tenant_id);
+CREATE INDEX IF NOT EXISTS tenant_invites_tenant_id_idx ON tenant_invites(tenant_id);
 CREATE INDEX IF NOT EXISTS dashboards_tenant_id_idx ON dashboards(tenant_id);
 CREATE INDEX IF NOT EXISTS charts_dashboard_id_idx ON charts(dashboard_id);
 CREATE INDEX IF NOT EXISTS alert_rules_enabled_idx ON alert_rules(tenant_id, enabled);
+CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents(tenant_id, created_at DESC);
 
 GRANT USAGE ON SCHEMA public TO dbviz_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, data_sources, dashboards, charts, contact_endpoints, alert_rules TO dbviz_web;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, charts, contact_endpoints, alert_rules, alert_incidents TO dbviz_web;
 
 INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
@@ -112,11 +136,13 @@ ON CONFLICT DO NOTHING;
 
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_invites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE data_sources ENABLE ROW LEVEL SECURITY;
 ALTER TABLE dashboards ENABLE ROW LEVEL SECURITY;
 ALTER TABLE charts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contact_endpoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
+ALTER TABLE alert_incidents ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION request_tenant_id() RETURNS uuid
 LANGUAGE sql STABLE AS $$
@@ -151,6 +177,11 @@ CREATE POLICY users_tenant_isolation ON users
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
+DROP POLICY IF EXISTS tenant_invites_tenant_isolation ON tenant_invites;
+CREATE POLICY tenant_invites_tenant_isolation ON tenant_invites
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
 DROP POLICY IF EXISTS data_sources_tenant_isolation ON data_sources;
 CREATE POLICY data_sources_tenant_isolation ON data_sources
     FOR ALL USING (tenant_id = request_tenant_id())
@@ -173,6 +204,11 @@ CREATE POLICY contact_endpoints_tenant_isolation ON contact_endpoints
 
 DROP POLICY IF EXISTS alert_rules_tenant_isolation ON alert_rules;
 CREATE POLICY alert_rules_tenant_isolation ON alert_rules
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
+DROP POLICY IF EXISTS alert_incidents_tenant_isolation ON alert_incidents;
+CREATE POLICY alert_incidents_tenant_isolation ON alert_incidents
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
@@ -278,6 +314,17 @@ AS $$
     ORDER BY a.created_at DESC;
 $$;
 
+CREATE OR REPLACE FUNCTION list_alert_incidents(incident_limit integer DEFAULT 100)
+RETURNS TABLE(id uuid, alert_rule_id uuid, status text, value double precision, payload jsonb, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT i.id, i.alert_rule_id, i.status, i.value, i.payload, i.created_at
+    FROM alert_incidents i
+    WHERE i.tenant_id = request_tenant_id()
+    ORDER BY i.created_at DESC
+    LIMIT LEAST(GREATEST(COALESCE(incident_limit, 100), 1), 500);
+$$;
+
 CREATE OR REPLACE FUNCTION save_alert_rule(
     alert_id uuid,
     alert_name text,
@@ -337,6 +384,7 @@ GRANT EXECUTE ON FUNCTION list_contact_endpoints() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_contact_endpoint(uuid, text, text, text, jsonb) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_rules() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boolean, uuid) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_enabled_alert_rules_for_worker(worker_key text)
 RETURNS TABLE(
@@ -381,6 +429,47 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION list_enabled_alert_rules_for_worker(text) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION record_alert_incident_for_worker(worker_key text, rule_id uuid, tenant_slug text, incident_status text, incident_value double precision, incident_payload jsonb)
+RETURNS TABLE(id uuid, alert_rule_id uuid, status text, value double precision, payload jsonb, created_at timestamptz)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+    saved_id uuid;
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    SELECT tenants.id INTO resolved_tenant_id
+    FROM tenants
+    WHERE tenants.slug = tenant_slug;
+
+    IF resolved_tenant_id IS NULL THEN
+        RAISE EXCEPTION 'tenant not found: %', tenant_slug;
+    END IF;
+
+    INSERT INTO alert_incidents (tenant_id, alert_rule_id, status, value, payload)
+    VALUES (
+        resolved_tenant_id,
+        rule_id,
+        COALESCE(NULLIF(incident_status, ''), 'firing'),
+        COALESCE(incident_value, 0),
+        COALESCE(incident_payload, '{}'::jsonb)
+    )
+    RETURNING alert_incidents.id INTO saved_id;
+
+    RETURN QUERY
+    SELECT i.id, i.alert_rule_id, i.status, i.value, i.payload, i.created_at
+    FROM alert_incidents i
+    WHERE i.id = saved_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION sync_current_user(user_subject text, user_email text, user_name text, user_provider text, tenant_slug text, tenant_name text)
 RETURNS TABLE(id uuid, tenant_id uuid, subject text, email text, display_name text, provider text, role text)
@@ -430,3 +519,78 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION sync_current_user(text, text, text, text, text, text) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION current_user_profile(user_subject text, user_provider text)
+RETURNS TABLE(id uuid, tenant_id uuid, tenant_slug text, subject text, email text, display_name text, provider text, role text)
+LANGUAGE sql STABLE
+AS $$
+    SELECT u.id, u.tenant_id, t.slug AS tenant_slug, u.subject, u.email, u.display_name, u.provider, u.role
+    FROM users u
+    JOIN tenants t ON t.id = u.tenant_id
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = user_subject
+      AND u.provider = user_provider
+    LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION current_user_has_role(user_subject text, user_provider text, allowed_roles text[])
+RETURNS boolean
+LANGUAGE sql STABLE
+AS $$
+    SELECT EXISTS (
+        SELECT 1
+        FROM users u
+        WHERE u.tenant_id = request_tenant_id()
+          AND u.subject = user_subject
+          AND u.provider = user_provider
+          AND u.role = ANY(allowed_roles)
+    );
+$$;
+
+GRANT EXECUTE ON FUNCTION current_user_profile(text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION current_user_has_role(text, text, text[]) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION list_tenant_invites()
+RETURNS TABLE(id uuid, email text, role text, accepted_at timestamptz, expires_at timestamptz, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT i.id, i.email, i.role, i.accepted_at, i.expires_at, i.created_at
+    FROM tenant_invites i
+    WHERE i.tenant_id = request_tenant_id()
+    ORDER BY i.created_at DESC;
+$$;
+
+CREATE OR REPLACE FUNCTION create_tenant_invite(actor_subject text, actor_provider text, invite_email text, invite_role text)
+RETURNS TABLE(id uuid, email text, role text, token text, accepted_at timestamptz, expires_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_id uuid;
+BEGIN
+    IF NOT current_user_has_role(actor_subject, actor_provider, ARRAY['owner', 'admin']) THEN
+        RAISE EXCEPTION 'insufficient role';
+    END IF;
+
+    IF invite_role NOT IN ('admin', 'editor', 'viewer') THEN
+        RAISE EXCEPTION 'unsupported invite role: %', invite_role;
+    END IF;
+
+    INSERT INTO tenant_invites (tenant_id, email, role)
+    VALUES (request_tenant_id(), lower(invite_email), invite_role)
+    ON CONFLICT ON CONSTRAINT tenant_invites_tenant_id_email_key DO UPDATE
+    SET role = EXCLUDED.role,
+        token = encode(gen_random_bytes(24), 'hex'),
+        accepted_at = NULL,
+        expires_at = now() + interval '7 days',
+        created_at = now()
+    RETURNING tenant_invites.id INTO saved_id;
+
+    RETURN QUERY
+    SELECT i.id, i.email, i.role, i.token, i.accepted_at, i.expires_at, i.created_at
+    FROM tenant_invites i
+    WHERE i.id = saved_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_tenant_invites() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION create_tenant_invite(text, text, text, text) TO dbviz_web;

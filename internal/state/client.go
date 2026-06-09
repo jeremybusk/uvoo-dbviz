@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -30,6 +31,26 @@ type PersistedAlertRule struct {
 	ContactKind     string            `json:"contact_kind"`
 	ContactTarget   string            `json:"contact_target"`
 	ContactConfig   map[string]string `json:"contact_config"`
+}
+
+type UserProfile struct {
+	ID          string `json:"id"`
+	TenantID    string `json:"tenant_id"`
+	TenantSlug  string `json:"tenant_slug"`
+	Subject     string `json:"subject"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	Provider    string `json:"provider"`
+	Role        string `json:"role"`
+}
+
+type AlertIncident struct {
+	ID          string         `json:"id"`
+	AlertRuleID string         `json:"alert_rule_id"`
+	Status      string         `json:"status"`
+	Value       float64        `json:"value"`
+	Payload     map[string]any `json:"payload"`
+	CreatedAt   string         `json:"created_at"`
 }
 
 func NewClient(cfg config.PostgRESTConfig, httpClient *http.Client) *Client {
@@ -84,3 +105,54 @@ func (c *Client) LoadEnabledAlertRules(ctx context.Context, workerKey string) ([
 	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
 	return rows, err
 }
+
+func (c *Client) CurrentUserProfile(ctx context.Context, user auth.Principal, bearer string) (UserProfile, error) {
+	var rows []UserProfile
+	err := c.RPC(ctx, "current_user_profile", map[string]any{
+		"user_subject":  user.Subject,
+		"user_provider": user.Provider,
+	}, user, bearer, &rows)
+	if err != nil {
+		return UserProfile{}, err
+	}
+	if len(rows) == 0 {
+		return UserProfile{}, fmt.Errorf("current user profile not found")
+	}
+	return rows[0], nil
+}
+
+func (c *Client) CurrentUserHasRole(ctx context.Context, user auth.Principal, bearer string, allowed []string) (bool, error) {
+	var ok bool
+	err := c.RPC(ctx, "current_user_has_role", map[string]any{
+		"user_subject":  user.Subject,
+		"user_provider": user.Provider,
+		"allowed_roles": allowed,
+	}, user, bearer, &ok)
+	return ok, err
+}
+
+func (c *Client) ListAlertIncidents(ctx context.Context, user auth.Principal, bearer string, limit int) ([]AlertIncident, error) {
+	var rows []AlertIncident
+	err := c.RPC(ctx, "list_alert_incidents", map[string]any{
+		"incident_limit": limit,
+	}, user, bearer, &rows)
+	return rows, err
+}
+
+func (c *Client) RecordAlertIncident(ctx context.Context, workerKey, ruleID, tenantID, status string, value float64, payload map[string]any) error {
+	var normalizedRuleID any
+	if uuidPattern.MatchString(ruleID) {
+		normalizedRuleID = ruleID
+	}
+	var rows []AlertIncident
+	return c.RPC(ctx, "record_alert_incident_for_worker", map[string]any{
+		"worker_key":       workerKey,
+		"rule_id":          normalizedRuleID,
+		"tenant_slug":      tenantID,
+		"incident_status":  status,
+		"incident_value":   value,
+		"incident_payload": payload,
+	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+}
+
+var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)

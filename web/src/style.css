@@ -120,6 +120,28 @@ label {
   padding-inline: 10px;
 }
 
+.incident-list {
+  display: grid;
+  gap: 8px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.incident {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  padding: 8px;
+  border: 1px solid #d8e0e6;
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.incident small {
+  grid-column: 1 / -1;
+  color: #6b7785;
+}
+
 label {
   display: grid;
   gap: 5px;

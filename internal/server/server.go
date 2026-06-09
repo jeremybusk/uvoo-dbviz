@@ -37,6 +37,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/oidc/{provider}/exchange", a.oidcExchange)
 	a.mux.HandleFunc("GET /api/me", a.requireAuth(a.me))
 	a.mux.HandleFunc("POST /api/session/sync", a.requireAuth(a.syncSession))
+	a.mux.HandleFunc("GET /api/session/profile", a.requireAuth(a.sessionProfile))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
 	a.mux.HandleFunc("GET /api/dashboards", a.requireAuth(a.listDashboards))
 	a.mux.HandleFunc("POST /api/dashboards", a.requireAuth(a.saveDashboard))
@@ -44,6 +45,9 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/alerts/rules", a.requireAuth(a.saveAlertRule))
 	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
 	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
+	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
+	a.mux.HandleFunc("GET /api/invites", a.requireAuth(a.listInvites))
+	a.mux.HandleFunc("POST /api/invites", a.requireAuth(a.createInvite))
 	a.mux.HandleFunc("/", a.static)
 }
 
@@ -104,6 +108,15 @@ func (a *App) syncSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+func (a *App) sessionProfile(w http.ResponseWriter, r *http.Request) {
+	profile, err := a.state.CurrentUserProfile(r.Context(), principal(r), r.Header.Get("Authorization"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, profile)
+}
+
 func (a *App) query(w http.ResponseWriter, r *http.Request) {
 	var req clickhouse.QueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -139,6 +152,9 @@ func (a *App) listDashboards(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) saveDashboard(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
 	var req struct {
 		ID     string         `json:"id"`
 		Name   string         `json:"name"`
@@ -179,6 +195,9 @@ func (a *App) listAlertRules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
 	var req struct {
 		ID                string         `json:"id"`
 		Name              string         `json:"name"`
@@ -273,6 +292,9 @@ func (a *App) listContactEndpoints(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
 	var req struct {
 		ID     string         `json:"id"`
 		Name   string         `json:"name"`
@@ -305,6 +327,74 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) listAlertIncidents(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.state.ListAlertIncidents(r.Context(), principal(r), r.Header.Get("Authorization"), 100)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) listInvites(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "list_tenant_invites", map[string]any{}, principal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) createInvite(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	var req struct {
+		Email string `json:"email"`
+		Role  string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	if req.Email == "" {
+		writeError(w, http.StatusBadRequest, errors.New("invite email is required"))
+		return
+	}
+	if req.Role == "" {
+		req.Role = "viewer"
+	}
+	user := principal(r)
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "create_tenant_invite", map[string]any{
+		"actor_subject":  user.Subject,
+		"actor_provider": user.Provider,
+		"invite_email":   req.Email,
+		"invite_role":    req.Role,
+	}, user, r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) requireStateRole(w http.ResponseWriter, r *http.Request, allowed ...string) bool {
+	ok, err := a.state.CurrentUserHasRole(r.Context(), principal(r), r.Header.Get("Authorization"), allowed)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return false
+	}
+	if !ok {
+		writeError(w, http.StatusForbidden, errors.New("insufficient role"))
+		return false
+	}
+	return true
 }
 
 func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {

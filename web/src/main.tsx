@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import * as echarts from 'echarts';
 import {
+  AlertIncident,
   AlertRule,
   ContactEndpoint,
   Dataset,
@@ -10,6 +11,7 @@ import {
   Provider,
   PublicConfig,
   QueryRow,
+  TenantInvite,
   apiGet,
   apiPost,
   clearToken,
@@ -39,6 +41,10 @@ function App() {
   const [dashboardName, setDashboardName] = useState('Sample Observability');
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
   const [contacts, setContacts] = useState<ContactEndpoint[]>([]);
+  const [incidents, setIncidents] = useState<AlertIncident[]>([]);
+  const [invites, setInvites] = useState<TenantInvite[]>([]);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<TenantInvite['role']>('viewer');
   const [alertName, setAlertName] = useState('High signal volume');
   const [alertThreshold, setAlertThreshold] = useState('100');
   const [contactName, setContactName] = useState('Primary webhook');
@@ -81,6 +87,7 @@ function App() {
     if (!config || !user) return;
     loadDashboards().catch((err) => setError(err.message));
     loadAlertState().catch((err) => setError(err.message));
+    loadInvites().catch(() => undefined);
   }, [config, user]);
 
   async function handleOIDCCallback() {
@@ -163,12 +170,14 @@ function App() {
   }
 
   async function loadAlertState() {
-    const [rules, endpoints] = await Promise.all([
+    const [rules, endpoints, recentIncidents] = await Promise.all([
       apiGet<AlertRule[]>('/api/alerts/rules'),
-      apiGet<ContactEndpoint[]>('/api/alerts/contacts')
+      apiGet<ContactEndpoint[]>('/api/alerts/contacts'),
+      apiGet<AlertIncident[]>('/api/alerts/incidents')
     ]);
     setAlertRules(rules);
     setContacts(endpoints);
+    setIncidents(recentIncidents);
     if (!selectedContact && endpoints[0]) setSelectedContact(endpoints[0].id);
   }
 
@@ -198,6 +207,20 @@ function App() {
       contactEndpointId: selectedContact || null
     });
     setAlertRules((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+  }
+
+  async function loadInvites() {
+    const result = await apiGet<TenantInvite[]>('/api/invites');
+    setInvites(result);
+  }
+
+  async function createInvite() {
+    const saved = await apiPost<TenantInvite[]>('/api/invites', {
+      email: inviteEmail,
+      role: inviteRole
+    });
+    setInvites((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    setInviteEmail('');
   }
 
   function openDashboard(dashboard: Dashboard) {
@@ -355,6 +378,41 @@ function App() {
             <input value={contactTarget} onChange={(event) => setContactTarget(event.target.value)} />
           </label>
           <button disabled={!user || !contactTarget} onClick={saveContact}>Save contact</button>
+        </section>
+
+        <section className="panel">
+          <h2>Incidents</h2>
+          <div className="incident-list">
+            {incidents.slice(0, 8).map((incident) => (
+              <div className="incident" key={incident.id}>
+                <strong>{incident.status}</strong>
+                <span>{incident.value}</span>
+                <small>{new Date(incident.created_at).toLocaleString()}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Invites</h2>
+          <label>
+            Email
+            <input value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
+          </label>
+          <label>
+            Role
+            <select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as TenantInvite['role'])}>
+              <option value="viewer">Viewer</option>
+              <option value="editor">Editor</option>
+              <option value="admin">Admin</option>
+            </select>
+          </label>
+          <button disabled={!user || !inviteEmail} onClick={createInvite}>Create invite</button>
+          <div className="dashboard-list">
+            {invites.map((invite) => (
+              <button key={invite.id}>{invite.email} - {invite.role}</button>
+            ))}
+          </div>
         </section>
       </aside>
 

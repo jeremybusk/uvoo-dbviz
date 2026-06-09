@@ -50,6 +50,10 @@ On successful sign-in, the UI calls `POST /api/session/sync`. The backend record
 or updates the current tenant/user in PostgreSQL, making later role and invite
 rules explicit instead of keeping identity only in browser state.
 
+Write operations for dashboards, alert rules, and contact endpoints are checked
+against the synced PostgreSQL role. `owner`, `admin`, and `editor` can write;
+`viewer` can read. Tenant invite management is limited to `owner` and `admin`.
+
 Run the OTel sample emitter after the stack is up:
 
 ```sh
@@ -100,6 +104,9 @@ Alert rule and contact management follows the same pattern:
 - `POST /api/alerts/rules`
 - `GET /api/alerts/contacts`
 - `POST /api/alerts/contacts`
+- `GET /api/alerts/incidents`
+- `GET /api/invites`
+- `POST /api/invites`
 
 ## Alerts
 
@@ -119,3 +126,7 @@ worker when `DBVIZ_ALERT_LOAD_PERSISTED=true`. The worker uses
 `DBVIZ_ALERT_WORKER_KEY` with the `list_enabled_alert_rules_for_worker()` RPC.
 For production, set the database setting `app.alert_worker_key` to the same
 secret value and do not use the dev default.
+
+When a rule fires, the worker records an `alert_incidents` row through
+`record_alert_incident_for_worker()`. Notification failures are recorded as
+`notify_failed` incidents with the failed contact and error in the payload.

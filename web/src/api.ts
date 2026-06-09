@@ -81,6 +81,25 @@ export type AlertRule = {
   created_at: string;
 };
 
+export type AlertIncident = {
+  id: string;
+  alert_rule_id: string | null;
+  status: 'firing' | 'resolved' | 'notify_failed';
+  value: number;
+  payload: Record<string, unknown>;
+  created_at: string;
+};
+
+export type TenantInvite = {
+  id: string;
+  email: string;
+  role: 'admin' | 'editor' | 'viewer';
+  token?: string;
+  accepted_at: string | null;
+  expires_at: string;
+  created_at: string;
+};
+
 const tokenKey = 'uvoo-dbviz-token';
 
 export function getToken(): string {

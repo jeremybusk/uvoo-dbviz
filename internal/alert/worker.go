@@ -46,9 +46,14 @@ type Worker struct {
 	http     *http.Client
 	logger   *slog.Logger
 	load     func(context.Context) ([]Rule, error)
+	record   func(context.Context, Rule, string, float64, map[string]any) error
 	poll     time.Duration
 	stop     chan struct{}
 	wg       sync.WaitGroup
+}
+
+func (w *Worker) SetIncidentRecorder(record func(context.Context, Rule, string, float64, map[string]any) error) {
+	w.record = record
 }
 
 func NewWorker(datasets map[string]config.Dataset, maxRows int, ch *clickhouse.Client, rules []Rule, logger *slog.Logger) *Worker {
@@ -219,9 +224,26 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 		"labels":    rule.Labels,
 		"firedAt":   time.Now().UTC().Format(time.RFC3339),
 	}
+	if w.record != nil {
+		if err := w.record(ctx, rule, "firing", value, incident); err != nil {
+			w.logger.Warn("alert incident record failed", "rule", rule.Name, "error", err)
+		}
+	}
 	for _, contact := range rule.Contacts {
 		if err := w.notify(ctx, contact, incident); err != nil {
 			w.logger.Warn("alert notification failed", "rule", rule.Name, "kind", contact.Kind, "error", err)
+			if w.record != nil {
+				failed := map[string]any{}
+				for key, item := range incident {
+					failed[key] = item
+				}
+				failed["contactKind"] = contact.Kind
+				failed["contactTarget"] = contact.Target
+				failed["error"] = err.Error()
+				if recordErr := w.record(ctx, rule, "notify_failed", value, failed); recordErr != nil {
+					w.logger.Warn("alert notification failure record failed", "rule", rule.Name, "error", recordErr)
+				}
+			}
 		}
 	}
 }
