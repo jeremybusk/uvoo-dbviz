@@ -251,7 +251,9 @@ export function QuerySection(props: {
             sql: q.mode === 'sql' ? defaultDatasetSQL(value) : q.sql,
             groupBy: firstDimension(props.config, value),
             measure: next?.defaultMeasure || '_rows',
-            aggregation: next?.defaultAggregation || 'count'
+            aggregation: next?.defaultAggregation || 'count',
+            filters: {},
+            filterOps: {}
           });
         }}>
           {props.config?.datasets.map((item) => <Select.Option key={item.id} value={item.id}>{item.name}</Select.Option>)}
@@ -275,6 +277,38 @@ export function QuerySection(props: {
               {props.dataset?.aggregations.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
             </Select>
           </Field>
+          {(props.dataset?.filters.length || 0) > 0 && (
+            <Field label="Filters">
+              <Space direction="vertical" size={6} className="full">
+                {props.dataset?.filters.map((filter) => (
+                  <Space.Compact key={filter} className="full query-filter">
+                    <Input className="query-filter-name" value={filter} disabled />
+                    <Select
+                      className="query-filter-operator"
+                      value={q.filterOps?.[filter] || 'eq'}
+                      onChange={(operator) => props.onQuery({
+                        ...q,
+                        filterOps: { ...(q.filterOps || {}), [filter]: operator }
+                      })}
+                    >
+                      {filterOperators(props.dataset, filter).map((operator) => (
+                        <Select.Option key={operator} value={operator}>{operatorLabel(operator)}</Select.Option>
+                      ))}
+                    </Select>
+                    <Input
+                      allowClear
+                      value={q.filters?.[filter] || ''}
+                      placeholder="value"
+                      onChange={(event) => props.onQuery({
+                        ...q,
+                        filters: { ...(q.filters || {}), [filter]: event.target.value }
+                      })}
+                    />
+                  </Space.Compact>
+                ))}
+              </Space>
+            </Field>
+          )}
         </>
       )}
       <Field label="Last">
@@ -420,6 +454,7 @@ export function AlertsSection(props: {
   alertName: string;
   alertThreshold: string;
   alertOperator: string;
+  alertFor: string;
   alertInterval: number;
   alertEnabled: boolean;
   alertPreview: string;
@@ -428,6 +463,7 @@ export function AlertsSection(props: {
   onName: (value: string) => void;
   onThreshold: (value: string) => void;
   onOperator: (value: string) => void;
+  onFor: (value: string) => void;
   onInterval: (value: number) => void;
   onEnabled: (value: boolean) => void;
   onContact: (value: string) => void;
@@ -454,6 +490,9 @@ export function AlertsSection(props: {
           </Select>
           <InputNumber className="full" min={0} value={Number(props.alertThreshold)} onChange={(value) => props.onThreshold(String(value ?? 0))} />
         </Space.Compact>
+      </Field>
+      <Field label="For">
+        <Input value={props.alertFor} onChange={(event) => props.onFor(event.target.value)} placeholder="0s, 5m, 1h" />
       </Field>
       <Field label="Interval">
         <InputNumber className="full" min={10} max={86400} value={props.alertInterval} onChange={(value) => props.onInterval(Number(value || 60))} addonAfter="seconds" />
@@ -493,7 +532,8 @@ export function AlertsSection(props: {
 }
 
 function describeAlertCondition(rule: AlertRule): string {
-  return `value ${operatorSymbol(rule.condition?.operator || 'gt')} ${rule.condition?.threshold ?? 0}`;
+  const hold = rule.condition?.for ? ` for ${rule.condition.for}` : '';
+  return `value ${operatorSymbol(rule.condition?.operator || 'gt')} ${rule.condition?.threshold ?? 0}${hold}`;
 }
 
 function operatorSymbol(operator: string): string {
@@ -738,4 +778,19 @@ function defaultDatasetSQL(datasetID: string) {
     return 'SELECT service_name, count() AS value\nFROM otel_traces\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name\nORDER BY value DESC';
   }
   return 'SELECT service_name, severity, count() AS value\nFROM otel_logs\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name, severity\nORDER BY value DESC';
+}
+
+function filterOperators(dataset: Dataset | undefined, field: string): string[] {
+  return dataset?.filterOperators?.[field] || ['eq'];
+}
+
+function operatorLabel(operator: string): string {
+  switch (operator) {
+    case 'contains':
+      return 'contains';
+    case 'prefix':
+      return 'starts';
+    default:
+      return '=';
+  }
 }

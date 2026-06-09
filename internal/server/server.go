@@ -651,17 +651,9 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert condition is required"))
 		return
 	}
-	threshold, ok := numericValue(req.Condition["threshold"])
-	if !ok {
-		writeError(w, http.StatusBadRequest, errors.New("alert threshold must be numeric"))
-		return
-	}
-	operator, _ := req.Condition["operator"].(string)
-	if operator == "" {
-		operator = "gt"
-	}
-	if !validAlertOperator(operator) {
-		writeError(w, http.StatusBadRequest, errors.New("alert operator is not supported"))
+	operator, threshold, err := normalizeAlertCondition(req.Condition)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	req.Condition["operator"] = operator
@@ -674,7 +666,7 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		contactID = req.ContactEndpointID
 	}
 	var rows []map[string]any
-	err := a.state.RPC(r.Context(), "save_alert_rule", map[string]any{
+	err = a.state.RPC(r.Context(), "save_alert_rule", map[string]any{
 		"alert_id":         alertID,
 		"alert_name":       req.Name,
 		"alert_query":      req.Query,
@@ -707,9 +699,9 @@ func (a *App) testAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert condition is required"))
 		return
 	}
-	threshold, ok := numericValue(req.Condition["threshold"])
-	if !ok {
-		writeError(w, http.StatusBadRequest, errors.New("alert threshold must be numeric"))
+	operator, threshold, err := normalizeAlertCondition(req.Condition)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	query, err := a.decodeQueryPayload(req.Query, statePrincipal(r).TenantID, clickhouse.CustomSQLAlert)
@@ -723,14 +715,6 @@ func (a *App) testAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	value := maxNumericValue(rows, "value")
-	operator, _ := req.Condition["operator"].(string)
-	if operator == "" {
-		operator = "gt"
-	}
-	if !validAlertOperator(operator) {
-		writeError(w, http.StatusBadRequest, errors.New("alert operator is not supported"))
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"value":     value,
 		"operator":  operator,
@@ -832,6 +816,28 @@ func compareAlertValue(value float64, op string, threshold float64) bool {
 	default:
 		return value > threshold
 	}
+}
+
+func normalizeAlertCondition(condition map[string]any) (string, float64, error) {
+	threshold, ok := numericValue(condition["threshold"])
+	if !ok {
+		return "", 0, errors.New("alert threshold must be numeric")
+	}
+	operator, _ := condition["operator"].(string)
+	if operator == "" {
+		operator = "gt"
+	}
+	if !validAlertOperator(operator) {
+		return "", 0, errors.New("alert operator is not supported")
+	}
+	if rawFor, ok := condition["for"].(string); ok && strings.TrimSpace(rawFor) != "" {
+		holdFor, err := time.ParseDuration(strings.TrimSpace(rawFor))
+		if err != nil || holdFor < 0 {
+			return "", 0, errors.New("alert for duration must be a valid duration such as 5m or 1h")
+		}
+		condition["for"] = strings.TrimSpace(rawFor)
+	}
+	return operator, threshold, nil
 }
 
 func validAlertOperator(op string) bool {

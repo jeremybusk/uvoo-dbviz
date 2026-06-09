@@ -12,7 +12,7 @@ services:
       postgrest:
         condition: service_started
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:8080:8080"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_HTTP_PORT:-8080}:8080"
     environment:
       DBVIZ_ADDR: :8080
       DBVIZ_PUBLIC_URL: http://${DBVIZ_PUBLIC_HOST:-localhost}:8080
@@ -34,6 +34,11 @@ services:
       DBVIZ_ALERT_WORKER_KEY: ${DBVIZ_ALERT_WORKER_KEY:-dev-alert-worker-key}
       DBVIZ_ALERT_POLL_SECONDS: ${DBVIZ_ALERT_POLL_SECONDS:-30}
       DBVIZ_ALERT_DEDUPE_SECONDS: ${DBVIZ_ALERT_DEDUPE_SECONDS:-300}
+      DBVIZ_ALERT_SMTP_HOST: ${DBVIZ_ALERT_SMTP_HOST:-}
+      DBVIZ_ALERT_SMTP_PORT: ${DBVIZ_ALERT_SMTP_PORT:-587}
+      DBVIZ_ALERT_SMTP_USER: ${DBVIZ_ALERT_SMTP_USER:-}
+      DBVIZ_ALERT_SMTP_FROM: ${DBVIZ_ALERT_SMTP_FROM:-}
+      DBVIZ_ALERT_SMTP_PASSWORD: ${DBVIZ_ALERT_SMTP_PASSWORD:-}
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5-alpine
@@ -42,8 +47,8 @@ services:
       CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:8123:8123"
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:9000:9000"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_CLICKHOUSE_NATIVE_PORT:-9000}:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     healthcheck:
@@ -66,10 +71,27 @@ services:
       CLICKHOUSE_PORT: "9000"
       CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
 
+  otel-normalizer:
+    image: clickhouse/clickhouse-server:25.5-alpine
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    volumes:
+      - ./scripts/create-otel-normalizers.sh:/create-otel-normalizers.sh:ro
+    entrypoint: ["/bin/sh", "/create-otel-normalizers.sh"]
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_PORT: "9000"
+      CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      DBVIZ_OTEL_DEFAULT_TENANT: ${DBVIZ_OTEL_DEFAULT_TENANT:-dev}
+      DBVIZ_OTEL_NORMALIZER_WAIT_SECONDS: ${DBVIZ_OTEL_NORMALIZER_WAIT_SECONDS:-90}
+
   postgres:
     image: postgres:17-alpine
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:5432:5432"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_POSTGRES_PORT:-5432}:5432"
     environment:
       POSTGRES_DB: dbviz
       POSTGRES_USER: dbviz
@@ -83,7 +105,7 @@ services:
     depends_on:
       - postgres
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:3000:3000"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_POSTGREST_PORT:-3000}:3000"
     environment:
       PGRST_DB_URI: postgres://dbviz:dbviz@postgres:5432/dbviz
       PGRST_DB_SCHEMA: public
@@ -94,7 +116,7 @@ services:
     image: quay.io/keycloak/keycloak:25.0
     command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://${DBVIZ_PUBLIC_HOST:-localhost}:8089"]
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:8089:8080"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_KEYCLOAK_PORT:-8089}:8080"
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
@@ -108,8 +130,8 @@ services:
       clickhouse:
         condition: service_healthy
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:4317:4317"
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:4318:4318"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_OTEL_GRPC_PORT:-4317}:4317"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_OTEL_HTTP_PORT:-4318}:4318"
     environment:
       CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
     volumes:
@@ -124,6 +146,7 @@ services:
         condition: service_started
     volumes:
       - ./scripts/sample-telemetry/emit.sh:/emit.sh:ro
+      - ./scripts/create-otel-normalizers.sh:/create-otel-normalizers.sh:ro
     entrypoint: ["/bin/sh", "/emit.sh"]
     environment:
       OTEL_ENDPOINT: http://otel-collector:4318

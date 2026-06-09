@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
@@ -17,6 +18,13 @@ type Config struct {
 	PostgREST  PostgRESTConfig
 	Datasets   map[string]Dataset
 	Alerts     AlertConfig
+	Runtime    RuntimeConfig
+}
+
+type RuntimeConfig struct {
+	Environment           string
+	RequireProductionSafe bool
+	AllowInsecureDefaults bool
 }
 
 type AuthConfig struct {
@@ -63,6 +71,11 @@ type AlertConfig struct {
 	PollSeconds   int
 	DedupeSeconds int
 	LoadPersisted bool
+	SMTPHost      string
+	SMTPPort      int
+	SMTPUser      string
+	SMTPPassword  string
+	SMTPFrom      string
 }
 
 type Dataset struct {
@@ -104,6 +117,11 @@ func Load() Config {
 		Addr:      env("DBVIZ_ADDR", ":8080"),
 		PublicURL: env("DBVIZ_PUBLIC_URL", "http://localhost:8080"),
 		WebRoot:   env("DBVIZ_WEB_ROOT", "web/dist"),
+		Runtime: RuntimeConfig{
+			Environment:           strings.ToLower(env("DBVIZ_ENV", "development")),
+			RequireProductionSafe: envBool("DBVIZ_REQUIRE_PRODUCTION_SAFE", false),
+			AllowInsecureDefaults: envBool("DBVIZ_ALLOW_INSECURE_DEFAULTS", false),
+		},
 		Auth: AuthConfig{
 			DevMode: envBool("DBVIZ_AUTH_DEV_MODE", false),
 			Providers: []OIDCProvider{
@@ -154,6 +172,11 @@ func Load() Config {
 			PollSeconds:   envInt("DBVIZ_ALERT_POLL_SECONDS", 30),
 			DedupeSeconds: envInt("DBVIZ_ALERT_DEDUPE_SECONDS", 300),
 			LoadPersisted: envBool("DBVIZ_ALERT_LOAD_PERSISTED", true),
+			SMTPHost:      os.Getenv("DBVIZ_ALERT_SMTP_HOST"),
+			SMTPPort:      envInt("DBVIZ_ALERT_SMTP_PORT", 587),
+			SMTPUser:      os.Getenv("DBVIZ_ALERT_SMTP_USER"),
+			SMTPPassword:  os.Getenv("DBVIZ_ALERT_SMTP_PASSWORD"),
+			SMTPFrom:      os.Getenv("DBVIZ_ALERT_SMTP_FROM"),
 		},
 		Datasets: map[string]Dataset{
 			"logs": {
@@ -258,6 +281,57 @@ func Load() Config {
 		}
 	}
 	return cfg
+}
+
+func (c Config) Validate() error {
+	if !c.requiresProductionSafety() {
+		return nil
+	}
+	var problems []string
+	if c.Auth.DevMode {
+		problems = append(problems, "DBVIZ_AUTH_DEV_MODE must be false")
+	}
+	if strings.TrimSpace(c.PublicURL) == "" || strings.Contains(c.PublicURL, "localhost") {
+		problems = append(problems, "DBVIZ_PUBLIC_URL must be set to a non-localhost URL")
+	}
+	if strings.TrimSpace(c.PostgREST.URL) == "" || c.PostgREST.URL == "/state" {
+		problems = append(problems, "DBVIZ_POSTGREST_URL must point at a production PostgREST service")
+	}
+	if strings.TrimSpace(c.ClickHouse.URL) == "" || strings.Contains(c.ClickHouse.URL, "localhost") {
+		problems = append(problems, "DBVIZ_CLICKHOUSE_URL must point at a production ClickHouse service")
+	}
+	if c.Alerts.Enabled {
+		if c.Alerts.WorkerKey == "" || c.Alerts.WorkerKey == "dev-alert-worker-key" {
+			problems = append(problems, "DBVIZ_ALERT_WORKER_KEY must be set to a non-default secret")
+		}
+	}
+	if os.Getenv("PGRST_JWT_SECRET") == "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret" ||
+		os.Getenv("DBVIZ_POSTGREST_JWT_SECRET") == "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret" {
+		problems = append(problems, "PostgREST JWT secret must not use the demo default")
+	}
+	if !c.Auth.DevMode && !hasUsableOIDCProvider(c.Auth.Providers) {
+		problems = append(problems, "at least one enabled OIDC provider must have issuer and client ID configured")
+	}
+	if len(problems) > 0 {
+		return errors.New("production safety validation failed: " + strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func (c Config) requiresProductionSafety() bool {
+	if c.Runtime.AllowInsecureDefaults {
+		return false
+	}
+	return c.Runtime.RequireProductionSafe || c.Runtime.Environment == "production"
+}
+
+func hasUsableOIDCProvider(providers []OIDCProvider) bool {
+	for _, provider := range providers {
+		if provider.Enabled && strings.TrimSpace(provider.Issuer) != "" && strings.TrimSpace(provider.ClientID) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (c Config) Public() PublicConfig {

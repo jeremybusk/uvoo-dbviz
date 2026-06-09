@@ -52,7 +52,10 @@ The OpenTelemetry Collector exports received OTLP logs, traces, and metrics to
 ClickHouse using collector-managed raw tables named `otelcol_*`. The current UI
 datasets query the normalized demo tables `otel_logs`, `otel_traces`, and
 `otel_metrics`; those are created by the ClickHouse migration and populated by
-the sample telemetry script.
+the sample telemetry script. Compose also includes an `otel-normalizer` helper
+that creates ClickHouse materialized views from compatible collector raw tables
+into the normalized UI tables. If the collector has not created raw tables yet,
+rerun `docker compose run --rm otel-normalizer` after telemetry arrives.
 
 Development auth is enabled by default in Compose. The seeded Keycloak users are:
 
@@ -98,7 +101,9 @@ docker compose run --rm otel-sample
 ```
 
 It sends OTLP JSON to the collector and inserts matching normalized sample rows
-into ClickHouse so the default UI datasets can chart the data immediately.
+into ClickHouse so the default UI datasets can chart the data immediately. It
+also attempts to create the raw-to-normalized materialized views for future OTLP
+traffic.
 
 ## Build And Verify
 
@@ -109,7 +114,14 @@ make build
 make license-check
 helm lint charts/uvoo-dbviz
 docker compose config
+make compose-smoke
 ```
+
+Production safety checks are enabled by setting `DBVIZ_ENV=production` or
+`DBVIZ_REQUIRE_PRODUCTION_SAFE=true`. The process then rejects development auth,
+localhost service URLs, default alert worker keys, demo PostgREST JWT secrets,
+and missing usable OIDC provider configuration unless
+`DBVIZ_ALLOW_INSECURE_DEFAULTS=true` is explicitly set.
 
 ## Data Model
 
@@ -155,7 +167,9 @@ payloads against configured datasets before persisting them:
 Those functions derive tenant context from JWT claims such as `tenant_id`,
 `tenant_slug`, Google `hd`, Microsoft `tid`, or the local `X-Dev-Tenant` header.
 
-Alert rule and contact management follows the same pattern:
+Alert rule and contact management follows the same pattern. Builder queries can
+use allow-listed structured filters, and dashboard panels carry layout metadata
+so saved dashboards can be opened as a responsive panel grid.
 
 - `GET /api/data-sources`
 - `POST /api/data-sources`
@@ -215,8 +229,18 @@ DBVIZ_ALERT_RULES_JSON='[{"id":"log-volume","name":"High log volume","tenantId":
 ```
 
 The worker evaluates rules through the same constrained ClickHouse query builder
-used by the UI. Contact kinds are `webhook`, `pagerduty`, and `email`; email is
-currently logged until SMTP configuration is added.
+used by the UI. Alert conditions can include a Go duration string in
+`condition.for`, such as `5m`, to require the threshold to remain true before an
+incident is recorded. Contact kinds are `webhook`, `pagerduty`, and `email`.
+Email delivery is enabled when SMTP settings are configured:
+
+```sh
+DBVIZ_ALERT_SMTP_HOST=smtp.example.com
+DBVIZ_ALERT_SMTP_PORT=587
+DBVIZ_ALERT_SMTP_USER=alerts@example.com
+DBVIZ_ALERT_SMTP_PASSWORD=...
+DBVIZ_ALERT_SMTP_FROM=alerts@example.com
+```
 
 Persisted alert rules saved through `POST /api/alerts/rules` are loaded by the
 worker when `DBVIZ_ALERT_LOAD_PERSISTED=true`. The worker uses

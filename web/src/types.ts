@@ -22,5 +22,7 @@ export type QueryState = {
   from: string;
   to: string;
   search: string;
+  filters: Record<string, string>;
+  filterOps: Record<string, string>;
   limit: number;
 };

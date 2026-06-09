@@ -113,6 +113,16 @@ h2.ant-typography {
   width: 86px;
 }
 
+.query-filter-name {
+  width: 122px;
+  flex: 0 0 122px;
+}
+
+.query-filter-operator {
+  width: 98px;
+  flex: 0 0 98px;
+}
+
 .identity-grid,
 .claims-grid {
   display: grid;
@@ -199,6 +209,25 @@ h2.ant-typography {
   min-width: 0;
 }
 
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 12px;
+}
+
+.dashboard-panel {
+  min-height: 132px;
+  padding: 14px;
+  border: 1px solid rgba(127, 127, 127, 0.22);
+  border-radius: 8px;
+  background: var(--app-chart-bg);
+}
+
+.dashboard-panel h4.ant-typography {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
 .events-table .ant-table-cell {
   vertical-align: top;
 }
@@ -254,5 +283,13 @@ h2.ant-typography {
 
   .chart {
     min-height: 340px;
+  }
+
+  .dashboard-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboard-panel {
+    grid-column: span 1 !important;
   }
 }

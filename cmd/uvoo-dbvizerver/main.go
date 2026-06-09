@@ -19,6 +19,10 @@ func main() {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		logger.Error("invalid configuration", "error", err)
+		os.Exit(1)
+	}
 	authn := auth.NewManager(cfg.Auth, http.DefaultClient, logger)
 	ch := clickhouse.NewClient(cfg.ClickHouse, http.DefaultClient)
 	stateClient := state.NewClient(cfg.PostgREST, http.DefaultClient)
@@ -52,6 +56,13 @@ func main() {
 			logger,
 		)
 		worker.SetDedupeWindow(time.Duration(cfg.Alerts.DedupeSeconds) * time.Second)
+		worker.SetSMTP(alert.SMTPConfig{
+			Host:     cfg.Alerts.SMTPHost,
+			Port:     cfg.Alerts.SMTPPort,
+			User:     cfg.Alerts.SMTPUser,
+			Password: cfg.Alerts.SMTPPassword,
+			From:     cfg.Alerts.SMTPFrom,
+		})
 		worker.SetIncidentRecorder(func(ctx context.Context, rule alert.Rule, status string, value float64, payload map[string]any, fingerprint string, cooldownSeconds int) (alert.RecordResult, error) {
 			incident, err := stateClient.RecordAlertIncident(ctx, cfg.Alerts.WorkerKey, rule.ID, rule.TenantID, status, value, payload, fingerprint, cooldownSeconds)
 			if err != nil {

@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/smtp"
+	"strings"
 	"sync"
 	"time"
 
@@ -51,8 +54,18 @@ type Worker struct {
 	delivery func(context.Context, Rule, string, ContactEndpoint, DeliveryResult, map[string]any) error
 	poll     time.Duration
 	dedupe   time.Duration
+	smtp     SMTPConfig
+	pending  map[string]time.Time
 	stop     chan struct{}
 	wg       sync.WaitGroup
+}
+
+type SMTPConfig struct {
+	Host     string
+	Port     int
+	User     string
+	Password string
+	From     string
 }
 
 type RecordResult struct {
@@ -82,6 +95,10 @@ func (w *Worker) SetDedupeWindow(window time.Duration) {
 	w.dedupe = window
 }
 
+func (w *Worker) SetSMTP(config SMTPConfig) {
+	w.smtp = config
+}
+
 func NewWorker(datasets map[string]config.Dataset, maxRows int, ch *clickhouse.Client, rules []Rule, logger *slog.Logger) *Worker {
 	return NewPollingWorker(datasets, maxRows, ch, func(context.Context) ([]Rule, error) {
 		return rules, nil
@@ -104,6 +121,7 @@ func NewPollingWorker(datasets map[string]config.Dataset, maxRows int, ch *click
 		load:     load,
 		poll:     poll,
 		dedupe:   5 * time.Minute,
+		pending:  map[string]time.Time{},
 		stop:     make(chan struct{}),
 	}
 }
@@ -237,6 +255,7 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 	value := maxValue(rows)
 	fingerprint := ruleFingerprint(rule)
 	if !compare(value, rule.Condition.Operator, rule.Condition.Threshold) {
+		delete(w.pending, fingerprint)
 		if w.record != nil {
 			resolved := map[string]any{
 				"ruleId":     rule.ID,
@@ -252,6 +271,10 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 				w.logger.Warn("alert incident resolve failed", "rule", rule.Name, "error", err)
 			}
 		}
+		return
+	}
+	if !w.conditionHeldLongEnough(rule, fingerprint) {
+		w.logger.Info("alert condition is pending", "rule", rule.Name, "for", rule.Condition.For, "fingerprint", fingerprint)
 		return
 	}
 	incident := map[string]any{
@@ -304,6 +327,23 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 			}
 		}
 	}
+}
+
+func (w *Worker) conditionHeldLongEnough(rule Rule, fingerprint string) bool {
+	holdFor, err := time.ParseDuration(rule.Condition.For)
+	if rule.Condition.For == "" {
+		return true
+	}
+	if err != nil || holdFor <= 0 {
+		return true
+	}
+	now := time.Now()
+	since, ok := w.pending[fingerprint]
+	if !ok {
+		w.pending[fingerprint] = now
+		return false
+	}
+	return now.Sub(since) >= holdFor
 }
 
 func (w *Worker) queryRows(ctx context.Context, rule Rule, ds config.Dataset) ([]map[string]any, error) {
@@ -370,11 +410,40 @@ func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident m
 		}
 		return DeliveryResult{Status: "success", StatusCode: resp.StatusCode}
 	case "email":
-		w.logger.Info("email alert contact configured; SMTP sender not enabled yet", "target", contact.Target)
-		return DeliveryResult{Status: "skipped", Error: "email delivery is not configured"}
+		return w.notifyEmail(contact, incident)
 	default:
 		return DeliveryResult{Status: "failed", Error: fmt.Sprintf("unsupported contact kind: %s", contact.Kind)}
 	}
+}
+
+func (w *Worker) notifyEmail(contact ContactEndpoint, incident map[string]any) DeliveryResult {
+	if w.smtp.Host == "" || w.smtp.From == "" {
+		w.logger.Info("email alert contact configured; SMTP sender not enabled yet", "target", contact.Target)
+		return DeliveryResult{Status: "skipped", Error: "email delivery is not configured"}
+	}
+	port := w.smtp.Port
+	if port <= 0 {
+		port = 587
+	}
+	addr := net.JoinHostPort(w.smtp.Host, fmt.Sprint(port))
+	body, _ := json.MarshalIndent(incident, "", "  ")
+	subject := fmt.Sprintf("DBViz alert: %v", incident["ruleName"])
+	message := strings.Join([]string{
+		"From: " + w.smtp.From,
+		"To: " + contact.Target,
+		"Subject: " + subject,
+		"Content-Type: application/json; charset=utf-8",
+		"",
+		string(body),
+	}, "\r\n")
+	var auth smtp.Auth
+	if w.smtp.User != "" {
+		auth = smtp.PlainAuth("", w.smtp.User, w.smtp.Password, w.smtp.Host)
+	}
+	if err := smtp.SendMail(addr, auth, w.smtp.From, []string{contact.Target}, []byte(message)); err != nil {
+		return DeliveryResult{Status: "failed", Error: err.Error()}
+	}
+	return DeliveryResult{Status: "success"}
 }
 
 func maxValue(rows []map[string]any) float64 {

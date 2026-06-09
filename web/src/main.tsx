@@ -107,6 +107,7 @@ function App() {
   const [editingAlertId, setEditingAlertId] = useState('');
   const [alertThreshold, setAlertThreshold] = useState('100');
   const [alertOperator, setAlertOperator] = useState('gt');
+  const [alertFor, setAlertFor] = useState('');
   const [alertInterval, setAlertInterval] = useState(60);
   const [alertEnabled, setAlertEnabled] = useState(true);
   const [alertPreview, setAlertPreview] = useState('');
@@ -119,7 +120,7 @@ function App() {
   const [query, setQuery] = useState<QueryState>(() => {
     const to = new Date();
     const from = new Date(to.getTime() - 60 * 60 * 1000);
-    return { dataset: 'logs', sourceId: '', mode: 'builder', sql: defaultSQL('logs'), groupBy: 'service_name', measure: '_rows', aggregation: 'count', from: toInput(from), to: toInput(to), search: '', limit: 200 };
+    return { dataset: 'logs', sourceId: '', mode: 'builder', sql: defaultSQL('logs'), groupBy: 'service_name', measure: '_rows', aggregation: 'count', from: toInput(from), to: toInput(to), search: '', filters: {}, filterOps: {}, limit: 200 };
   });
 
   useEffect(() => {
@@ -391,7 +392,7 @@ function App() {
       id: editingAlertId || null,
       name: alertName,
       query: queryPayload(),
-      condition: { operator: alertOperator, threshold: Number(alertThreshold) },
+      condition: { operator: alertOperator, threshold: Number(alertThreshold), for: alertFor.trim() },
       intervalSeconds: alertInterval,
       enabled: alertEnabled,
       contactEndpointId: selectedContact || null
@@ -419,7 +420,7 @@ function App() {
     setAlertPreview('');
     const result = await apiPost<{ value: number; operator: string; threshold: number; firing: boolean }>('/api/alerts/test', {
       query: queryPayload(),
-      condition: { operator: alertOperator, threshold: Number(alertThreshold) }
+      condition: { operator: alertOperator, threshold: Number(alertThreshold), for: alertFor.trim() }
     });
     setAlertPreview(`${result.firing ? 'Firing' : 'OK'}: value ${formatNumber(result.value)} ${operatorLabel(result.operator)} ${formatNumber(result.threshold)}`);
   }
@@ -466,6 +467,7 @@ function App() {
 
   function addPanelToDashboard() {
     setDashboardPanels((current) => [...current, currentDashboardPanel()]);
+    setActiveTab('dashboard');
     setPanelTitle(defaultPanelTitle());
   }
 
@@ -513,6 +515,7 @@ function App() {
     setAlertName('High signal volume');
     setAlertOperator('gt');
     setAlertThreshold('100');
+    setAlertFor('');
     setAlertInterval(60);
     setAlertEnabled(true);
     setSelectedContact('');
@@ -543,6 +546,7 @@ function App() {
     setAlertName(rule.name);
     setAlertOperator(rule.condition?.operator || 'gt');
     setAlertThreshold(String(rule.condition?.threshold ?? 0));
+    setAlertFor(rule.condition?.for || '');
     setAlertInterval(rule.interval_seconds || 60);
     setAlertEnabled(rule.enabled);
     setSelectedContact(rule.contact_endpoint_id || '');
@@ -587,7 +591,10 @@ function App() {
   function applyEventFilter(field: string, value: unknown) {
     const term = formatCell(value, field).trim();
     if (!term) return;
-    const nextQuery = { ...query, mode: 'builder' as const, search: term };
+    const allowedFilter = dataset?.filters.includes(field);
+    const nextQuery = allowedFilter
+      ? { ...query, mode: 'builder' as const, search: '', filters: { ...(query.filters || {}), [field]: term }, filterOps: { ...(query.filterOps || {}), [field]: 'eq' } }
+      : { ...query, mode: 'builder' as const, search: term };
     setQuery(nextQuery);
     setActiveTab('events');
     loadData(nextQuery).catch((err) => setError(err.message));
@@ -627,7 +634,8 @@ function App() {
       id: crypto.randomUUID(),
       title: panelTitle.trim() || defaultPanelTitle(),
       query: queryPayload(),
-      visualization: { type: panelVisualization }
+      visualization: { type: panelVisualization },
+      position: { w: 1, h: 1 }
     };
   }
 
@@ -648,7 +656,7 @@ function App() {
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
     { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
-    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
+    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },
@@ -757,6 +765,11 @@ function App() {
                 key: 'events',
                 label: `Events (${eventRows.length})`,
                 children: <EventsTable rows={eventRows} onFilter={applyEventFilter} onTrace={(value) => applyEventFilter('trace_id', value)} />
+              },
+              {
+                key: 'dashboard',
+                label: `Dashboard (${dashboardPanels.length})`,
+                children: <DashboardGrid panels={dashboardPanels} onOpen={openPanel} onRemove={removePanel} />
               }
             ]}
           />
@@ -780,10 +793,53 @@ function QuerySummary(props: {
       <Tag>{props.tenant || 'default tenant'}</Tag>
       <Tag>{formatRange(props.query.from, props.query.to)}</Tag>
       {props.query.search && <Tag icon={<FilterOutlined />}>{props.query.search}</Tag>}
+      {activeFilters(props.query.filters).map(([key, value]) => (
+        <Tag key={key} icon={<FilterOutlined />}>{key}={value}</Tag>
+      ))}
       <Tag>{props.query.limit} event rows</Tag>
       <Tag>{props.refreshSeconds > 0 ? `refresh ${formatRefresh(props.refreshSeconds)}` : 'manual refresh'}</Tag>
       {props.lastUpdated && <Typography.Text type="secondary">Updated {new Date(props.lastUpdated).toLocaleTimeString()}</Typography.Text>}
     </Flex>
+  );
+}
+
+function DashboardGrid({
+  panels,
+  onOpen,
+  onRemove
+}: {
+  panels: DashboardChart[];
+  onOpen: (panel: DashboardChart) => void;
+  onRemove: (index: number) => void;
+}) {
+  if (panels.length === 0) {
+    return <Alert type="info" showIcon message="No panels staged for this dashboard" />;
+  }
+  return (
+    <div className="dashboard-grid">
+      {panels.map((panel, index) => {
+        const panelQuery = editableQuery(panel.query as Partial<QueryState>) as QueryState;
+        return (
+          <div
+            key={panel.id || `${panel.title}-${index}`}
+            className="dashboard-panel"
+            style={{ gridColumn: `span ${Math.max(1, Math.min(2, Number(panel.position?.w || 1)))}` }}
+          >
+            <Flex justify="space-between" gap={10} align="start">
+              <div>
+                <Typography.Title level={4}>{panel.title}</Typography.Title>
+                <Typography.Text type="secondary">{compactQueryDescription(panelQuery)}</Typography.Text>
+              </div>
+              <Space>
+                <Tag>{panel.visualization?.type || 'line'}</Tag>
+                <Button size="small" onClick={() => onOpen(panel)}>Open</Button>
+                <Button size="small" danger onClick={() => onRemove(index)}>Remove</Button>
+              </Space>
+            </Flex>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -989,8 +1045,19 @@ function compactQueryDescription(query: QueryState): string {
     query.dataset,
     query.groupBy ? `by ${query.groupBy}` : '',
     query.search ? `search ${query.search}` : '',
+    compactFilters(query.filters),
     formatRange(query.from, query.to)
   ].filter(Boolean).join(' - ');
+}
+
+function compactFilters(filters: Record<string, string> | undefined): string {
+  const active = Object.entries(filters || {}).filter(([, value]) => value.trim() !== '');
+  if (active.length === 0) return '';
+  return active.map(([key, value]) => `${key}=${value}`).join(', ');
+}
+
+function activeFilters(filters: Record<string, string> | undefined): [string, string][] {
+  return Object.entries(filters || {}).filter(([, value]) => value.trim() !== '');
 }
 
 function stringsHaveText(value: unknown): value is string {

@@ -1,4 +1,4 @@
-.PHONY: build test web web-install license-check docker-build docker-up docker-down helm-lint run dev
+.PHONY: build test web web-install license-check docker-build docker-up docker-down helm-lint compose-smoke run dev
 
 APP_NAME ?= uvoo-dbvizerver
 GOCACHE ?= /tmp/go-build-cache
@@ -35,3 +35,6 @@ docker-down:
 
 helm-lint:
 	helm lint charts/uvoo-dbviz
+
+compose-smoke:
+	bash scripts/smoke-compose.sh

@@ -126,6 +126,11 @@ export type DashboardChart = {
     type?: 'line' | 'bar' | 'area';
     [key: string]: unknown;
   };
+  position?: {
+    w?: number;
+    h?: number;
+    [key: string]: unknown;
+  };
 };
 
 export type Dashboard = {
@@ -155,6 +160,7 @@ export type AlertRule = {
   condition: {
     operator: string;
     threshold: number;
+    for?: string;
   };
   interval_seconds: number;
   enabled: boolean;

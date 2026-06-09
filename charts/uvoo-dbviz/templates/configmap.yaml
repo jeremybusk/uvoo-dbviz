@@ -8,6 +8,9 @@ metadata:
 data:
   DBVIZ_ADDR: ":8080"
   DBVIZ_WEB_ROOT: "/app/web/dist"
+  DBVIZ_ENV: {{ .Values.config.environment | quote }}
+  DBVIZ_REQUIRE_PRODUCTION_SAFE: {{ .Values.config.requireProductionSafe | quote }}
+  DBVIZ_ALLOW_INSECURE_DEFAULTS: {{ .Values.config.allowInsecureDefaults | quote }}
   DBVIZ_AUTH_DEV_MODE: {{ .Values.config.authDevMode | quote }}
   DBVIZ_PUBLIC_URL: {{ .Values.config.publicUrl | quote }}
   DBVIZ_CLICKHOUSE_URL: {{ include "uvoo-dbviz.clickhouseURL" . | quote }}
@@ -27,3 +30,7 @@ data:
   DBVIZ_ALERT_WORKER_KEY: {{ .Values.config.alertWorkerKey | quote }}
   DBVIZ_ALERT_POLL_SECONDS: {{ .Values.config.alertPollSeconds | quote }}
   DBVIZ_ALERT_DEDUPE_SECONDS: {{ .Values.config.alertDedupeSeconds | quote }}
+  DBVIZ_ALERT_SMTP_HOST: {{ .Values.config.alertSmtpHost | quote }}
+  DBVIZ_ALERT_SMTP_PORT: {{ .Values.config.alertSmtpPort | quote }}
+  DBVIZ_ALERT_SMTP_USER: {{ .Values.config.alertSmtpUser | quote }}
+  DBVIZ_ALERT_SMTP_FROM: {{ .Values.config.alertSmtpFrom | quote }}
