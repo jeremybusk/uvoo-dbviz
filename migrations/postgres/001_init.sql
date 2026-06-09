@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS data_sources (
     name text NOT NULL,
     kind text NOT NULL CHECK (kind IN ('clickhouse')),
     config jsonb NOT NULL DEFAULT '{}'::jsonb,
+    updated_at timestamptz NOT NULL DEFAULT now(),
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(tenant_id, name)
 );
@@ -108,15 +109,32 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS query_history (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    user_id uuid REFERENCES users(id) ON DELETE SET NULL,
+    dataset text NOT NULL,
+    query jsonb NOT NULL DEFAULT '{}'::jsonb,
+    rows_count integer NOT NULL DEFAULT 0,
+    duration_ms integer NOT NULL DEFAULT 0,
+    status text NOT NULL DEFAULT 'success' CHECK (status IN ('success', 'failed')),
+    error text NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+ALTER TABLE data_sources ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+
 CREATE INDEX IF NOT EXISTS users_tenant_id_idx ON users(tenant_id);
 CREATE INDEX IF NOT EXISTS tenant_invites_tenant_id_idx ON tenant_invites(tenant_id);
+CREATE INDEX IF NOT EXISTS data_sources_tenant_id_idx ON data_sources(tenant_id);
 CREATE INDEX IF NOT EXISTS dashboards_tenant_id_idx ON dashboards(tenant_id);
 CREATE INDEX IF NOT EXISTS charts_dashboard_id_idx ON charts(dashboard_id);
 CREATE INDEX IF NOT EXISTS alert_rules_enabled_idx ON alert_rules(tenant_id, enabled);
 CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents(tenant_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(tenant_id, created_at DESC);
 
 GRANT USAGE ON SCHEMA public TO dbviz_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, charts, contact_endpoints, alert_rules, alert_incidents TO dbviz_web;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, charts, contact_endpoints, alert_rules, alert_incidents, query_history TO dbviz_web;
 
 INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
@@ -131,8 +149,14 @@ WHERE slug = 'dev'
       FROM dashboards
       WHERE dashboards.tenant_id = tenants.id
         AND dashboards.name = 'Sample Observability'
-  )
+)
 ON CONFLICT DO NOTHING;
+
+INSERT INTO data_sources (tenant_id, name, kind, config)
+SELECT id, 'Default ClickHouse', 'clickhouse', '{"url":"http://clickhouse:8123","database":"default","username":"default","passwordSecretRef":"clickhouse-default"}'::jsonb
+FROM tenants
+WHERE slug = 'dev'
+ON CONFLICT (tenant_id, name) DO NOTHING;
 
 ALTER TABLE tenants ENABLE ROW LEVEL SECURITY;
 ALTER TABLE users ENABLE ROW LEVEL SECURITY;
@@ -143,6 +167,7 @@ ALTER TABLE charts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contact_endpoints ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_incidents ENABLE ROW LEVEL SECURITY;
+ALTER TABLE query_history ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION request_tenant_id() RETURNS uuid
 LANGUAGE plpgsql STABLE
@@ -245,6 +270,123 @@ DROP POLICY IF EXISTS alert_incidents_tenant_isolation ON alert_incidents;
 CREATE POLICY alert_incidents_tenant_isolation ON alert_incidents
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
+
+DROP POLICY IF EXISTS query_history_tenant_isolation ON query_history;
+CREATE POLICY query_history_tenant_isolation ON query_history
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
+CREATE OR REPLACE FUNCTION list_data_sources()
+RETURNS TABLE(id uuid, name text, kind text, config jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT ds.id, ds.name, ds.kind, ds.config - 'password' AS config, ds.updated_at, ds.created_at
+    FROM data_sources ds
+    WHERE ds.tenant_id = request_tenant_id()
+    ORDER BY ds.name;
+$$;
+
+CREATE OR REPLACE FUNCTION save_data_source(source_id uuid, source_name text, source_kind text, source_config jsonb)
+RETURNS TABLE(id uuid, name text, kind text, config jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_id uuid;
+    sanitized_config jsonb;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    IF source_kind <> 'clickhouse' THEN
+        RAISE EXCEPTION 'unsupported data source kind: %', source_kind;
+    END IF;
+
+    sanitized_config := COALESCE(source_config, '{}'::jsonb) - 'password';
+
+    IF source_id IS NULL THEN
+        INSERT INTO data_sources (tenant_id, name, kind, config)
+        VALUES (request_tenant_id(), source_name, source_kind, sanitized_config)
+        ON CONFLICT ON CONSTRAINT data_sources_tenant_id_name_key DO UPDATE
+        SET kind = EXCLUDED.kind,
+            config = EXCLUDED.config,
+            updated_at = now()
+        RETURNING data_sources.id INTO saved_id;
+    ELSE
+        UPDATE data_sources
+        SET name = source_name,
+            kind = source_kind,
+            config = sanitized_config,
+            updated_at = now()
+        WHERE data_sources.id = source_id
+          AND data_sources.tenant_id = request_tenant_id()
+        RETURNING data_sources.id INTO saved_id;
+    END IF;
+
+    RETURN QUERY
+    SELECT ds.id, ds.name, ds.kind, ds.config - 'password' AS config, ds.updated_at, ds.created_at
+    FROM data_sources ds
+    WHERE ds.id = saved_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION list_query_history(history_limit integer DEFAULT 50)
+RETURNS TABLE(id uuid, user_email text, dataset text, query jsonb, rows_count integer, duration_ms integer, status text, error text, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT qh.id, COALESCE(u.email, '') AS user_email, qh.dataset, qh.query, qh.rows_count, qh.duration_ms, qh.status, qh.error, qh.created_at
+    FROM query_history qh
+    LEFT JOIN users u ON u.id = qh.user_id
+    WHERE qh.tenant_id = request_tenant_id()
+    ORDER BY qh.created_at DESC
+    LIMIT LEAST(GREATEST(COALESCE(history_limit, 50), 1), 200);
+$$;
+
+CREATE OR REPLACE FUNCTION record_query_history(
+    user_subject text,
+    user_provider text,
+    query_dataset text,
+    query_payload jsonb,
+    query_rows_count integer,
+    query_duration_ms integer,
+    query_status text,
+    query_error text
+)
+RETURNS void
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    resolved_user_id uuid;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    SELECT u.id INTO resolved_user_id
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = user_subject
+      AND u.provider = user_provider
+    LIMIT 1;
+
+    INSERT INTO query_history (tenant_id, user_id, dataset, query, rows_count, duration_ms, status, error)
+    VALUES (
+        request_tenant_id(),
+        resolved_user_id,
+        COALESCE(NULLIF(query_dataset, ''), 'unknown'),
+        COALESCE(query_payload, '{}'::jsonb),
+        GREATEST(COALESCE(query_rows_count, 0), 0),
+        GREATEST(COALESCE(query_duration_ms, 0), 0),
+        CASE WHEN query_status = 'failed' THEN 'failed' ELSE 'success' END,
+        LEFT(COALESCE(query_error, ''), 2000)
+    );
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_data_sources() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION save_data_source(uuid, text, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_query_history(integer) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION record_query_history(text, text, text, jsonb, integer, integer, text, text) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_dashboards()
 RETURNS TABLE(id uuid, name text, layout jsonb, updated_at timestamptz, created_at timestamptz)

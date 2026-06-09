@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"uvoo-dbviz/internal/auth"
 	"uvoo-dbviz/internal/clickhouse"
@@ -40,6 +41,9 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/session/profile", a.requireAuth(a.sessionProfile))
 	a.mux.HandleFunc("GET /api/session/memberships", a.requireAuth(a.listMemberships))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
+	a.mux.HandleFunc("GET /api/query/history", a.requireAuth(a.listQueryHistory))
+	a.mux.HandleFunc("GET /api/data-sources", a.requireAuth(a.listDataSources))
+	a.mux.HandleFunc("POST /api/data-sources", a.requireAuth(a.saveDataSource))
 	a.mux.HandleFunc("GET /api/dashboards", a.requireAuth(a.listDashboards))
 	a.mux.HandleFunc("POST /api/dashboards", a.requireAuth(a.saveDashboard))
 	a.mux.HandleFunc("GET /api/alerts/rules", a.requireAuth(a.listAlertRules))
@@ -138,6 +142,7 @@ func (a *App) query(w http.ResponseWriter, r *http.Request) {
 	if !a.requireStateRole(w, r, "owner", "admin", "editor", "viewer") {
 		return
 	}
+	start := time.Now()
 	var req clickhouse.QueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -145,21 +150,119 @@ func (a *App) query(w http.ResponseWriter, r *http.Request) {
 	}
 	ds, ok := a.cfg.Datasets[req.Dataset]
 	if !ok {
+		a.recordQueryHistory(r, req, 0, start, "failed", "unknown dataset")
 		writeError(w, http.StatusBadRequest, errors.New("unknown dataset"))
 		return
 	}
 	sql, err := clickhouse.BuildTimeseriesSQL(req, ds, statePrincipal(r).TenantID, a.cfg.ClickHouse.MaxRows)
 	if err != nil {
+		a.recordQueryHistory(r, req, 0, start, "failed", err.Error())
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
 	rows, err := a.ch.QueryJSONEachRow(r.Context(), sql)
 	if err != nil {
 		a.logger.Warn("clickhouse query failed", "error", err)
+		a.recordQueryHistory(r, req, 0, start, "failed", err.Error())
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
+	a.recordQueryHistory(r, req, len(rows), start, "success", "")
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
+}
+
+func (a *App) listQueryHistory(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor", "viewer") {
+		return
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "list_query_history", map[string]any{
+		"history_limit": 50,
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) recordQueryHistory(r *http.Request, req clickhouse.QueryRequest, rowsCount int, start time.Time, status string, errText string) {
+	user := statePrincipal(r)
+	if err := a.state.RPC(r.Context(), "record_query_history", map[string]any{
+		"user_subject":      user.Subject,
+		"user_provider":     user.Provider,
+		"query_dataset":     req.Dataset,
+		"query_payload":     req,
+		"query_rows_count":  rowsCount,
+		"query_duration_ms": int(time.Since(start).Milliseconds()),
+		"query_status":      status,
+		"query_error":       errText,
+	}, user, r.Header.Get("Authorization"), nil); err != nil {
+		a.logger.Warn("query history record failed", "error", err)
+	}
+}
+
+func (a *App) listDataSources(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor", "viewer") {
+		return
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "list_data_sources", map[string]any{}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) saveDataSource(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	var req struct {
+		ID     string         `json:"id"`
+		Name   string         `json:"name"`
+		Kind   string         `json:"kind"`
+		Config map[string]any `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Kind = strings.TrimSpace(req.Kind)
+	if req.Name == "" || req.Kind == "" {
+		writeError(w, http.StatusBadRequest, errors.New("data source name and kind are required"))
+		return
+	}
+	if req.Kind != "clickhouse" {
+		writeError(w, http.StatusBadRequest, errors.New("only clickhouse data sources are supported"))
+		return
+	}
+	if req.Config == nil {
+		req.Config = map[string]any{}
+	}
+	if _, hasPassword := req.Config["password"]; hasPassword {
+		writeError(w, http.StatusBadRequest, errors.New("store data source passwords in a secret manager and pass passwordSecretRef"))
+		return
+	}
+	if urlValue, _ := req.Config["url"].(string); strings.TrimSpace(urlValue) == "" {
+		writeError(w, http.StatusBadRequest, errors.New("data source config.url is required"))
+		return
+	}
+	var sourceID any
+	if req.ID != "" {
+		sourceID = req.ID
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "save_data_source", map[string]any{
+		"source_id":     sourceID,
+		"source_name":   req.Name,
+		"source_kind":   req.Kind,
+		"source_config": req.Config,
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 func (a *App) listDashboards(w http.ResponseWriter, r *http.Request) {

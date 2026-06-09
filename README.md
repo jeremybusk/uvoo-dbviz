@@ -93,6 +93,10 @@ dataset has explicit table, time, tenant, filter, filter operator, dimension,
 measure, aggregation, max-lookback, and max-row allow-lists so a user request
 cannot bypass tenant scoping with arbitrary SQL.
 
+Tenants can also keep ClickHouse connection metadata in `data_sources`. The
+application stores non-secret connection fields and a `passwordSecretRef`; raw
+passwords are rejected by the Go API and stripped by PostgreSQL RPCs.
+
 ## Dashboards
 
 The frontend saves and opens dashboards through Go API endpoints backed by
@@ -108,6 +112,9 @@ Those functions derive tenant context from JWT claims such as `tenant_id`,
 
 Alert rule and contact management follows the same pattern:
 
+- `GET /api/data-sources`
+- `POST /api/data-sources`
+- `GET /api/query/history`
 - `GET /api/alerts/rules`
 - `POST /api/alerts/rules`
 - `GET /api/alerts/contacts`

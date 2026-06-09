@@ -120,6 +120,40 @@ label {
   padding-inline: 10px;
 }
 
+.history-list {
+  display: grid;
+  gap: 6px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.history {
+  display: grid;
+  gap: 2px;
+  min-height: 58px;
+  border-color: #c9d3dc;
+  background: #ffffff;
+  color: #245a73;
+  text-align: left;
+  padding: 8px 10px;
+}
+
+.history.failed {
+  border-color: #d67b6b;
+  color: #7c2419;
+}
+
+.history span,
+.history small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history small {
+  color: #6b7785;
+}
+
 .incident-list {
   display: grid;
   gap: 8px;

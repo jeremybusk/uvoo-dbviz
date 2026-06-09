@@ -5,11 +5,13 @@ import {
   AlertIncident,
   AlertRule,
   ContactEndpoint,
+  DataSource,
   Dataset,
   Dashboard,
   Principal,
   Provider,
   PublicConfig,
+  QueryHistory,
   QueryRow,
   TenantInvite,
   TenantMember,
@@ -47,7 +49,14 @@ function App() {
   const [error, setError] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
+  const [dataSources, setDataSources] = useState<DataSource[]>([]);
+  const [queryHistory, setQueryHistory] = useState<QueryHistory[]>([]);
   const [dashboardName, setDashboardName] = useState('Sample Observability');
+  const [sourceName, setSourceName] = useState('Default ClickHouse');
+  const [sourceURL, setSourceURL] = useState('http://clickhouse:8123');
+  const [sourceDatabase, setSourceDatabase] = useState('default');
+  const [sourceUser, setSourceUser] = useState('default');
+  const [sourceSecretRef, setSourceSecretRef] = useState('clickhouse-default');
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
   const [contacts, setContacts] = useState<ContactEndpoint[]>([]);
   const [incidents, setIncidents] = useState<AlertIncident[]>([]);
@@ -98,6 +107,8 @@ function App() {
   useEffect(() => {
     if (!config || !user) return;
     loadAccessState().catch((err) => setError(err.message));
+    loadDataSources().catch((err) => setError(err.message));
+    loadQueryHistory().catch(() => undefined);
     loadDashboards().catch((err) => setError(err.message));
     loadAlertState().catch((err) => setError(err.message));
     loadInvites().catch(() => undefined);
@@ -160,6 +171,33 @@ function App() {
       to: new Date(query.to).toISOString()
     });
     setRows(result.rows);
+    loadQueryHistory().catch(() => undefined);
+  }
+
+  async function loadDataSources() {
+    const result = await apiGet<DataSource[]>('/api/data-sources');
+    setDataSources(result);
+    if (result[0]) fillDataSource(result[0]);
+  }
+
+  async function saveDataSource() {
+    const saved = await apiPost<DataSource[]>('/api/data-sources', {
+      id: null,
+      name: sourceName,
+      kind: 'clickhouse',
+      config: {
+        url: sourceURL,
+        database: sourceDatabase,
+        username: sourceUser,
+        passwordSecretRef: sourceSecretRef
+      }
+    });
+    setDataSources((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+  }
+
+  async function loadQueryHistory() {
+    const result = await apiGet<QueryHistory[]>('/api/query/history');
+    setQueryHistory(result);
   }
 
   async function loadDashboards() {
@@ -281,6 +319,18 @@ function App() {
     }
   }
 
+  function fillDataSource(source: DataSource) {
+    setSourceName(source.name);
+    setSourceURL(String(source.config.url || ''));
+    setSourceDatabase(String(source.config.database || 'default'));
+    setSourceUser(String(source.config.username || 'default'));
+    setSourceSecretRef(String(source.config.passwordSecretRef || ''));
+  }
+
+  function openHistory(history: QueryHistory) {
+    setQuery((current) => ({ ...current, ...(history.query as Partial<QueryState>) }));
+  }
+
   function saveToken() {
     setToken(tokenInput.trim());
     apiGet<Principal>('/api/me').then((principal) => {
@@ -329,6 +379,36 @@ function App() {
         )}
 
         <section className="panel">
+          <h2>Sources</h2>
+          <label>
+            Name
+            <input value={sourceName} onChange={(event) => setSourceName(event.target.value)} />
+          </label>
+          <label>
+            URL
+            <input value={sourceURL} onChange={(event) => setSourceURL(event.target.value)} />
+          </label>
+          <label>
+            Database
+            <input value={sourceDatabase} onChange={(event) => setSourceDatabase(event.target.value)} />
+          </label>
+          <label>
+            User
+            <input value={sourceUser} onChange={(event) => setSourceUser(event.target.value)} />
+          </label>
+          <label>
+            Secret
+            <input value={sourceSecretRef} onChange={(event) => setSourceSecretRef(event.target.value)} />
+          </label>
+          <button disabled={!user || !sourceURL} onClick={saveDataSource}>Save source</button>
+          <div className="dashboard-list">
+            {dataSources.map((source) => (
+              <button key={source.id} onClick={() => fillDataSource(source)}>{source.name} - {source.kind}</button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
           <h2>Query</h2>
           <label>
             Dataset
@@ -373,6 +453,19 @@ function App() {
             <input type="datetime-local" value={query.to} onChange={(event) => setQuery({ ...query, to: event.target.value })} />
           </label>
           <button disabled={!user} onClick={loadData}>Run</button>
+        </section>
+
+        <section className="panel">
+          <h2>History</h2>
+          <div className="history-list">
+            {queryHistory.slice(0, 8).map((history) => (
+              <button className={history.status === 'failed' ? 'history failed' : 'history'} key={history.id} onClick={() => openHistory(history)}>
+                <strong>{history.dataset}</strong>
+                <span>{history.rows_count} rows - {history.duration_ms} ms</span>
+                <small>{new Date(history.created_at).toLocaleString()}</small>
+              </button>
+            ))}
+          </div>
         </section>
 
         <section className="panel">

@@ -71,6 +71,33 @@ export type QueryRow = {
   value: number;
 };
 
+export type DataSource = {
+  id: string;
+  name: string;
+  kind: 'clickhouse';
+  config: {
+    url?: string;
+    database?: string;
+    username?: string;
+    passwordSecretRef?: string;
+    [key: string]: unknown;
+  };
+  updated_at: string;
+  created_at: string;
+};
+
+export type QueryHistory = {
+  id: string;
+  user_email: string;
+  dataset: string;
+  query: Record<string, unknown>;
+  rows_count: number;
+  duration_ms: number;
+  status: 'success' | 'failed';
+  error: string;
+  created_at: string;
+};
+
 export type Dashboard = {
   id: string;
   name: string;
