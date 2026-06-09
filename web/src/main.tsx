@@ -277,6 +277,11 @@ function App() {
     setAlertRules((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
   }
 
+  async function resolveIncident(incident: AlertIncident) {
+    const saved = await apiPost<AlertIncident[]>('/api/alerts/incidents/resolve', { id: incident.id });
+    setIncidents((current) => current.map((item) => item.id === incident.id ? (saved[0] || item) : item));
+  }
+
   async function loadInvites() {
     const result = await apiGet<TenantInvite[]>('/api/invites');
     setInvites(result);
@@ -538,8 +543,11 @@ function App() {
             {incidents.slice(0, 8).map((incident) => (
               <div className="incident" key={incident.id}>
                 <strong>{incident.status}</strong>
-                <span>{incident.value}</span>
-                <small>{new Date(incident.created_at).toLocaleString()}</small>
+                <span>{incident.value} x{incident.occurrence_count || 1}</span>
+                <small>{new Date(incident.last_seen_at || incident.created_at).toLocaleString()}</small>
+                {incident.status === 'firing' && (
+                  <button onClick={() => resolveIncident(incident)}>Resolve</button>
+                )}
               </div>
             ))}
           </div>

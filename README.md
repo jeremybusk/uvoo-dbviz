@@ -148,5 +148,10 @@ For production, set the database setting `app.alert_worker_key` to the same
 secret value and do not use the dev default.
 
 When a rule fires, the worker records an `alert_incidents` row through
-`record_alert_incident_for_worker()`. Notification failures are recorded as
+`record_alert_incident_for_worker()`. Open firing incidents are deduped by a
+stable fingerprint, `occurrence_count` and `last_seen_at` are updated on repeat
+fires, and contact delivery is suppressed until `DBVIZ_ALERT_DEDUPE_SECONDS`
+passes. When the condition clears, the worker marks the open incident
+`resolved`; operators can also resolve incidents with
+`POST /api/alerts/incidents/resolve`. Notification failures are recorded as
 `notify_failed` incidents with the failed contact and error in the payload.

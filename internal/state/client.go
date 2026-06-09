@@ -45,12 +45,20 @@ type UserProfile struct {
 }
 
 type AlertIncident struct {
-	ID          string         `json:"id"`
-	AlertRuleID string         `json:"alert_rule_id"`
-	Status      string         `json:"status"`
-	Value       float64        `json:"value"`
-	Payload     map[string]any `json:"payload"`
-	CreatedAt   string         `json:"created_at"`
+	ID              string         `json:"id"`
+	AlertRuleID     *string        `json:"alert_rule_id"`
+	Fingerprint     string         `json:"fingerprint"`
+	Status          string         `json:"status"`
+	Value           float64        `json:"value"`
+	Payload         map[string]any `json:"payload"`
+	OccurrenceCount int            `json:"occurrence_count"`
+	FirstSeenAt     string         `json:"first_seen_at"`
+	LastSeenAt      string         `json:"last_seen_at"`
+	LastNotifiedAt  *string        `json:"last_notified_at"`
+	ResolvedAt      *string        `json:"resolved_at"`
+	CreatedAt       string         `json:"created_at"`
+	Deduped         bool           `json:"deduped,omitempty"`
+	ShouldNotify    bool           `json:"should_notify,omitempty"`
 }
 
 func NewClient(cfg config.PostgRESTConfig, httpClient *http.Client) *Client {
@@ -143,20 +151,29 @@ func (c *Client) ListAlertIncidents(ctx context.Context, user auth.Principal, be
 	return rows, err
 }
 
-func (c *Client) RecordAlertIncident(ctx context.Context, workerKey, ruleID, tenantID, status string, value float64, payload map[string]any) error {
+func (c *Client) RecordAlertIncident(ctx context.Context, workerKey, ruleID, tenantID, status string, value float64, payload map[string]any, fingerprint string, cooldownSeconds int) (AlertIncident, error) {
 	var normalizedRuleID any
 	if uuidPattern.MatchString(ruleID) {
 		normalizedRuleID = ruleID
 	}
 	var rows []AlertIncident
-	return c.RPC(ctx, "record_alert_incident_for_worker", map[string]any{
-		"worker_key":       workerKey,
-		"rule_id":          normalizedRuleID,
-		"tenant_slug":      tenantID,
-		"incident_status":  status,
-		"incident_value":   value,
-		"incident_payload": payload,
+	err := c.RPC(ctx, "record_alert_incident_for_worker", map[string]any{
+		"worker_key":           workerKey,
+		"rule_id":              normalizedRuleID,
+		"tenant_slug":          tenantID,
+		"incident_status":      status,
+		"incident_value":       value,
+		"incident_payload":     payload,
+		"incident_fingerprint": fingerprint,
+		"cooldown_seconds":     cooldownSeconds,
 	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+	if err != nil {
+		return AlertIncident{}, err
+	}
+	if len(rows) == 0 {
+		return AlertIncident{}, nil
+	}
+	return rows[0], nil
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)

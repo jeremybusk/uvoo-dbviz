@@ -163,7 +163,7 @@ label {
 
 .incident {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
   gap: 2px 8px;
   padding: 8px;
   border: 1px solid #d8e0e6;
@@ -172,8 +172,12 @@ label {
 }
 
 .incident small {
-  grid-column: 1 / -1;
   color: #6b7785;
+}
+
+.incident button {
+  grid-column: 1 / -1;
+  min-height: 32px;
 }
 
 .member-list {

@@ -59,6 +59,7 @@ type AlertConfig struct {
 	Rules         string
 	WorkerKey     string
 	PollSeconds   int
+	DedupeSeconds int
 	LoadPersisted bool
 }
 
@@ -144,6 +145,7 @@ func Load() Config {
 			Rules:         os.Getenv("DBVIZ_ALERT_RULES_JSON"),
 			WorkerKey:     env("DBVIZ_ALERT_WORKER_KEY", "dev-alert-worker-key"),
 			PollSeconds:   envInt("DBVIZ_ALERT_POLL_SECONDS", 30),
+			DedupeSeconds: envInt("DBVIZ_ALERT_DEDUPE_SECONDS", 300),
 			LoadPersisted: envBool("DBVIZ_ALERT_LOAD_PERSISTED", true),
 		},
 		Datasets: map[string]Dataset{

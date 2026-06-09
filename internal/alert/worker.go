@@ -46,14 +46,27 @@ type Worker struct {
 	http     *http.Client
 	logger   *slog.Logger
 	load     func(context.Context) ([]Rule, error)
-	record   func(context.Context, Rule, string, float64, map[string]any) error
+	record   func(context.Context, Rule, string, float64, map[string]any, string, int) (RecordResult, error)
 	poll     time.Duration
+	dedupe   time.Duration
 	stop     chan struct{}
 	wg       sync.WaitGroup
 }
 
-func (w *Worker) SetIncidentRecorder(record func(context.Context, Rule, string, float64, map[string]any) error) {
+type RecordResult struct {
+	Deduped      bool
+	ShouldNotify bool
+}
+
+func (w *Worker) SetIncidentRecorder(record func(context.Context, Rule, string, float64, map[string]any, string, int) (RecordResult, error)) {
 	w.record = record
+}
+
+func (w *Worker) SetDedupeWindow(window time.Duration) {
+	if window < 0 {
+		window = 0
+	}
+	w.dedupe = window
 }
 
 func NewWorker(datasets map[string]config.Dataset, maxRows int, ch *clickhouse.Client, rules []Rule, logger *slog.Logger) *Worker {
@@ -74,6 +87,7 @@ func NewPollingWorker(datasets map[string]config.Dataset, maxRows int, ch *click
 		logger:   logger,
 		load:     load,
 		poll:     poll,
+		dedupe:   5 * time.Minute,
 		stop:     make(chan struct{}),
 	}
 }
@@ -211,23 +225,48 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 		return
 	}
 	value := maxValue(rows)
+	fingerprint := ruleFingerprint(rule)
 	if !compare(value, rule.Condition.Operator, rule.Condition.Threshold) {
+		if w.record != nil {
+			resolved := map[string]any{
+				"ruleId":     rule.ID,
+				"ruleName":   rule.Name,
+				"tenantId":   rule.TenantID,
+				"value":      value,
+				"threshold":  rule.Condition.Threshold,
+				"operator":   rule.Condition.Operator,
+				"labels":     rule.Labels,
+				"resolvedAt": time.Now().UTC().Format(time.RFC3339),
+			}
+			if _, err := w.record(ctx, rule, "resolved", value, resolved, fingerprint, int(w.dedupe.Seconds())); err != nil {
+				w.logger.Warn("alert incident resolve failed", "rule", rule.Name, "error", err)
+			}
+		}
 		return
 	}
 	incident := map[string]any{
-		"ruleId":    rule.ID,
-		"ruleName":  rule.Name,
-		"tenantId":  rule.TenantID,
-		"value":     value,
-		"threshold": rule.Condition.Threshold,
-		"operator":  rule.Condition.Operator,
-		"labels":    rule.Labels,
-		"firedAt":   time.Now().UTC().Format(time.RFC3339),
+		"ruleId":      rule.ID,
+		"ruleName":    rule.Name,
+		"tenantId":    rule.TenantID,
+		"value":       value,
+		"threshold":   rule.Condition.Threshold,
+		"operator":    rule.Condition.Operator,
+		"labels":      rule.Labels,
+		"fingerprint": fingerprint,
+		"firedAt":     time.Now().UTC().Format(time.RFC3339),
 	}
+	shouldNotify := true
 	if w.record != nil {
-		if err := w.record(ctx, rule, "firing", value, incident); err != nil {
+		result, err := w.record(ctx, rule, "firing", value, incident, fingerprint, int(w.dedupe.Seconds()))
+		if err != nil {
 			w.logger.Warn("alert incident record failed", "rule", rule.Name, "error", err)
+		} else {
+			shouldNotify = result.ShouldNotify
 		}
+	}
+	if !shouldNotify {
+		w.logger.Info("alert notification suppressed by cooldown", "rule", rule.Name, "fingerprint", fingerprint)
+		return
 	}
 	for _, contact := range rule.Contacts {
 		if err := w.notify(ctx, contact, incident); err != nil {
@@ -240,12 +279,19 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 				failed["contactKind"] = contact.Kind
 				failed["contactTarget"] = contact.Target
 				failed["error"] = err.Error()
-				if recordErr := w.record(ctx, rule, "notify_failed", value, failed); recordErr != nil {
+				if _, recordErr := w.record(ctx, rule, "notify_failed", value, failed, fingerprint+":notify:"+contact.Kind+":"+contact.Target, int(w.dedupe.Seconds())); recordErr != nil {
 					w.logger.Warn("alert notification failure record failed", "rule", rule.Name, "error", recordErr)
 				}
 			}
 		}
 	}
+}
+
+func ruleFingerprint(rule Rule) string {
+	if rule.ID != "" {
+		return rule.TenantID + ":" + rule.ID
+	}
+	return rule.TenantID + ":" + rule.Name + ":" + rule.Query.Dataset + ":" + rule.Query.GroupBy
 }
 
 func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident map[string]any) error {

@@ -51,8 +51,13 @@ func main() {
 			time.Duration(cfg.Alerts.PollSeconds)*time.Second,
 			logger,
 		)
-		worker.SetIncidentRecorder(func(ctx context.Context, rule alert.Rule, status string, value float64, payload map[string]any) error {
-			return stateClient.RecordAlertIncident(ctx, cfg.Alerts.WorkerKey, rule.ID, rule.TenantID, status, value, payload)
+		worker.SetDedupeWindow(time.Duration(cfg.Alerts.DedupeSeconds) * time.Second)
+		worker.SetIncidentRecorder(func(ctx context.Context, rule alert.Rule, status string, value float64, payload map[string]any, fingerprint string, cooldownSeconds int) (alert.RecordResult, error) {
+			incident, err := stateClient.RecordAlertIncident(ctx, cfg.Alerts.WorkerKey, rule.ID, rule.TenantID, status, value, payload, fingerprint, cooldownSeconds)
+			if err != nil {
+				return alert.RecordResult{}, err
+			}
+			return alert.RecordResult{Deduped: incident.Deduped, ShouldNotify: incident.ShouldNotify}, nil
 		})
 		worker.Start(context.Background())
 		logger.Info("alert worker started", "static_rules", len(staticRules), "load_persisted", cfg.Alerts.LoadPersisted)

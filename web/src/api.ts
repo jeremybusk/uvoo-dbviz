@@ -138,9 +138,15 @@ export type AlertRule = {
 export type AlertIncident = {
   id: string;
   alert_rule_id: string | null;
+  fingerprint: string;
   status: 'firing' | 'resolved' | 'notify_failed';
   value: number;
   payload: Record<string, unknown>;
+  occurrence_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
+  last_notified_at: string | null;
+  resolved_at: string | null;
   created_at: string;
 };
 

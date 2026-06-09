@@ -51,6 +51,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
 	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
 	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
+	a.mux.HandleFunc("POST /api/alerts/incidents/resolve", a.requireAuth(a.resolveAlertIncident))
 	a.mux.HandleFunc("GET /api/members", a.requireAuth(a.listMembers))
 	a.mux.HandleFunc("POST /api/members/role", a.requireAuth(a.updateMemberRole))
 	a.mux.HandleFunc("GET /api/invites", a.requireAuth(a.listInvites))
@@ -455,6 +456,35 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 func (a *App) listAlertIncidents(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.state.ListAlertIncidents(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), 100)
 	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) resolveAlertIncident(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("incident id is required"))
+		return
+	}
+	user := statePrincipal(r)
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "resolve_alert_incident", map[string]any{
+		"actor_subject":  user.Subject,
+		"actor_provider": user.Provider,
+		"incident_id":    req.ID,
+	}, user, r.Header.Get("Authorization"), &rows); err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}

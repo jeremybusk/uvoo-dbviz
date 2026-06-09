@@ -103,9 +103,15 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     alert_rule_id uuid REFERENCES alert_rules(id) ON DELETE SET NULL,
+    fingerprint text NOT NULL DEFAULT '',
     status text NOT NULL DEFAULT 'firing' CHECK (status IN ('firing', 'resolved', 'notify_failed')),
     value double precision NOT NULL DEFAULT 0,
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+    occurrence_count integer NOT NULL DEFAULT 1,
+    first_seen_at timestamptz NOT NULL DEFAULT now(),
+    last_seen_at timestamptz NOT NULL DEFAULT now(),
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
@@ -123,6 +129,16 @@ CREATE TABLE IF NOT EXISTS query_history (
 );
 
 ALTER TABLE data_sources ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS fingerprint text NOT NULL DEFAULT '';
+ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS occurrence_count integer NOT NULL DEFAULT 1;
+ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS first_seen_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS last_seen_at timestamptz NOT NULL DEFAULT now();
+ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS last_notified_at timestamptz;
+ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
+
+UPDATE alert_incidents
+SET fingerprint = COALESCE(NULLIF(payload->>'fingerprint', ''), COALESCE(alert_rule_id::text, 'legacy') || ':' || id::text)
+WHERE fingerprint = '';
 
 CREATE INDEX IF NOT EXISTS users_tenant_id_idx ON users(tenant_id);
 CREATE INDEX IF NOT EXISTS tenant_invites_tenant_id_idx ON tenant_invites(tenant_id);
@@ -131,6 +147,8 @@ CREATE INDEX IF NOT EXISTS dashboards_tenant_id_idx ON dashboards(tenant_id);
 CREATE INDEX IF NOT EXISTS charts_dashboard_id_idx ON charts(dashboard_id);
 CREATE INDEX IF NOT EXISTS alert_rules_enabled_idx ON alert_rules(tenant_id, enabled);
 CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents(tenant_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS alert_incidents_open_fingerprint_idx ON alert_incidents(tenant_id, fingerprint)
+    WHERE status = 'firing' AND resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(tenant_id, created_at DESC);
 
 GRANT USAGE ON SCHEMA public TO dbviz_web;
@@ -490,15 +508,92 @@ AS $$
     ORDER BY a.created_at DESC;
 $$;
 
+DROP FUNCTION IF EXISTS list_alert_incidents(integer);
+
 CREATE OR REPLACE FUNCTION list_alert_incidents(incident_limit integer DEFAULT 100)
-RETURNS TABLE(id uuid, alert_rule_id uuid, status text, value double precision, payload jsonb, created_at timestamptz)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    value double precision,
+    payload jsonb,
+    occurrence_count integer,
+    first_seen_at timestamptz,
+    last_seen_at timestamptz,
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
+    created_at timestamptz
+)
 LANGUAGE sql STABLE
 AS $$
-    SELECT i.id, i.alert_rule_id, i.status, i.value, i.payload, i.created_at
+    SELECT
+        i.id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.value,
+        i.payload,
+        i.occurrence_count,
+        i.first_seen_at,
+        i.last_seen_at,
+        i.last_notified_at,
+        i.resolved_at,
+        i.created_at
     FROM alert_incidents i
     WHERE i.tenant_id = request_tenant_id()
-    ORDER BY i.created_at DESC
+    ORDER BY i.last_seen_at DESC
     LIMIT LEAST(GREATEST(COALESCE(incident_limit, 100), 1), 500);
+$$;
+
+CREATE OR REPLACE FUNCTION resolve_alert_incident(actor_subject text, actor_provider text, incident_id uuid)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    value double precision,
+    payload jsonb,
+    occurrence_count integer,
+    first_seen_at timestamptz,
+    last_seen_at timestamptz,
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT current_user_has_role(actor_subject, actor_provider, ARRAY['owner', 'admin', 'editor']) THEN
+        RAISE EXCEPTION 'insufficient role';
+    END IF;
+
+    UPDATE alert_incidents
+    SET status = 'resolved',
+        resolved_at = COALESCE(alert_incidents.resolved_at, now()),
+        last_seen_at = now(),
+        payload = alert_incidents.payload || jsonb_build_object('resolvedBy', actor_subject, 'resolvedManually', true)
+    WHERE alert_incidents.id = incident_id
+      AND alert_incidents.tenant_id = request_tenant_id()
+    RETURNING alert_incidents.id INTO incident_id;
+
+    RETURN QUERY
+    SELECT
+        i.id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.value,
+        i.payload,
+        i.occurrence_count,
+        i.first_seen_at,
+        i.last_seen_at,
+        i.last_notified_at,
+        i.resolved_at,
+        i.created_at
+    FROM alert_incidents i
+    WHERE i.id = incident_id;
+END;
 $$;
 
 CREATE OR REPLACE FUNCTION save_alert_rule(
@@ -561,6 +656,7 @@ GRANT EXECUTE ON FUNCTION save_contact_endpoint(uuid, text, text, text, jsonb) T
 GRANT EXECUTE ON FUNCTION list_alert_rules() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boolean, uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION resolve_alert_incident(text, text, uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_enabled_alert_rules_for_worker(worker_key text)
 RETURNS TABLE(
@@ -606,14 +702,45 @@ $$;
 
 GRANT EXECUTE ON FUNCTION list_enabled_alert_rules_for_worker(text) TO dbviz_web;
 
-CREATE OR REPLACE FUNCTION record_alert_incident_for_worker(worker_key text, rule_id uuid, tenant_slug text, incident_status text, incident_value double precision, incident_payload jsonb)
-RETURNS TABLE(id uuid, alert_rule_id uuid, status text, value double precision, payload jsonb, created_at timestamptz)
+DROP FUNCTION IF EXISTS record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb);
+DROP FUNCTION IF EXISTS record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer);
+
+CREATE OR REPLACE FUNCTION record_alert_incident_for_worker(
+    worker_key text,
+    rule_id uuid,
+    tenant_slug text,
+    incident_status text,
+    incident_value double precision,
+    incident_payload jsonb,
+    incident_fingerprint text DEFAULT '',
+    cooldown_seconds integer DEFAULT 300
+)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    value double precision,
+    payload jsonb,
+    occurrence_count integer,
+    first_seen_at timestamptz,
+    last_seen_at timestamptz,
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
+    created_at timestamptz,
+    deduped boolean,
+    should_notify boolean
+)
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = public
 AS $$
 DECLARE
     resolved_tenant_id uuid;
+    normalized_status text;
+    normalized_fingerprint text;
+    existing_id uuid;
+    notify_now boolean;
     saved_id uuid;
 BEGIN
     IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
@@ -628,24 +755,102 @@ BEGIN
         RAISE EXCEPTION 'tenant not found: %', tenant_slug;
     END IF;
 
-    INSERT INTO alert_incidents (tenant_id, alert_rule_id, status, value, payload)
+    normalized_status := COALESCE(NULLIF(incident_status, ''), 'firing');
+    normalized_fingerprint := COALESCE(NULLIF(incident_fingerprint, ''), COALESCE(rule_id::text, tenant_slug || ':' || COALESCE(incident_payload->>'ruleName', 'unknown')));
+
+    IF normalized_status = 'resolved' THEN
+    UPDATE alert_incidents
+    SET status = 'resolved',
+        value = COALESCE(incident_value, alert_incidents.value),
+        payload = COALESCE(incident_payload, '{}'::jsonb),
+        last_seen_at = now(),
+        resolved_at = now()
+        WHERE alert_incidents.id = (
+            SELECT i.id
+            FROM alert_incidents i
+            WHERE i.tenant_id = resolved_tenant_id
+              AND i.fingerprint = normalized_fingerprint
+              AND i.status = 'firing'
+              AND i.resolved_at IS NULL
+            ORDER BY i.last_seen_at DESC
+            LIMIT 1
+        )
+        RETURNING alert_incidents.id INTO saved_id;
+
+        IF saved_id IS NULL THEN
+            RETURN;
+        END IF;
+
+        RETURN QUERY
+        SELECT
+            i.id, i.alert_rule_id, i.fingerprint, i.status, i.value, i.payload,
+            i.occurrence_count, i.first_seen_at, i.last_seen_at, i.last_notified_at,
+            i.resolved_at, i.created_at, true, false
+        FROM alert_incidents i
+        WHERE i.id = saved_id;
+        RETURN;
+    END IF;
+
+    IF normalized_status = 'firing' THEN
+        SELECT i.id INTO existing_id
+        FROM alert_incidents i
+        WHERE i.tenant_id = resolved_tenant_id
+          AND i.fingerprint = normalized_fingerprint
+          AND i.status = 'firing'
+          AND i.resolved_at IS NULL
+        ORDER BY i.last_seen_at DESC
+        LIMIT 1;
+
+        IF existing_id IS NOT NULL THEN
+            SELECT i.last_notified_at IS NULL
+                OR now() - i.last_notified_at >= make_interval(secs => GREATEST(COALESCE(cooldown_seconds, 300), 0))
+            INTO notify_now
+            FROM alert_incidents i
+            WHERE i.id = existing_id;
+
+            UPDATE alert_incidents
+            SET value = COALESCE(incident_value, alert_incidents.value),
+                payload = COALESCE(incident_payload, '{}'::jsonb),
+                occurrence_count = alert_incidents.occurrence_count + 1,
+                last_seen_at = now(),
+                last_notified_at = CASE WHEN notify_now THEN now() ELSE alert_incidents.last_notified_at END
+            WHERE alert_incidents.id = existing_id
+            RETURNING alert_incidents.id INTO saved_id;
+
+            RETURN QUERY
+            SELECT
+                i.id, i.alert_rule_id, i.fingerprint, i.status, i.value, i.payload,
+                i.occurrence_count, i.first_seen_at, i.last_seen_at, i.last_notified_at,
+                i.resolved_at, i.created_at, true, notify_now
+            FROM alert_incidents i
+            WHERE i.id = saved_id;
+            RETURN;
+        END IF;
+    END IF;
+
+    INSERT INTO alert_incidents (tenant_id, alert_rule_id, fingerprint, status, value, payload, last_notified_at)
     VALUES (
         resolved_tenant_id,
         rule_id,
-        COALESCE(NULLIF(incident_status, ''), 'firing'),
+        normalized_fingerprint,
+        normalized_status,
         COALESCE(incident_value, 0),
-        COALESCE(incident_payload, '{}'::jsonb)
+        COALESCE(incident_payload, '{}'::jsonb),
+        CASE WHEN normalized_status = 'firing' THEN now() ELSE NULL END
     )
     RETURNING alert_incidents.id INTO saved_id;
 
     RETURN QUERY
-    SELECT i.id, i.alert_rule_id, i.status, i.value, i.payload, i.created_at
+    SELECT
+        i.id, i.alert_rule_id, i.fingerprint, i.status, i.value, i.payload,
+        i.occurrence_count, i.first_seen_at, i.last_seen_at, i.last_notified_at,
+        i.resolved_at, i.created_at, false, normalized_status = 'firing'
     FROM alert_incidents i
     WHERE i.id = saved_id;
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION sync_current_user(user_subject text, user_email text, user_name text, user_provider text, tenant_slug text, tenant_name text)
 RETURNS TABLE(id uuid, tenant_id uuid, subject text, email text, display_name text, provider text, role text)
