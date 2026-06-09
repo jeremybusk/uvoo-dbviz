@@ -97,6 +97,7 @@ func (m *Manager) PublicDiscovery(ctx context.Context, providerID string) (map[s
 	if err != nil {
 		return nil, err
 	}
+	d = publicDiscovery(provider, d)
 	return map[string]string{
 		"authorizationEndpoint": d.AuthorizationEndpoint,
 		"tokenEndpoint":         d.TokenEndpoint,
@@ -116,6 +117,7 @@ func (m *Manager) ExchangeCode(ctx context.Context, providerID, code, redirectUR
 	if err != nil {
 		return tokenResponse{}, err
 	}
+	d = internalDiscovery(provider, d)
 	form := url.Values{}
 	form.Set("grant_type", "authorization_code")
 	form.Set("code", code)
@@ -185,6 +187,7 @@ func (m *Manager) VerifyJWT(ctx context.Context, token string) (Principal, error
 	if err != nil {
 		return Principal{}, err
 	}
+	d = internalDiscovery(provider, d)
 	keys, err := m.fetchJWKS(ctx, d.JWKSURI)
 	if err != nil {
 		return Principal{}, err
@@ -238,14 +241,15 @@ func (m *Manager) providerForIssuer(issuer string) (config.OIDCProvider, bool) {
 }
 
 func (m *Manager) discover(ctx context.Context, provider config.OIDCProvider) (discovery, error) {
+	discoveryURL := providerDiscoveryURL(provider)
 	m.mu.Lock()
-	if cached, ok := m.cache[provider.Issuer]; ok && time.Now().Before(cached.expiresAt) {
+	if cached, ok := m.cache[discoveryURL]; ok && time.Now().Before(cached.expiresAt) {
 		m.mu.Unlock()
 		return cached.value, nil
 	}
 	m.mu.Unlock()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(provider.Issuer, "/")+"/.well-known/openid-configuration", nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(discoveryURL, "/")+"/.well-known/openid-configuration", nil)
 	if err != nil {
 		return discovery{}, err
 	}
@@ -262,9 +266,44 @@ func (m *Manager) discover(ctx context.Context, provider config.OIDCProvider) (d
 		return discovery{}, err
 	}
 	m.mu.Lock()
-	m.cache[provider.Issuer] = discoveryCache{value: d, expiresAt: time.Now().Add(15 * time.Minute)}
+	m.cache[discoveryURL] = discoveryCache{value: d, expiresAt: time.Now().Add(15 * time.Minute)}
 	m.mu.Unlock()
 	return d, nil
+}
+
+func providerDiscoveryURL(provider config.OIDCProvider) string {
+	if strings.TrimSpace(provider.DiscoveryURL) != "" {
+		return strings.TrimSpace(provider.DiscoveryURL)
+	}
+	return provider.Issuer
+}
+
+func publicDiscovery(provider config.OIDCProvider, d discovery) discovery {
+	return rewriteDiscoveryBase(d, providerDiscoveryURL(provider), provider.Issuer)
+}
+
+func internalDiscovery(provider config.OIDCProvider, d discovery) discovery {
+	return rewriteDiscoveryBase(d, provider.Issuer, providerDiscoveryURL(provider))
+}
+
+func rewriteDiscoveryBase(d discovery, fromBase, toBase string) discovery {
+	fromBase = strings.TrimRight(strings.TrimSpace(fromBase), "/")
+	toBase = strings.TrimRight(strings.TrimSpace(toBase), "/")
+	if fromBase == "" || toBase == "" || fromBase == toBase {
+		return d
+	}
+	d.Issuer = rewriteURLBase(d.Issuer, fromBase, toBase)
+	d.AuthorizationEndpoint = rewriteURLBase(d.AuthorizationEndpoint, fromBase, toBase)
+	d.TokenEndpoint = rewriteURLBase(d.TokenEndpoint, fromBase, toBase)
+	d.JWKSURI = rewriteURLBase(d.JWKSURI, fromBase, toBase)
+	return d
+}
+
+func rewriteURLBase(value, fromBase, toBase string) string {
+	if strings.HasPrefix(value, fromBase) {
+		return toBase + strings.TrimPrefix(value, fromBase)
+	}
+	return value
 }
 
 func (m *Manager) fetchJWKS(ctx context.Context, uri string) (jwks, error) {

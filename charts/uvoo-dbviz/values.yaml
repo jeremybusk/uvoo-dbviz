@@ -34,7 +34,8 @@ service:
   targetPort: 8080
 
 config:
-  authDevMode: true
+  allowInsecureDefaults: false
+  authDevMode: false
   publicUrl: ""
   postgrestUrl: ""
   clickhouseUrl: ""
@@ -43,12 +44,13 @@ config:
   googleClientId: ""
   microsoftClientId: ""
   keycloakIssuer: ""
+  keycloakDiscoveryUrl: ""
   keycloakClientId: ""
   keycloakTenantClaim: tenant_slug
   alertsEnabled: false
   alertRulesJson: "[]"
-  alertLoadPersisted: true
-  alertWorkerKey: dev-alert-worker-key
+  alertLoadPersisted: false
+  alertWorkerKey: ""
   alertPollSeconds: "30"
   alertDedupeSeconds: "300"
   extraEnv: []

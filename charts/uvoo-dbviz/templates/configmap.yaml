@@ -1,3 +1,4 @@
+{{- include "uvoo-dbviz.validateValues" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -16,6 +17,7 @@ data:
   DBVIZ_OIDC_GOOGLE_CLIENT_ID: {{ .Values.config.googleClientId | quote }}
   DBVIZ_OIDC_MICROSOFT_CLIENT_ID: {{ .Values.config.microsoftClientId | quote }}
   DBVIZ_OIDC_KEYCLOAK_ISSUER: {{ .Values.config.keycloakIssuer | quote }}
+  DBVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: {{ .Values.config.keycloakDiscoveryUrl | quote }}
   DBVIZ_OIDC_KEYCLOAK_CLIENT_ID: {{ .Values.config.keycloakClientId | quote }}
   DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: {{ .Values.config.keycloakTenantClaim | quote }}
   DBVIZ_ALERTS_ENABLED: {{ .Values.config.alertsEnabled | quote }}

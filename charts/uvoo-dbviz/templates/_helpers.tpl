@@ -38,3 +38,13 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 {{- end -}}
 
+{{- define "uvoo-dbviz.validateValues" -}}
+{{- if not .Values.config.allowInsecureDefaults -}}
+{{- if .Values.config.authDevMode -}}
+{{- fail "config.authDevMode enables header-based development authentication; set config.authDevMode=false for production or config.allowInsecureDefaults=true for a demo install" -}}
+{{- end -}}
+{{- if and (or .Values.config.alertsEnabled .Values.config.alertLoadPersisted) (or (not .Values.config.alertWorkerKey) (eq .Values.config.alertWorkerKey "dev-alert-worker-key")) -}}
+{{- fail "alerts require a non-default config.alertWorkerKey; set a strong value or config.allowInsecureDefaults=true for a demo install" -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

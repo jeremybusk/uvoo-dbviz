@@ -28,6 +28,7 @@ type OIDCProvider struct {
 	ID                  string   `json:"id"`
 	Name                string   `json:"name"`
 	Issuer              string   `json:"issuer"`
+	DiscoveryURL        string   `json:"discoveryUrl"`
 	ClientID            string   `json:"clientId"`
 	ClientSecret        string   `json:"-"`
 	Audience            []string `json:"audience"`
@@ -218,6 +219,7 @@ func Load() Config {
 			ID:           "keycloak",
 			Name:         env("DBVIZ_OIDC_KEYCLOAK_NAME", "Keycloak"),
 			Issuer:       keycloakIssuer,
+			DiscoveryURL: env("DBVIZ_OIDC_KEYCLOAK_DISCOVERY_URL", keycloakIssuer),
 			ClientID:     os.Getenv("DBVIZ_OIDC_KEYCLOAK_CLIENT_ID"),
 			ClientSecret: os.Getenv("DBVIZ_OIDC_KEYCLOAK_CLIENT_SECRET"),
 			Audience:     csv("DBVIZ_OIDC_KEYCLOAK_AUDIENCE", os.Getenv("DBVIZ_OIDC_KEYCLOAK_CLIENT_ID")),

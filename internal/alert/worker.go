@@ -92,6 +92,9 @@ func NewPollingWorker(datasets map[string]config.Dataset, maxRows int, ch *click
 	if poll <= 0 {
 		poll = time.Minute
 	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &Worker{
 		datasets: datasets,
 		maxRows:  maxRows,
