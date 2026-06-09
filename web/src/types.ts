@@ -10,4 +10,6 @@ export type QueryState = {
   aggregation: string;
   from: string;
   to: string;
+  search: string;
+  limit: number;
 };

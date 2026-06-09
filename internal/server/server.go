@@ -44,6 +44,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/session/profile", a.requireAuth(a.sessionProfile))
 	a.mux.HandleFunc("GET /api/session/memberships", a.requireAuth(a.listMemberships))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
+	a.mux.HandleFunc("POST /api/events", a.requireAuth(a.events))
 	a.mux.HandleFunc("GET /api/query/history", a.requireAuth(a.listQueryHistory))
 	a.mux.HandleFunc("GET /api/saved-queries", a.requireAuth(a.listSavedQueries))
 	a.mux.HandleFunc("POST /api/saved-queries", a.requireAuth(a.saveSavedQuery))
@@ -179,6 +180,45 @@ func (a *App) query(w http.ResponseWriter, r *http.Request) {
 	rows, err := ch.QueryJSONEachRow(r.Context(), sql)
 	if err != nil {
 		a.logger.Warn("clickhouse query failed", "error", err)
+		a.recordQueryHistory(r, req, 0, start, "failed", err.Error())
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.recordQueryHistory(r, req, len(rows), start, "success", "")
+	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
+}
+
+func (a *App) events(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor", "viewer") {
+		return
+	}
+	start := time.Now()
+	var req clickhouse.QueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	ds, ok := a.cfg.Datasets[req.Dataset]
+	if !ok {
+		a.recordQueryHistory(r, req, 0, start, "failed", "unknown dataset")
+		writeError(w, http.StatusBadRequest, errors.New("unknown dataset"))
+		return
+	}
+	sql, err := clickhouse.BuildEventsSQL(req, ds, statePrincipal(r).TenantID, a.cfg.ClickHouse.MaxRows)
+	if err != nil {
+		a.recordQueryHistory(r, req, 0, start, "failed", err.Error())
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	ch, err := a.clickHouseForQuery(r, req)
+	if err != nil {
+		a.recordQueryHistory(r, req, 0, start, "failed", err.Error())
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	rows, err := ch.QueryJSONEachRow(r.Context(), sql)
+	if err != nil {
+		a.logger.Warn("clickhouse events query failed", "error", err)
 		a.recordQueryHistory(r, req, 0, start, "failed", err.Error())
 		writeError(w, http.StatusBadGateway, err)
 		return

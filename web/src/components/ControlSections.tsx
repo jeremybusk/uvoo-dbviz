@@ -150,6 +150,7 @@ export function QuerySection(props: {
   onQuery: (query: QueryState) => void;
   onSource: (source: DataSource) => void;
   onRun: () => void;
+  onLastHour: () => void;
 }) {
   const q = props.query;
   return (
@@ -196,7 +197,16 @@ export function QuerySection(props: {
       </Field>
       <Field label="From"><Input type="datetime-local" value={q.from} onChange={(event) => props.onQuery({ ...q, from: event.target.value })} /></Field>
       <Field label="To"><Input type="datetime-local" value={q.to} onChange={(event) => props.onQuery({ ...q, to: event.target.value })} /></Field>
-      <Button type="primary" icon={<PlayCircleOutlined />} disabled={!props.user} onClick={props.onRun}>Run</Button>
+      <Field label="Search">
+        <Input allowClear value={q.search} onChange={(event) => props.onQuery({ ...q, search: event.target.value })} placeholder="Search log body, service, trace id" />
+      </Field>
+      <Field label="Event rows">
+        <InputNumber className="full" min={10} max={1000} value={q.limit} onChange={(value) => props.onQuery({ ...q, limit: Number(value || 100) })} />
+      </Field>
+      <Flex gap={8}>
+        <Button onClick={props.onLastHour}>Last hour</Button>
+        <Button type="primary" icon={<PlayCircleOutlined />} disabled={!props.user} onClick={props.onRun}>Run</Button>
+      </Flex>
     </Section>
   );
 }

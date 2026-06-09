@@ -121,6 +121,22 @@ h2.ant-typography {
   place-items: center;
 }
 
+.workspace-tabs {
+  min-width: 0;
+}
+
+.events-table .ant-table-cell {
+  vertical-align: top;
+}
+
+.events-table .ant-table-cell:nth-child(n) {
+  max-width: 460px;
+}
+
+.events-table td {
+  white-space: pre-wrap;
+}
+
 @media (max-width: 920px) {
   .app-shell {
     display: block;

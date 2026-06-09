@@ -74,6 +74,8 @@ type Dataset struct {
 	Dimensions         []string            `json:"dimensions"`
 	Filters            []string            `json:"filters"`
 	FilterOperators    map[string][]string `json:"filterOperators"`
+	EventColumns       []string            `json:"eventColumns"`
+	SearchColumns      []string            `json:"searchColumns"`
 	Measures           []string            `json:"measures"`
 	Aggregations       []string            `json:"aggregations"`
 	DefaultMeasure     string              `json:"defaultMeasure"`
@@ -168,6 +170,8 @@ func Load() Config {
 					"host_name":    {"eq", "contains"},
 					"trace_id":     {"eq"},
 				},
+				EventColumns:       csvDefault("DBVIZ_CLICKHOUSE_LOGS_EVENT_COLUMNS", []string{"timestamp", "service_name", "severity", "host_name", "trace_id", "body"}),
+				SearchColumns:      csvDefault("DBVIZ_CLICKHOUSE_LOGS_SEARCH_COLUMNS", []string{"body", "service_name", "severity", "host_name", "trace_id"}),
 				Measures:           []string{"_rows"},
 				Aggregations:       []string{"count"},
 				DefaultMeasure:     "_rows",
@@ -189,6 +193,8 @@ func Load() Config {
 					"status_code":  {"eq"},
 					"trace_id":     {"eq"},
 				},
+				EventColumns:       csvDefault("DBVIZ_CLICKHOUSE_TRACES_EVENT_COLUMNS", []string{"timestamp", "service_name", "span_name", "status_code", "trace_id", "span_id", "duration_ms"}),
+				SearchColumns:      csvDefault("DBVIZ_CLICKHOUSE_TRACES_SEARCH_COLUMNS", []string{"service_name", "span_name", "status_code", "trace_id", "span_id"}),
 				Measures:           []string{"duration_ms", "_rows"},
 				Aggregations:       []string{"count", "avg", "max", "p95"},
 				DefaultMeasure:     "_rows",
@@ -208,6 +214,8 @@ func Load() Config {
 					"service_name": {"eq", "contains"},
 					"metric_name":  {"eq", "contains"},
 				},
+				EventColumns:       csvDefault("DBVIZ_CLICKHOUSE_METRICS_EVENT_COLUMNS", []string{"timestamp", "service_name", "metric_name", "value"}),
+				SearchColumns:      csvDefault("DBVIZ_CLICKHOUSE_METRICS_SEARCH_COLUMNS", []string{"service_name", "metric_name"}),
 				Measures:           []string{"value"},
 				Aggregations:       []string{"avg", "sum", "max", "min", "p95"},
 				DefaultMeasure:     "value",

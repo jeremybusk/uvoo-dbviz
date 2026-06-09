@@ -93,6 +93,7 @@ type QueryRequest struct {
 	GroupBy       string            `json:"groupBy"`
 	Measure       string            `json:"measure"`
 	Aggregation   string            `json:"aggregation"`
+	Search        string            `json:"search"`
 	Filters       map[string]string `json:"filters"`
 	FilterOps     map[string]string `json:"filterOps"`
 	BucketSeconds int               `json:"bucketSeconds"`
@@ -100,35 +101,12 @@ type QueryRequest struct {
 }
 
 func BuildTimeseriesSQL(req QueryRequest, ds config.Dataset, tenantID string, maxRows int) (string, error) {
-	if req.Dataset == "" {
-		return "", errors.New("dataset is required")
-	}
-	if tenantID == "" {
-		return "", errors.New("tenant is required")
-	}
-	if req.To.IsZero() {
-		req.To = time.Now()
-	}
-	if req.From.IsZero() {
-		req.From = req.To.Add(-1 * time.Hour)
-	}
-	if !req.From.Before(req.To) {
-		return "", errors.New("from must be before to")
+	req, where, err := buildWhere(req, ds, tenantID, maxRows)
+	if err != nil {
+		return "", err
 	}
 	if req.BucketSeconds <= 0 {
 		req.BucketSeconds = bucketForRange(req.To.Sub(req.From))
-	}
-	if ds.MaxLookbackHours > 0 && req.To.Sub(req.From) > time.Duration(ds.MaxLookbackHours)*time.Hour {
-		return "", fmt.Errorf("query range exceeds dataset max lookback of %d hours", ds.MaxLookbackHours)
-	}
-	if req.Limit <= 0 || req.Limit > maxRows {
-		req.Limit = maxRows
-	}
-	if ds.MaxRows > 0 && req.Limit > ds.MaxRows {
-		req.Limit = ds.MaxRows
-	}
-	if err := validateIdentifier(ds.Table, ds.TimeColumn, ds.TenantColumn); err != nil {
-		return "", err
 	}
 	measureExpr, err := measureSQL(req.Measure, req.Aggregation, ds)
 	if err != nil {
@@ -144,31 +122,6 @@ func BuildTimeseriesSQL(req QueryRequest, ds config.Dataset, tenantID string, ma
 			return "", err
 		}
 		groupExpr = ident(req.GroupBy)
-	}
-
-	where := []string{
-		fmt.Sprintf("%s >= parseDateTimeBestEffort(%s)", ident(ds.TimeColumn), quote(req.From.UTC().Format(time.RFC3339))),
-		fmt.Sprintf("%s < parseDateTimeBestEffort(%s)", ident(ds.TimeColumn), quote(req.To.UTC().Format(time.RFC3339))),
-		fmt.Sprintf("%s = %s", ident(ds.TenantColumn), quote(tenantID)),
-	}
-	for key, value := range req.Filters {
-		if value == "" {
-			continue
-		}
-		if !contains(ds.Filters, key) {
-			return "", fmt.Errorf("filter is not allowed for dataset: %s", key)
-		}
-		if err := validateIdentifier(key); err != nil {
-			return "", err
-		}
-		op := "eq"
-		if req.FilterOps != nil && req.FilterOps[key] != "" {
-			op = req.FilterOps[key]
-		}
-		if !operatorAllowed(ds, key, op) {
-			return "", fmt.Errorf("filter operator is not allowed for %s: %s", key, op)
-		}
-		where = append(where, filterSQL(key, op, value))
 	}
 
 	sql := fmt.Sprintf(`SELECT
@@ -192,6 +145,114 @@ FORMAT JSONEachRow`,
 		req.Limit,
 	)
 	return sql, nil
+}
+
+func BuildEventsSQL(req QueryRequest, ds config.Dataset, tenantID string, maxRows int) (string, error) {
+	req, where, err := buildWhere(req, ds, tenantID, maxRows)
+	if err != nil {
+		return "", err
+	}
+	columns := ds.EventColumns
+	if len(columns) == 0 {
+		columns = append([]string{ds.TimeColumn}, ds.Dimensions...)
+		columns = append(columns, ds.Filters...)
+		columns = append(columns, ds.Measures...)
+	}
+	if err := validateIdentifier(columns...); err != nil {
+		return "", err
+	}
+	selects := make([]string, 0, len(columns)+1)
+	selects = append(selects, fmt.Sprintf("toUnixTimestamp(%s) AS ts", ident(ds.TimeColumn)))
+	seen := map[string]bool{ds.TimeColumn: true}
+	for _, column := range columns {
+		if seen[column] {
+			continue
+		}
+		seen[column] = true
+		selects = append(selects, fmt.Sprintf("%s AS %s", ident(column), ident(column)))
+	}
+	sql := fmt.Sprintf(`SELECT
+  %s
+FROM %s
+WHERE %s
+ORDER BY %s DESC
+LIMIT %d
+FORMAT JSONEachRow`,
+		strings.Join(selects, ",\n  "),
+		ident(ds.Table),
+		strings.Join(where, " AND "),
+		ident(ds.TimeColumn),
+		req.Limit,
+	)
+	return sql, nil
+}
+
+func buildWhere(req QueryRequest, ds config.Dataset, tenantID string, maxRows int) (QueryRequest, []string, error) {
+	if req.Dataset == "" {
+		return req, nil, errors.New("dataset is required")
+	}
+	if tenantID == "" {
+		return req, nil, errors.New("tenant is required")
+	}
+	if req.To.IsZero() {
+		req.To = time.Now()
+	}
+	if req.From.IsZero() {
+		req.From = req.To.Add(-1 * time.Hour)
+	}
+	if !req.From.Before(req.To) {
+		return req, nil, errors.New("from must be before to")
+	}
+	if ds.MaxLookbackHours > 0 && req.To.Sub(req.From) > time.Duration(ds.MaxLookbackHours)*time.Hour {
+		return req, nil, fmt.Errorf("query range exceeds dataset max lookback of %d hours", ds.MaxLookbackHours)
+	}
+	if req.Limit <= 0 || req.Limit > maxRows {
+		req.Limit = maxRows
+	}
+	if ds.MaxRows > 0 && req.Limit > ds.MaxRows {
+		req.Limit = ds.MaxRows
+	}
+	if err := validateIdentifier(ds.Table, ds.TimeColumn, ds.TenantColumn); err != nil {
+		return req, nil, err
+	}
+	where := []string{
+		fmt.Sprintf("%s >= parseDateTimeBestEffort(%s)", ident(ds.TimeColumn), quote(req.From.UTC().Format(time.RFC3339))),
+		fmt.Sprintf("%s < parseDateTimeBestEffort(%s)", ident(ds.TimeColumn), quote(req.To.UTC().Format(time.RFC3339))),
+		fmt.Sprintf("%s = %s", ident(ds.TenantColumn), quote(tenantID)),
+	}
+	for key, value := range req.Filters {
+		if value == "" {
+			continue
+		}
+		if !contains(ds.Filters, key) {
+			return req, nil, fmt.Errorf("filter is not allowed for dataset: %s", key)
+		}
+		if err := validateIdentifier(key); err != nil {
+			return req, nil, err
+		}
+		op := "eq"
+		if req.FilterOps != nil && req.FilterOps[key] != "" {
+			op = req.FilterOps[key]
+		}
+		if !operatorAllowed(ds, key, op) {
+			return req, nil, fmt.Errorf("filter operator is not allowed for %s: %s", key, op)
+		}
+		where = append(where, filterSQL(key, op, value))
+	}
+	if strings.TrimSpace(req.Search) != "" {
+		if len(ds.SearchColumns) == 0 {
+			return req, nil, errors.New("search is not enabled for dataset")
+		}
+		if err := validateIdentifier(ds.SearchColumns...); err != nil {
+			return req, nil, err
+		}
+		search := make([]string, 0, len(ds.SearchColumns))
+		for _, column := range ds.SearchColumns {
+			search = append(search, fmt.Sprintf("positionCaseInsensitive(toString(%s), %s) > 0", ident(column), quote(strings.TrimSpace(req.Search))))
+		}
+		where = append(where, "("+strings.Join(search, " OR ")+")")
+	}
+	return req, where, nil
 }
 
 func measureSQL(measure, aggregation string, ds config.Dataset) (string, error) {

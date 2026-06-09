@@ -78,6 +78,55 @@ func TestBuildTimeseriesSQLRejectsUnexpectedAggregation(t *testing.T) {
 	}
 }
 
+func TestBuildEventsSQLScopesTenantSearchesAndLimits(t *testing.T) {
+	ds := config.Dataset{
+		ID:            "logs",
+		Table:         "otel_logs",
+		TimeColumn:    "timestamp",
+		TenantColumn:  "tenant_id",
+		Filters:       []string{"severity"},
+		EventColumns:  []string{"timestamp", "service_name", "severity", "body"},
+		SearchColumns: []string{"body", "service_name"},
+	}
+	sql, err := BuildEventsSQL(QueryRequest{
+		Dataset: "logs",
+		From:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		To:      time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC),
+		Search:  "timeout",
+		Filters: map[string]string{"severity": "error"},
+		Limit:   100,
+	}, ds, "tenant-a", 1000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"`tenant_id` = 'tenant-a'",
+		"`severity` = 'error'",
+		"positionCaseInsensitive(toString(`body`), 'timeout') > 0",
+		"ORDER BY `timestamp` DESC",
+		"LIMIT 100",
+		"`body` AS `body`",
+	} {
+		if !strings.Contains(sql, want) {
+			t.Fatalf("sql missing %q:\n%s", want, sql)
+		}
+	}
+}
+
+func TestBuildEventsSQLRejectsInvalidEventColumn(t *testing.T) {
+	ds := config.Dataset{
+		ID:           "logs",
+		Table:        "otel_logs",
+		TimeColumn:   "timestamp",
+		TenantColumn: "tenant_id",
+		EventColumns: []string{"body; DROP TABLE logs"},
+	}
+	_, err := BuildEventsSQL(QueryRequest{Dataset: "logs"}, ds, "tenant-a", 100)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+}
+
 func TestNewClientDoesNotMutateProvidedHTTPClient(t *testing.T) {
 	shared := &http.Client{}
 	client := NewClient(config.ClickHouseConfig{Timeout: 5 * time.Second}, shared)

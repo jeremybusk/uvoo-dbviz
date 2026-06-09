@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, ConfigProvider, Flex, Layout, Space, Spin, Switch, Typography, theme } from 'antd';
+import { Alert, Button, ConfigProvider, Flex, Layout, Space, Spin, Switch, Table, Tabs, Typography, theme } from 'antd';
 import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import {
   AlertIncident,
@@ -66,6 +66,7 @@ function App() {
   const [members, setMembers] = useState<TenantMember[]>([]);
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [rows, setRows] = useState<QueryRow[]>([]);
+  const [eventRows, setEventRows] = useState<Record<string, unknown>[]>([]);
   const [error, setError] = useState('');
   const [tokenInput, setTokenInput] = useState('');
   const [dashboards, setDashboards] = useState<Dashboard[]>([]);
@@ -104,7 +105,7 @@ function App() {
   const [query, setQuery] = useState<QueryState>(() => {
     const to = new Date();
     const from = new Date(to.getTime() - 60 * 60 * 1000);
-    return { dataset: 'logs', sourceId: '', groupBy: 'service_name', measure: '_rows', aggregation: 'count', from: toInput(from), to: toInput(to) };
+    return { dataset: 'logs', sourceId: '', groupBy: 'service_name', measure: '_rows', aggregation: 'count', from: toInput(from), to: toInput(to), search: '', limit: 200 };
   });
 
   useEffect(() => {
@@ -195,8 +196,12 @@ function App() {
 
   async function loadData() {
     setError('');
-    const result = await apiPost<{ rows: QueryRow[] }>('/api/query', queryPayload());
-    setRows(result.rows);
+    const [series, events] = await Promise.all([
+      apiPost<{ rows: QueryRow[] }>('/api/query', queryPayload()),
+      apiPost<{ rows: Record<string, unknown>[] }>('/api/events', queryPayload())
+    ]);
+    setRows(series.rows);
+    setEventRows(events.rows);
     loadQueryHistory().catch(() => undefined);
   }
 
@@ -437,6 +442,12 @@ function App() {
     return { ...query, sourceId: query.sourceId || '', from: new Date(query.from).toISOString(), to: new Date(query.to).toISOString() };
   }
 
+  function setLastHour() {
+    const to = new Date();
+    const from = new Date(to.getTime() - 60 * 60 * 1000);
+    setQuery((current) => ({ ...current, from: toInput(from), to: toInput(to) }));
+  }
+
   function defaultPanelTitle() {
     return `${dataset?.name || query.dataset} by ${query.groupBy || 'all'}`;
   }
@@ -462,7 +473,7 @@ function App() {
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onSelectTenant={selectTenant} onSignOut={signOut} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} /> },
-    { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} onQuery={setQuery} onSource={fillDataSource} onRun={loadData} /> },
+    { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} onQuery={setQuery} onSource={fillDataSource} onRun={loadData} onLastHour={setLastHour} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
     { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
@@ -522,13 +533,62 @@ function App() {
             <Button>{rows.length} rows</Button>
           </Flex>
           {error && <Alert type="error" showIcon closable message={error} onClose={() => setError('')} />}
-          <React.Suspense fallback={<div className="chart chart-loading"><Spin /></div>}>
-            <Chart rows={rows} themeMode={themeMode} type={panelVisualization} />
-          </React.Suspense>
+          <Tabs
+            className="workspace-tabs"
+            items={[
+              {
+                key: 'chart',
+                label: 'Chart',
+                children: (
+                  <React.Suspense fallback={<div className="chart chart-loading"><Spin /></div>}>
+                    <Chart rows={rows} themeMode={themeMode} type={panelVisualization} />
+                  </React.Suspense>
+                )
+              },
+              {
+                key: 'events',
+                label: `Events (${eventRows.length})`,
+                children: <EventsTable rows={eventRows} />
+              }
+            ]}
+          />
         </Content>
       </Layout>
     </ConfigProvider>
   );
+}
+
+function EventsTable({ rows }: { rows: Record<string, unknown>[] }) {
+  const columns = useMemo(() => {
+    const keys = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+    return keys.map((key) => ({
+      title: key,
+      dataIndex: key,
+      key,
+      width: key === 'body' || key === 'attributes' ? 420 : 170,
+      ellipsis: key !== 'body',
+      render: (value: unknown) => formatCell(value, key)
+    }));
+  }, [rows]);
+
+  return (
+    <Table
+      className="events-table"
+      size="small"
+      rowKey={(_, index) => String(index)}
+      columns={columns}
+      dataSource={rows}
+      pagination={{ pageSize: 25, showSizeChanger: true }}
+      scroll={{ x: 'max-content', y: 520 }}
+    />
+  );
+}
+
+function formatCell(value: unknown, key: string) {
+  if (value == null) return '';
+  if (key === 'ts' && typeof value === 'number') return new Date(value * 1000).toLocaleString();
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
 }
 
 function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {
