@@ -36,6 +36,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/oidc/{provider}/discovery", a.oidcDiscovery)
 	a.mux.HandleFunc("POST /api/oidc/{provider}/exchange", a.oidcExchange)
 	a.mux.HandleFunc("GET /api/me", a.requireAuth(a.me))
+	a.mux.HandleFunc("POST /api/session/sync", a.requireAuth(a.syncSession))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
 	a.mux.HandleFunc("GET /api/dashboards", a.requireAuth(a.listDashboards))
 	a.mux.HandleFunc("POST /api/dashboards", a.requireAuth(a.saveDashboard))
@@ -83,6 +84,24 @@ func (a *App) oidcExchange(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, principal(r))
+}
+
+func (a *App) syncSession(w http.ResponseWriter, r *http.Request) {
+	user := principal(r)
+	var rows []map[string]any
+	err := a.state.RPC(r.Context(), "sync_current_user", map[string]any{
+		"user_subject":  user.Subject,
+		"user_email":    user.Email,
+		"user_name":     user.Name,
+		"user_provider": user.Provider,
+		"tenant_slug":   user.TenantID,
+		"tenant_name":   user.TenantID,
+	}, user, r.Header.Get("Authorization"), &rows)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
 }
 
 func (a *App) query(w http.ResponseWriter, r *http.Request) {
@@ -177,6 +196,35 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert name is required"))
 		return
 	}
+	queryBytes, err := json.Marshal(req.Query)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	var alertQuery clickhouse.QueryRequest
+	if err := json.Unmarshal(queryBytes, &alertQuery); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	ds, ok := a.cfg.Datasets[alertQuery.Dataset]
+	if !ok {
+		writeError(w, http.StatusBadRequest, errors.New("unknown alert dataset"))
+		return
+	}
+	if _, err := clickhouse.BuildTimeseriesSQL(alertQuery, ds, principal(r).TenantID, a.cfg.ClickHouse.MaxRows); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Condition == nil {
+		writeError(w, http.StatusBadRequest, errors.New("alert condition is required"))
+		return
+	}
+	threshold, ok := numericValue(req.Condition["threshold"])
+	if !ok {
+		writeError(w, http.StatusBadRequest, errors.New("alert threshold must be numeric"))
+		return
+	}
+	req.Condition["threshold"] = threshold
 	var alertID, contactID any
 	if req.ID != "" {
 		alertID = req.ID
@@ -185,7 +233,7 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		contactID = req.ContactEndpointID
 	}
 	var rows []map[string]any
-	err := a.state.RPC(r.Context(), "save_alert_rule", map[string]any{
+	err = a.state.RPC(r.Context(), "save_alert_rule", map[string]any{
 		"alert_id":         alertID,
 		"alert_name":       req.Name,
 		"alert_query":      req.Query,
@@ -199,6 +247,20 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func numericValue(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		return v, true
+	case int:
+		return float64(v), true
+	case json.Number:
+		parsed, err := v.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
 }
 
 func (a *App) listContactEndpoints(w http.ResponseWriter, r *http.Request) {

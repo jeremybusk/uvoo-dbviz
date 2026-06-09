@@ -12,6 +12,7 @@ import (
 
 	"uvoo-dbviz/internal/clickhouse"
 	"uvoo-dbviz/internal/config"
+	"uvoo-dbviz/internal/state"
 )
 
 type Rule struct {
@@ -44,19 +45,30 @@ type Worker struct {
 	ch       *clickhouse.Client
 	http     *http.Client
 	logger   *slog.Logger
-	rules    []Rule
+	load     func(context.Context) ([]Rule, error)
+	poll     time.Duration
 	stop     chan struct{}
 	wg       sync.WaitGroup
 }
 
 func NewWorker(datasets map[string]config.Dataset, maxRows int, ch *clickhouse.Client, rules []Rule, logger *slog.Logger) *Worker {
+	return NewPollingWorker(datasets, maxRows, ch, func(context.Context) ([]Rule, error) {
+		return rules, nil
+	}, time.Minute, logger)
+}
+
+func NewPollingWorker(datasets map[string]config.Dataset, maxRows int, ch *clickhouse.Client, load func(context.Context) ([]Rule, error), poll time.Duration, logger *slog.Logger) *Worker {
+	if poll <= 0 {
+		poll = time.Minute
+	}
 	return &Worker{
 		datasets: datasets,
 		maxRows:  maxRows,
 		ch:       ch,
 		http:     &http.Client{Timeout: 10 * time.Second},
 		logger:   logger,
-		rules:    rules,
+		load:     load,
+		poll:     poll,
 		stop:     make(chan struct{}),
 	}
 }
@@ -81,35 +93,100 @@ func RulesFromJSON(raw string) ([]Rule, error) {
 	return rules, nil
 }
 
-func (w *Worker) Start(ctx context.Context) {
-	for _, rule := range w.rules {
-		if !rule.Enabled {
-			continue
+func RulesFromPersisted(rows []state.PersistedAlertRule) ([]Rule, error) {
+	rules := make([]Rule, 0, len(rows))
+	for _, row := range rows {
+		queryBytes, err := json.Marshal(row.Query)
+		if err != nil {
+			return nil, err
 		}
-		rule := rule
-		w.wg.Add(1)
-		go func() {
-			defer w.wg.Done()
-			ticker := time.NewTicker(time.Duration(rule.IntervalSeconds) * time.Second)
-			defer ticker.Stop()
-			w.evaluate(ctx, rule)
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-w.stop:
-					return
-				case <-ticker.C:
-					w.evaluate(ctx, rule)
-				}
-			}
-		}()
+		var query clickhouse.QueryRequest
+		if err := json.Unmarshal(queryBytes, &query); err != nil {
+			return nil, err
+		}
+		conditionBytes, err := json.Marshal(row.Condition)
+		if err != nil {
+			return nil, err
+		}
+		var condition Condition
+		if err := json.Unmarshal(conditionBytes, &condition); err != nil {
+			return nil, err
+		}
+		if condition.Operator == "" {
+			condition.Operator = "gt"
+		}
+		rule := Rule{
+			ID:              row.ID,
+			Name:            row.Name,
+			TenantID:        row.TenantID,
+			Query:           query,
+			Condition:       condition,
+			IntervalSeconds: row.IntervalSeconds,
+			Enabled:         row.Enabled,
+		}
+		if row.ContactKind != "" && row.ContactTarget != "" {
+			rule.Contacts = []ContactEndpoint{{
+				Kind:   row.ContactKind,
+				Target: row.ContactTarget,
+				Config: row.ContactConfig,
+			}}
+		}
+		rules = append(rules, rule)
 	}
+	return rules, nil
+}
+
+func (w *Worker) Start(ctx context.Context) {
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		ticker := time.NewTicker(w.poll)
+		defer ticker.Stop()
+		lastEval := map[string]time.Time{}
+		w.evaluateDue(ctx, lastEval)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-w.stop:
+				return
+			case <-ticker.C:
+				w.evaluateDue(ctx, lastEval)
+			}
+		}
+	}()
 }
 
 func (w *Worker) Stop() {
 	close(w.stop)
 	w.wg.Wait()
+}
+
+func (w *Worker) evaluateDue(ctx context.Context, lastEval map[string]time.Time) {
+	rules, err := w.load(ctx)
+	if err != nil {
+		w.logger.Warn("alert rule load failed", "error", err)
+		return
+	}
+	now := time.Now()
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		interval := time.Duration(rule.IntervalSeconds) * time.Second
+		if interval <= 0 {
+			interval = time.Minute
+		}
+		key := rule.ID
+		if key == "" {
+			key = rule.Name + ":" + rule.TenantID
+		}
+		if last, ok := lastEval[key]; ok && now.Sub(last) < interval {
+			continue
+		}
+		lastEval[key] = now
+		w.evaluate(ctx, rule)
+	}
 }
 
 func (w *Worker) evaluate(ctx context.Context, rule Rule) {

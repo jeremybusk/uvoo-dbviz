@@ -55,8 +55,11 @@ type PostgRESTConfig struct {
 }
 
 type AlertConfig struct {
-	Enabled bool
-	Rules   string
+	Enabled       bool
+	Rules         string
+	WorkerKey     string
+	PollSeconds   int
+	LoadPersisted bool
 }
 
 type Dataset struct {
@@ -137,8 +140,11 @@ func Load() Config {
 		},
 		PostgREST: PostgRESTConfig{URL: env("DBVIZ_POSTGREST_URL", "/state")},
 		Alerts: AlertConfig{
-			Enabled: envBool("DBVIZ_ALERTS_ENABLED", false),
-			Rules:   os.Getenv("DBVIZ_ALERT_RULES_JSON"),
+			Enabled:       envBool("DBVIZ_ALERTS_ENABLED", false),
+			Rules:         os.Getenv("DBVIZ_ALERT_RULES_JSON"),
+			WorkerKey:     env("DBVIZ_ALERT_WORKER_KEY", "dev-alert-worker-key"),
+			PollSeconds:   envInt("DBVIZ_ALERT_POLL_SECONDS", 30),
+			LoadPersisted: envBool("DBVIZ_ALERT_LOAD_PERSISTED", true),
 		},
 		Datasets: map[string]Dataset{
 			"logs": {

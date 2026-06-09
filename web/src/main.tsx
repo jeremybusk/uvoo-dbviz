@@ -61,12 +61,18 @@ function App() {
 
   useEffect(() => {
     if (!getToken()) return;
-    apiGet<Principal>('/api/me').then(setUser).catch(() => clearToken());
+    apiGet<Principal>('/api/me').then((principal) => {
+      setUser(principal);
+      apiPost('/api/session/sync', {}).catch(() => undefined);
+    }).catch(() => clearToken());
   }, []);
 
   useEffect(() => {
     if (!config?.devMode || user) return;
-    apiGet<Principal>('/api/me').then(setUser).catch(() => undefined);
+    apiGet<Principal>('/api/me').then((principal) => {
+      setUser(principal);
+      apiPost('/api/session/sync', {}).catch(() => undefined);
+    }).catch(() => undefined);
   }, [config, user]);
 
   const dataset = useMemo(() => config?.datasets.find((item) => item.id === query.dataset), [config, query.dataset]);
@@ -93,7 +99,9 @@ function App() {
     if (!token) throw new Error('OIDC token response did not include a usable token');
     setToken(token);
     history.replaceState(null, '', location.pathname);
-    setUser(await apiGet<Principal>('/api/me'));
+    const principal = await apiGet<Principal>('/api/me');
+    setUser(principal);
+    await apiPost('/api/session/sync', {}).catch(() => undefined);
   }
 
   async function login(provider: Provider) {
@@ -202,7 +210,10 @@ function App() {
 
   function saveToken() {
     setToken(tokenInput.trim());
-    apiGet<Principal>('/api/me').then(setUser).catch((err) => setError(err.message));
+    apiGet<Principal>('/api/me').then((principal) => {
+      setUser(principal);
+      apiPost('/api/session/sync', {}).catch(() => undefined);
+    }).catch((err) => setError(err.message));
   }
 
   return (

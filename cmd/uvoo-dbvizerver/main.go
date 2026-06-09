@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"uvoo-dbviz/internal/alert"
 	"uvoo-dbviz/internal/auth"
@@ -22,14 +23,36 @@ func main() {
 	ch := clickhouse.NewClient(cfg.ClickHouse, http.DefaultClient)
 	stateClient := state.NewClient(cfg.PostgREST, http.DefaultClient)
 	if cfg.Alerts.Enabled {
-		rules, err := alert.RulesFromJSON(cfg.Alerts.Rules)
+		staticRules, err := alert.RulesFromJSON(cfg.Alerts.Rules)
 		if err != nil {
 			logger.Error("invalid alert rules", "error", err)
 			os.Exit(1)
 		}
-		worker := alert.NewWorker(cfg.Datasets, cfg.ClickHouse.MaxRows, ch, rules, logger)
+		loader := func(ctx context.Context) ([]alert.Rule, error) {
+			rules := append([]alert.Rule{}, staticRules...)
+			if cfg.Alerts.LoadPersisted {
+				rows, err := stateClient.LoadEnabledAlertRules(ctx, cfg.Alerts.WorkerKey)
+				if err != nil {
+					return rules, err
+				}
+				persisted, err := alert.RulesFromPersisted(rows)
+				if err != nil {
+					return rules, err
+				}
+				rules = append(rules, persisted...)
+			}
+			return rules, nil
+		}
+		worker := alert.NewPollingWorker(
+			cfg.Datasets,
+			cfg.ClickHouse.MaxRows,
+			ch,
+			loader,
+			time.Duration(cfg.Alerts.PollSeconds)*time.Second,
+			logger,
+		)
 		worker.Start(context.Background())
-		logger.Info("alert worker started", "rules", len(rules))
+		logger.Info("alert worker started", "static_rules", len(staticRules), "load_persisted", cfg.Alerts.LoadPersisted)
 	}
 
 	app := server.New(cfg, authn, ch, stateClient, logger)

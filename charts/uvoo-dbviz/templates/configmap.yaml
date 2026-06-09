@@ -20,3 +20,6 @@ data:
   DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: {{ .Values.config.keycloakTenantClaim | quote }}
   DBVIZ_ALERTS_ENABLED: {{ .Values.config.alertsEnabled | quote }}
   DBVIZ_ALERT_RULES_JSON: {{ .Values.config.alertRulesJson | quote }}
+  DBVIZ_ALERT_LOAD_PERSISTED: {{ .Values.config.alertLoadPersisted | quote }}
+  DBVIZ_ALERT_WORKER_KEY: {{ .Values.config.alertWorkerKey | quote }}
+  DBVIZ_ALERT_POLL_SECONDS: {{ .Values.config.alertPollSeconds | quote }}

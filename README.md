@@ -46,6 +46,10 @@ operations go through the Go API, which forwards bearer tokens or local dev
 tenant headers to PostgREST. PostgREST still enforces RLS with JWT tenant claims
 or `X-Dev-Tenant: dev` in local development.
 
+On successful sign-in, the UI calls `POST /api/session/sync`. The backend records
+or updates the current tenant/user in PostgreSQL, making later role and invite
+rules explicit instead of keeping identity only in browser state.
+
 Run the OTel sample emitter after the stack is up:
 
 ```sh
@@ -109,3 +113,9 @@ DBVIZ_ALERT_RULES_JSON='[{"id":"log-volume","name":"High log volume","tenantId":
 The worker evaluates rules through the same constrained ClickHouse query builder
 used by the UI. Contact kinds are `webhook`, `pagerduty`, and `email`; email is
 currently logged until SMTP configuration is added.
+
+Persisted alert rules saved through `POST /api/alerts/rules` are loaded by the
+worker when `DBVIZ_ALERT_LOAD_PERSISTED=true`. The worker uses
+`DBVIZ_ALERT_WORKER_KEY` with the `list_enabled_alert_rules_for_worker()` RPC.
+For production, set the database setting `app.alert_worker_key` to the same
+secret value and do not use the dev default.

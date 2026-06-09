@@ -337,3 +337,96 @@ GRANT EXECUTE ON FUNCTION list_contact_endpoints() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_contact_endpoint(uuid, text, text, text, jsonb) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_rules() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boolean, uuid) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION list_enabled_alert_rules_for_worker(worker_key text)
+RETURNS TABLE(
+    id uuid,
+    name text,
+    tenant_id text,
+    query jsonb,
+    condition jsonb,
+    interval_seconds integer,
+    enabled boolean,
+    contact_kind text,
+    contact_target text,
+    contact_config jsonb
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        a.id,
+        a.name,
+        t.slug AS tenant_id,
+        a.query,
+        a.condition,
+        a.interval_seconds,
+        a.enabled,
+        c.kind AS contact_kind,
+        c.target AS contact_target,
+        COALESCE(c.config, '{}'::jsonb) AS contact_config
+    FROM alert_rules a
+    JOIN tenants t ON t.id = a.tenant_id
+    LEFT JOIN contact_endpoints c ON c.id = a.contact_endpoint_id
+    WHERE a.enabled = true
+    ORDER BY a.created_at ASC;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_enabled_alert_rules_for_worker(text) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION sync_current_user(user_subject text, user_email text, user_name text, user_provider text, tenant_slug text, tenant_name text)
+RETURNS TABLE(id uuid, tenant_id uuid, subject text, email text, display_name text, provider text, role text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+    resolved_user_id uuid;
+BEGIN
+    IF tenant_slug IS NULL OR tenant_slug = '' THEN
+        RAISE EXCEPTION 'tenant slug is required';
+    END IF;
+    IF user_subject IS NULL OR user_subject = '' THEN
+        RAISE EXCEPTION 'user subject is required';
+    END IF;
+
+    INSERT INTO tenants (slug, name)
+    VALUES (tenant_slug, COALESCE(NULLIF(tenant_name, ''), tenant_slug))
+    ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
+    RETURNING tenants.id INTO resolved_tenant_id;
+
+    INSERT INTO users (tenant_id, subject, email, display_name, provider, role)
+    VALUES (
+        resolved_tenant_id,
+        user_subject,
+        COALESCE(NULLIF(user_email, ''), user_subject),
+        COALESCE(user_name, ''),
+        COALESCE(NULLIF(user_provider, ''), 'unknown'),
+        CASE
+            WHEN NOT EXISTS (SELECT 1 FROM users WHERE users.tenant_id = resolved_tenant_id) THEN 'owner'
+            ELSE 'viewer'
+        END
+    )
+    ON CONFLICT ON CONSTRAINT users_provider_subject_key DO UPDATE
+    SET email = EXCLUDED.email,
+        display_name = EXCLUDED.display_name,
+        tenant_id = EXCLUDED.tenant_id
+    RETURNING users.id INTO resolved_user_id;
+
+    RETURN QUERY
+    SELECT u.id, u.tenant_id, u.subject, u.email, u.display_name, u.provider, u.role
+    FROM users u
+    WHERE u.id = resolved_user_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION sync_current_user(text, text, text, text, text, text) TO dbviz_web;

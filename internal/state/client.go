@@ -19,6 +19,19 @@ type Client struct {
 	http    *http.Client
 }
 
+type PersistedAlertRule struct {
+	ID              string            `json:"id"`
+	Name            string            `json:"name"`
+	TenantID        string            `json:"tenant_id"`
+	Query           map[string]any    `json:"query"`
+	Condition       map[string]any    `json:"condition"`
+	IntervalSeconds int               `json:"interval_seconds"`
+	Enabled         bool              `json:"enabled"`
+	ContactKind     string            `json:"contact_kind"`
+	ContactTarget   string            `json:"contact_target"`
+	ContactConfig   map[string]string `json:"contact_config"`
+}
+
 func NewClient(cfg config.PostgRESTConfig, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
@@ -62,4 +75,12 @@ func (c *Client) RPC(ctx context.Context, name string, body any, user auth.Princ
 		return nil
 	}
 	return json.Unmarshal(responseBody, out)
+}
+
+func (c *Client) LoadEnabledAlertRules(ctx context.Context, workerKey string) ([]PersistedAlertRule, error) {
+	var rows []PersistedAlertRule
+	err := c.RPC(ctx, "list_enabled_alert_rules_for_worker", map[string]any{
+		"worker_key": workerKey,
+	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+	return rows, err
 }

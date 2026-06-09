@@ -26,6 +26,9 @@ services:
       DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: tenant_slug
       DBVIZ_ALERTS_ENABLED: ${DBVIZ_ALERTS_ENABLED:-false}
       DBVIZ_ALERT_RULES_JSON: ${DBVIZ_ALERT_RULES_JSON:-[]}
+      DBVIZ_ALERT_LOAD_PERSISTED: ${DBVIZ_ALERT_LOAD_PERSISTED:-true}
+      DBVIZ_ALERT_WORKER_KEY: ${DBVIZ_ALERT_WORKER_KEY:-dev-alert-worker-key}
+      DBVIZ_ALERT_POLL_SECONDS: ${DBVIZ_ALERT_POLL_SECONDS:-30}
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5-alpine
