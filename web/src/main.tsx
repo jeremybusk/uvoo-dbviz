@@ -104,6 +104,7 @@ function App() {
   const [inviteRole, setInviteRole] = useState<TenantInvite['role']>('viewer');
   const [inviteToken, setInviteToken] = useState('');
   const [alertName, setAlertName] = useState('High signal volume');
+  const [editingAlertId, setEditingAlertId] = useState('');
   const [alertThreshold, setAlertThreshold] = useState('100');
   const [alertOperator, setAlertOperator] = useState('gt');
   const [alertInterval, setAlertInterval] = useState(60);
@@ -383,7 +384,7 @@ function App() {
 
   async function saveAlert() {
     const saved = await apiPost<AlertRule[]>('/api/alerts/rules', {
-      id: null,
+      id: editingAlertId || null,
       name: alertName,
       query: queryPayload(),
       condition: { operator: alertOperator, threshold: Number(alertThreshold) },
@@ -392,6 +393,21 @@ function App() {
       contactEndpointId: selectedContact || null
     });
     setAlertRules((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    if (saved[0]) setEditingAlertId(saved[0].id);
+    loadAuditEvents().catch(() => undefined);
+  }
+
+  async function toggleAlert(rule: AlertRule) {
+    const saved = await apiPost<AlertRule[]>('/api/alerts/rules', {
+      id: rule.id,
+      name: rule.name,
+      query: rule.query,
+      condition: rule.condition || { operator: 'gt', threshold: 0 },
+      intervalSeconds: rule.interval_seconds || 60,
+      enabled: !rule.enabled,
+      contactEndpointId: rule.contact_endpoint_id || null
+    });
+    setAlertRules((current) => current.map((item) => item.id === rule.id ? (saved[0] || item) : item));
     loadAuditEvents().catch(() => undefined);
   }
 
@@ -488,6 +504,37 @@ function App() {
     loadData(nextQuery).catch((err) => setError(err.message));
   }
 
+  function newAlertRule() {
+    setEditingAlertId('');
+    setAlertName('High signal volume');
+    setAlertOperator('gt');
+    setAlertThreshold('100');
+    setAlertInterval(60);
+    setAlertEnabled(true);
+    setSelectedContact('');
+    setAlertPreview('');
+  }
+
+  function openAlertRule(rule: AlertRule) {
+    setEditingAlertId(rule.id);
+    setAlertName(rule.name);
+    setAlertOperator(rule.condition?.operator || 'gt');
+    setAlertThreshold(String(rule.condition?.threshold ?? 0));
+    setAlertInterval(rule.interval_seconds || 60);
+    setAlertEnabled(rule.enabled);
+    setSelectedContact(rule.contact_endpoint_id || '');
+    setAlertPreview('');
+    loadAlertRuleQuery(rule);
+  }
+
+  function loadAlertRuleQuery(rule: AlertRule) {
+    const savedQueryPayload = editableQuery(rule.query as Partial<QueryState>);
+    if (!savedQueryPayload.dataset) return;
+    const nextQuery = { ...query, ...savedQueryPayload } as QueryState;
+    updateQuery(nextQuery);
+    loadData(nextQuery).catch((err) => setError(err.message));
+  }
+
   function openPanel(panel: DashboardChart) {
     setPanelTitle(panel.title || defaultPanelTitle());
     setPanelVisualization((panel.visualization?.type as VisualizationType) || 'line');
@@ -578,7 +625,7 @@ function App() {
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
     { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
-    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
+    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onSave={saveContact} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },

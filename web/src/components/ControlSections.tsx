@@ -416,6 +416,7 @@ export function AlertsSection(props: {
   user: Principal | null;
   alertRules: AlertRule[];
   contacts: ContactEndpoint[];
+  editingAlertId: string;
   alertName: string;
   alertThreshold: string;
   alertOperator: string;
@@ -430,11 +431,16 @@ export function AlertsSection(props: {
   onInterval: (value: number) => void;
   onEnabled: (value: boolean) => void;
   onContact: (value: string) => void;
+  onNew: () => void;
+  onOpen: (rule: AlertRule) => void;
+  onLoadQuery: (rule: AlertRule) => void;
+  onToggle: (rule: AlertRule) => void;
   onTest: () => void;
   onSave: () => void;
 }) {
   return (
     <Section title="Alerts">
+      {props.editingAlertId && <Tag color="blue">Editing existing rule</Tag>}
       <Field label="Rule"><Input value={props.alertName} onChange={(event) => props.onName(event.target.value)} /></Field>
       <Field label="Query"><Tag>{props.queryMode === 'sql' ? 'Current SQL query' : 'Current builder query'}</Tag></Field>
       <Field label="Condition">
@@ -462,22 +468,52 @@ export function AlertsSection(props: {
         </Select>
       </Field>
       {props.alertPreview && <Alert type={props.alertPreview.startsWith('Firing') ? 'warning' : 'success'} showIcon message={props.alertPreview} />}
-      <Flex gap={8}>
+      <Flex gap={8} wrap="wrap">
+        <Button onClick={props.onNew}>New</Button>
         <Button disabled={!props.user} onClick={props.onTest}>Test</Button>
-        <Button icon={<SaveOutlined />} disabled={!props.user} onClick={props.onSave}>Save rule</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user} onClick={props.onSave}>{props.editingAlertId ? 'Update rule' : 'Save rule'}</Button>
       </Flex>
-      <ActionList items={props.alertRules} empty="No alert rules" render={(rule) => (
-        <Button block key={rule.id} onClick={() => {
-          props.onName(rule.name);
-          props.onOperator(rule.condition?.operator || 'gt');
-          props.onThreshold(String(rule.condition?.threshold ?? 0));
-          props.onInterval(rule.interval_seconds || 60);
-          props.onEnabled(rule.enabled);
-          props.onContact(rule.contact_endpoint_id || '');
-        }}>{rule.name}</Button>
+      <ActionList items={props.alertRules} empty="No alert rules" list render={(rule) => (
+        <List.Item
+          key={rule.id}
+          actions={[
+            <Button key="edit" size="small" onClick={() => props.onOpen(rule)}>Edit</Button>,
+            <Button key="load" size="small" onClick={() => props.onLoadQuery(rule)}>Load query</Button>,
+            <Button key="toggle" size="small" onClick={() => props.onToggle(rule)}>{rule.enabled ? 'Disable' : 'Enable'}</Button>
+          ]}
+        >
+          <List.Item.Meta
+            title={<Flex gap={6} align="center" wrap="wrap"><span>{rule.name}</span><Tag color={rule.enabled ? 'green' : undefined}>{rule.enabled ? 'enabled' : 'disabled'}</Tag></Flex>}
+            description={`${describeAlertCondition(rule)} - every ${rule.interval_seconds || 60}s - ${describeQueryMode(rule.query)}`}
+          />
+        </List.Item>
       )} />
     </Section>
   );
+}
+
+function describeAlertCondition(rule: AlertRule): string {
+  return `value ${operatorSymbol(rule.condition?.operator || 'gt')} ${rule.condition?.threshold ?? 0}`;
+}
+
+function operatorSymbol(operator: string): string {
+  switch (operator) {
+    case 'gte':
+      return '>=';
+    case 'lt':
+      return '<';
+    case 'lte':
+      return '<=';
+    case 'eq':
+      return '=';
+    default:
+      return '>';
+  }
+}
+
+function describeQueryMode(query: unknown): string {
+  if (query && typeof query === 'object' && 'mode' in query && (query as { mode?: unknown }).mode === 'sql') return 'SQL';
+  return 'Builder';
 }
 
 export function ContactsSection(props: {
