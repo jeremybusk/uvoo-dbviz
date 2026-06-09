@@ -40,7 +40,7 @@ import {
   UserProfile,
   Principal
 } from '../api';
-import { QueryState, VisualizationType } from '../types';
+import { QueryState, RelativeRange, RelativeRangeUnit, VisualizationType } from '../types';
 
 type Role = 'owner' | 'admin' | 'editor' | 'viewer';
 
@@ -153,10 +153,11 @@ export function QuerySection(props: {
   query: QueryState;
   dataset?: Dataset;
   dataSources: DataSource[];
+  relativeRange: RelativeRange;
   onQuery: (query: QueryState) => void;
   onSource: (source: DataSource) => void;
   onRun: () => void;
-  onLastHour: () => void;
+  onRelativeRange: (value: number, unit: RelativeRangeUnit) => void;
 }) {
   const q = props.query;
   return (
@@ -201,6 +202,29 @@ export function QuerySection(props: {
           {props.dataset?.aggregations.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
         </Select>
       </Field>
+      <Field label="Last">
+        <Space.Compact className="full relative-range">
+          <InputNumber
+            className="relative-range-value"
+            min={1}
+            max={999}
+            value={props.relativeRange.value}
+            onChange={(value) => props.onRelativeRange(Number(value || 1), props.relativeRange.unit)}
+          />
+          <Select
+            className="relative-range-unit"
+            value={props.relativeRange.unit}
+            onChange={(unit: RelativeRangeUnit) => props.onRelativeRange(props.relativeRange.value, unit)}
+          >
+            <Select.Option value="minutes">minutes</Select.Option>
+            <Select.Option value="hours">hours</Select.Option>
+            <Select.Option value="days">days</Select.Option>
+            <Select.Option value="weeks">weeks</Select.Option>
+            <Select.Option value="months">months</Select.Option>
+            <Select.Option value="years">years</Select.Option>
+          </Select>
+        </Space.Compact>
+      </Field>
       <Field label="From"><Input type="datetime-local" value={q.from} onChange={(event) => props.onQuery({ ...q, from: event.target.value })} /></Field>
       <Field label="To"><Input type="datetime-local" value={q.to} onChange={(event) => props.onQuery({ ...q, to: event.target.value })} /></Field>
       <Field label="Search">
@@ -217,7 +241,6 @@ export function QuerySection(props: {
         <InputNumber className="full" min={10} max={1000} value={q.limit} onChange={(value) => props.onQuery({ ...q, limit: Number(value || 100) })} />
       </Field>
       <Flex gap={8}>
-        <Button onClick={props.onLastHour}>Last hour</Button>
         <Button type="primary" icon={<PlayCircleOutlined />} disabled={!props.user} onClick={props.onRun}>Run</Button>
       </Flex>
     </Section>

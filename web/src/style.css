@@ -109,6 +109,15 @@ h2.ant-typography {
   width: 96px;
 }
 
+.relative-range-value {
+  width: 92px;
+}
+
+.relative-range-unit {
+  min-width: 118px;
+  flex: 1 1 auto;
+}
+
 .chart {
   min-height: 520px;
   border: 1px solid rgba(127, 127, 127, 0.22);

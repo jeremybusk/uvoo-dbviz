@@ -50,7 +50,7 @@ import {
   SavedQueriesSection,
   SourceSection
 } from './components/ControlSections';
-import { QueryState, ThemeMode, VisualizationType } from './types';
+import { QueryState, RelativeRange, RelativeRangeUnit, ThemeMode, VisualizationType } from './types';
 import 'antd/dist/reset.css';
 import './style.css';
 
@@ -105,6 +105,7 @@ function App() {
   const [contactTarget, setContactTarget] = useState('');
   const [contactKind, setContactKind] = useState<ContactEndpoint['kind']>('webhook');
   const [selectedContact, setSelectedContact] = useState('');
+  const [relativeRange, setRelativeRange] = useState<RelativeRange>({ value: 1, unit: 'hours' });
   const [query, setQuery] = useState<QueryState>(() => {
     const to = new Date();
     const from = new Date(to.getTime() - 60 * 60 * 1000);
@@ -451,9 +452,11 @@ function App() {
     return { ...query, sourceId: query.sourceId || '', from: new Date(query.from).toISOString(), to: new Date(query.to).toISOString() };
   }
 
-  function setLastHour() {
+  function applyRelativeRange(value: number, unit: RelativeRangeUnit) {
+    const nextRange = { value: Math.max(1, Math.trunc(value || 1)), unit };
     const to = new Date();
-    const from = new Date(to.getTime() - 60 * 60 * 1000);
+    const from = subtractRelativeRange(to, nextRange);
+    setRelativeRange(nextRange);
     setQuery((current) => ({ ...current, from: toInput(from), to: toInput(to) }));
   }
 
@@ -483,7 +486,7 @@ function App() {
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} /> },
-    { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} onQuery={setQuery} onSource={fillDataSource} onRun={loadData} onLastHour={setLastHour} /> },
+    { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={setQuery} onSource={fillDataSource} onRun={loadData} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
     { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
@@ -630,6 +633,30 @@ function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {
     if (!Number.isNaN(to.getTime())) next.to = toInput(to);
   }
   return next;
+}
+
+function subtractRelativeRange(to: Date, range: RelativeRange): Date {
+  const from = new Date(to);
+  switch (range.unit) {
+    case 'minutes':
+      from.setMinutes(from.getMinutes() - range.value);
+      return from;
+    case 'hours':
+      from.setHours(from.getHours() - range.value);
+      return from;
+    case 'days':
+      from.setDate(from.getDate() - range.value);
+      return from;
+    case 'weeks':
+      from.setDate(from.getDate() - range.value * 7);
+      return from;
+    case 'months':
+      from.setMonth(from.getMonth() - range.value);
+      return from;
+    case 'years':
+      from.setFullYear(from.getFullYear() - range.value);
+      return from;
+  }
 }
 
 function toInput(date: Date): string {

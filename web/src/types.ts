@@ -2,6 +2,13 @@ export type VisualizationType = 'line' | 'bar' | 'area';
 
 export type ThemeMode = 'light' | 'dark';
 
+export type RelativeRangeUnit = 'minutes' | 'hours' | 'days' | 'weeks' | 'months' | 'years';
+
+export type RelativeRange = {
+  value: number;
+  unit: RelativeRangeUnit;
+};
+
 export type QueryState = {
   dataset: string;
   sourceId: string;
