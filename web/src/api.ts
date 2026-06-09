@@ -202,6 +202,7 @@ export type TenantInvite = {
 
 const tokenKey = 'uvoo-dbviz-token';
 const tenantKey = 'uvoo-dbviz-active-tenant';
+const devAuthPausedKey = 'uvoo-dbviz-dev-auth-paused';
 
 export function getToken(): string {
   const legacy = localStorage.getItem(tokenKey);
@@ -217,6 +218,18 @@ export function setToken(token: string) {
 export function clearToken() {
   sessionStorage.removeItem(tokenKey);
   localStorage.removeItem(tokenKey);
+}
+
+export function isDevAuthPaused(): boolean {
+  return sessionStorage.getItem(devAuthPausedKey) === 'true';
+}
+
+export function pauseDevAuth() {
+  sessionStorage.setItem(devAuthPausedKey, 'true');
+}
+
+export function resumeDevAuth() {
+  sessionStorage.removeItem(devAuthPausedKey);
 }
 
 export function getActiveTenant(): string {

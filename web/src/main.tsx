@@ -26,7 +26,10 @@ import {
   clearToken,
   getActiveTenant,
   getToken,
+  isDevAuthPaused,
+  pauseDevAuth,
   randomVerifier,
+  resumeDevAuth,
   setActiveTenant as storeActiveTenant,
   setToken,
   sha256base64url
@@ -126,12 +129,8 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (!config?.devMode || user) return;
-    apiGet<Principal>('/api/me').then((principal) => {
-      setUser(principal);
-      if (!getActiveTenant()) selectTenant(principal.tenantId);
-      apiPost('/api/session/sync', {}).then(() => loadAccessState()).catch(() => undefined);
-    }).catch(() => undefined);
+    if (!config?.devMode || user || isDevAuthPaused()) return;
+    devLogin();
   }, [config, user]);
 
   const dataset = useMemo(() => config?.datasets.find((item) => item.id === query.dataset), [config, query.dataset]);
@@ -163,6 +162,7 @@ function App() {
     });
     const token = tokens.id_token || tokens.access_token;
     if (!token) throw new Error('OIDC token response did not include a usable token');
+    resumeDevAuth();
     setToken(token);
     history.replaceState(null, '', location.pathname);
     const principal = await apiGet<Principal>('/api/me');
@@ -192,6 +192,14 @@ function App() {
       state
     });
     location.href = `${discovery.authorizationEndpoint}?${params.toString()}`;
+  }
+
+  async function devLogin() {
+    resumeDevAuth();
+    const principal = await apiGet<Principal>('/api/me');
+    setUser(principal);
+    if (!getActiveTenant()) selectTenant(principal.tenantId);
+    apiPost('/api/session/sync', {}).then(() => loadAccessState()).catch(() => undefined);
   }
 
   async function loadData() {
@@ -392,6 +400,7 @@ function App() {
 
   function signOut() {
     clearToken();
+    pauseDevAuth();
     storeActiveTenant('');
     setUser(null);
     setProfile(null);
@@ -462,6 +471,7 @@ function App() {
   }
 
   function saveToken() {
+    resumeDevAuth();
     setToken(tokenInput.trim());
     apiGet<Principal>('/api/me').then((principal) => {
       setUser(principal);
@@ -471,7 +481,7 @@ function App() {
   }
 
   const controlItems = [
-    { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onSelectTenant={selectTenant} onSignOut={signOut} /> },
+    { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} /> },
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} onQuery={setQuery} onSource={fillDataSource} onRun={loadData} onLastHour={setLastHour} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },

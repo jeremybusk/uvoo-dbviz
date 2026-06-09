@@ -54,6 +54,7 @@ export function AccessSection(props: {
   onTokenInput: (value: string) => void;
   onLogin: (provider: Provider) => void;
   onSaveToken: () => void;
+  onDevLogin: () => void;
   onSelectTenant: (tenant: string) => void;
   onSignOut: () => void;
 }) {
@@ -98,6 +99,11 @@ export function AccessSection(props: {
         <Button icon={<CheckCircleOutlined />} onClick={props.onSaveToken}>
           Use token
         </Button>
+        {props.config?.devMode && (
+          <Button onClick={props.onDevLogin}>
+            Use development login
+          </Button>
+        )}
       </Space>
     </Section>
   );
