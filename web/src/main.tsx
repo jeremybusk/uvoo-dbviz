@@ -50,7 +50,7 @@ import {
   SavedQueriesSection,
   SourceSection
 } from './components/ControlSections';
-import { QueryState, RelativeRange, RelativeRangeUnit, ThemeMode, VisualizationType } from './types';
+import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, ThemeMode, VisualizationType } from './types';
 import 'antd/dist/reset.css';
 import './style.css';
 
@@ -58,9 +58,10 @@ const { Content, Sider } = Layout;
 const Chart = React.lazy(() => import('./components/Chart').then((module) => ({ default: module.Chart })));
 const primaryColor = '#2563eb';
 const secondaryColor = '#64748b';
+const themeStorageKey = 'uvoo-dbviz-theme';
 
 function App() {
-  const [themeMode, setThemeMode] = useState<ThemeMode>('light');
+  const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [user, setUser] = useState<Principal | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -135,6 +136,7 @@ function App() {
   }, [config, user]);
 
   const dataset = useMemo(() => config?.datasets.find((item) => item.id === query.dataset), [config, query.dataset]);
+  const jwtClaims = useMemo(() => decodeJwtClaims(getToken()), [user]);
 
   useEffect(() => {
     if (!config || !user) return;
@@ -452,6 +454,11 @@ function App() {
     return { ...query, sourceId: query.sourceId || '', from: new Date(query.from).toISOString(), to: new Date(query.to).toISOString() };
   }
 
+  function changeTheme(nextTheme: ThemeMode) {
+    setThemeMode(nextTheme);
+    writeThemePreference(nextTheme);
+  }
+
   function applyRelativeRange(value: number, unit: RelativeRangeUnit) {
     const nextRange = { value: Math.max(1, Math.trunc(value || 1)), unit };
     const to = new Date();
@@ -484,7 +491,7 @@ function App() {
   }
 
   const controlItems = [
-    { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
+    { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} jwtClaims={jwtClaims} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} /> },
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={setQuery} onSource={fillDataSource} onRun={loadData} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
@@ -531,7 +538,7 @@ function App() {
                 checkedChildren={<MoonOutlined />}
                 unCheckedChildren={<BulbOutlined />}
                 checked={themeMode === 'dark'}
-                onChange={(checked) => setThemeMode(checked ? 'dark' : 'light')}
+                onChange={(checked) => changeTheme(checked ? 'dark' : 'light')}
               />
             </Flex>
             <ControlSections items={controlItems} />
@@ -656,6 +663,37 @@ function subtractRelativeRange(to: Date, range: RelativeRange): Date {
     case 'years':
       from.setFullYear(from.getFullYear() - range.value);
       return from;
+  }
+}
+
+function decodeJwtClaims(token: string): JwtClaims | null {
+  const [, payload] = token.split('.');
+  if (!payload) return null;
+  try {
+    const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, '=');
+    const json = decodeURIComponent(Array.from(atob(padded), (char) => `%${char.charCodeAt(0).toString(16).padStart(2, '0')}`).join(''));
+    const claims = JSON.parse(json);
+    return claims && typeof claims === 'object' && !Array.isArray(claims) ? claims as JwtClaims : null;
+  } catch {
+    return null;
+  }
+}
+
+function readThemePreference(): ThemeMode {
+  try {
+    const stored = localStorage.getItem(themeStorageKey);
+    return stored === 'light' || stored === 'dark' ? stored : 'dark';
+  } catch {
+    return 'dark';
+  }
+}
+
+function writeThemePreference(nextTheme: ThemeMode) {
+  try {
+    localStorage.setItem(themeStorageKey, nextTheme);
+  } catch {
+    return;
   }
 }
 

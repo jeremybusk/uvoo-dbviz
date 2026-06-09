@@ -19,7 +19,7 @@ import {
   PlayCircleOutlined,
   SaveOutlined
 } from '@ant-design/icons';
-import type React from 'react';
+import React from 'react';
 import {
   AlertIncident,
   AlertNotification,
@@ -40,7 +40,7 @@ import {
   UserProfile,
   Principal
 } from '../api';
-import { QueryState, RelativeRange, RelativeRangeUnit, VisualizationType } from '../types';
+import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, VisualizationType } from '../types';
 
 type Role = 'owner' | 'admin' | 'editor' | 'viewer';
 
@@ -50,6 +50,7 @@ export function AccessSection(props: {
   profile: UserProfile | null;
   activeTenant: string;
   memberships: TenantMembership[];
+  jwtClaims: JwtClaims | null;
   tokenInput: string;
   onTokenInput: (value: string) => void;
   onLogin: (provider: Provider) => void;
@@ -59,14 +60,29 @@ export function AccessSection(props: {
   onSignOut: () => void;
 }) {
   const tenantValue = props.activeTenant || props.user?.tenantId || '';
+  const claimEntries = props.jwtClaims ? orderedClaimEntries(props.jwtClaims) : [];
   if (props.user) {
     return (
       <Section title="Access">
         <Space direction="vertical" size={8} className="full">
           <Typography.Text strong>{props.user.name || props.user.email}</Typography.Text>
+          {props.user.email && props.user.email !== props.user.name && (
+            <Typography.Text type="secondary">{props.user.email}</Typography.Text>
+          )}
           <Typography.Text type="secondary">
             {props.profile?.role || 'member'} in {props.profile?.tenant_slug || tenantValue}
           </Typography.Text>
+          <Flex gap={6} wrap="wrap">
+            <Tag>{props.user.provider || props.profile?.provider || 'auth'}</Tag>
+            <Tag>{props.profile?.role || 'member'}</Tag>
+            <Tag>{tenantValue}</Tag>
+          </Flex>
+          <div className="identity-grid">
+            <span>Subject</span>
+            <code>{props.user.subject || '-'}</code>
+            <span>Tenant</span>
+            <code>{tenantValue || '-'}</code>
+          </div>
           <Select value={tenantValue} onChange={props.onSelectTenant}>
             {props.memberships.length === 0 && <Select.Option value={tenantValue}>{tenantValue}</Select.Option>}
             {props.memberships.map((membership) => (
@@ -75,6 +91,28 @@ export function AccessSection(props: {
               </Select.Option>
             ))}
           </Select>
+          {props.jwtClaims ? (
+            <Collapse
+              size="small"
+              ghost
+              items={[{
+                key: 'jwt',
+                label: 'JWT claims',
+                children: (
+                  <div className="claims-grid">
+                    {claimEntries.map(([key, value]) => (
+                      <React.Fragment key={key}>
+                        <span>{key}</span>
+                        <code>{formatClaimValue(key, value)}</code>
+                      </React.Fragment>
+                    ))}
+                  </div>
+                )
+              }]}
+            />
+          ) : (
+            <Typography.Text type="secondary">No browser JWT stored; using development auth.</Typography.Text>
+          )}
           <Button onClick={props.onSignOut}>Sign out</Button>
         </Space>
       </Section>
@@ -107,6 +145,25 @@ export function AccessSection(props: {
       </Space>
     </Section>
   );
+}
+
+function orderedClaimEntries(claims: JwtClaims): [string, unknown][] {
+  const preferred = ['iss', 'sub', 'email', 'name', 'preferred_username', 'tenant_id', 'role', 'roles', 'aud', 'azp', 'exp', 'iat', 'nbf'];
+  return Object.entries(claims).sort(([left], [right]) => {
+    const leftIndex = preferred.indexOf(left);
+    const rightIndex = preferred.indexOf(right);
+    if (leftIndex !== -1 || rightIndex !== -1) return (leftIndex === -1 ? preferred.length : leftIndex) - (rightIndex === -1 ? preferred.length : rightIndex);
+    return left.localeCompare(right);
+  });
+}
+
+function formatClaimValue(key: string, value: unknown): string {
+  if ((key === 'exp' || key === 'iat' || key === 'nbf') && typeof value === 'number') {
+    return `${new Date(value * 1000).toLocaleString()} (${value})`;
+  }
+  if (value === null || value === undefined) return '-';
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return String(value);
+  return JSON.stringify(value);
 }
 
 export function SourceSection(props: {

@@ -109,6 +109,27 @@ h2.ant-typography {
   width: 96px;
 }
 
+.identity-grid,
+.claims-grid {
+  display: grid;
+  grid-template-columns: minmax(72px, max-content) minmax(0, 1fr);
+  gap: 6px 10px;
+  width: 100%;
+  font-size: 12px;
+}
+
+.identity-grid > span,
+.claims-grid > span {
+  color: var(--app-secondary);
+}
+
+.identity-grid code,
+.claims-grid code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
 .relative-range-value {
   width: 92px;
 }

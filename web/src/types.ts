@@ -9,6 +9,8 @@ export type RelativeRange = {
   unit: RelativeRangeUnit;
 };
 
+export type JwtClaims = Record<string, unknown>;
+
 export type QueryState = {
   dataset: string;
   sourceId: string;
