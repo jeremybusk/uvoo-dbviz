@@ -38,6 +38,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/me", a.requireAuth(a.me))
 	a.mux.HandleFunc("POST /api/session/sync", a.requireAuth(a.syncSession))
 	a.mux.HandleFunc("GET /api/session/profile", a.requireAuth(a.sessionProfile))
+	a.mux.HandleFunc("GET /api/session/memberships", a.requireAuth(a.listMemberships))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
 	a.mux.HandleFunc("GET /api/dashboards", a.requireAuth(a.listDashboards))
 	a.mux.HandleFunc("POST /api/dashboards", a.requireAuth(a.saveDashboard))
@@ -46,8 +47,11 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
 	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
 	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
+	a.mux.HandleFunc("GET /api/members", a.requireAuth(a.listMembers))
+	a.mux.HandleFunc("POST /api/members/role", a.requireAuth(a.updateMemberRole))
 	a.mux.HandleFunc("GET /api/invites", a.requireAuth(a.listInvites))
 	a.mux.HandleFunc("POST /api/invites", a.requireAuth(a.createInvite))
+	a.mux.HandleFunc("POST /api/invites/accept", a.requireAuth(a.acceptInvite))
 	a.mux.HandleFunc("/", a.static)
 }
 
@@ -109,7 +113,7 @@ func (a *App) syncSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) sessionProfile(w http.ResponseWriter, r *http.Request) {
-	profile, err := a.state.CurrentUserProfile(r.Context(), principal(r), r.Header.Get("Authorization"))
+	profile, err := a.state.CurrentUserProfile(r.Context(), statePrincipal(r), r.Header.Get("Authorization"))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -117,7 +121,23 @@ func (a *App) sessionProfile(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, profile)
 }
 
+func (a *App) listMemberships(w http.ResponseWriter, r *http.Request) {
+	user := principal(r)
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "list_user_memberships", map[string]any{
+		"user_subject":  user.Subject,
+		"user_provider": user.Provider,
+	}, user, r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
 func (a *App) query(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor", "viewer") {
+		return
+	}
 	var req clickhouse.QueryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -128,7 +148,7 @@ func (a *App) query(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("unknown dataset"))
 		return
 	}
-	sql, err := clickhouse.BuildTimeseriesSQL(req, ds, principal(r).TenantID, a.cfg.ClickHouse.MaxRows)
+	sql, err := clickhouse.BuildTimeseriesSQL(req, ds, statePrincipal(r).TenantID, a.cfg.ClickHouse.MaxRows)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -144,7 +164,7 @@ func (a *App) query(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) listDashboards(w http.ResponseWriter, r *http.Request) {
 	var rows []map[string]any
-	if err := a.state.RPC(r.Context(), "list_dashboards", map[string]any{}, principal(r), r.Header.Get("Authorization"), &rows); err != nil {
+	if err := a.state.RPC(r.Context(), "list_dashboards", map[string]any{}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -177,7 +197,7 @@ func (a *App) saveDashboard(w http.ResponseWriter, r *http.Request) {
 		"dashboard_id":     dashboardID,
 		"dashboard_name":   req.Name,
 		"dashboard_layout": req.Layout,
-	}, principal(r), r.Header.Get("Authorization"), &rows)
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -187,7 +207,7 @@ func (a *App) saveDashboard(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) listAlertRules(w http.ResponseWriter, r *http.Request) {
 	var rows []map[string]any
-	if err := a.state.RPC(r.Context(), "list_alert_rules", map[string]any{}, principal(r), r.Header.Get("Authorization"), &rows); err != nil {
+	if err := a.state.RPC(r.Context(), "list_alert_rules", map[string]any{}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -230,7 +250,7 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("unknown alert dataset"))
 		return
 	}
-	if _, err := clickhouse.BuildTimeseriesSQL(alertQuery, ds, principal(r).TenantID, a.cfg.ClickHouse.MaxRows); err != nil {
+	if _, err := clickhouse.BuildTimeseriesSQL(alertQuery, ds, statePrincipal(r).TenantID, a.cfg.ClickHouse.MaxRows); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -260,7 +280,7 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		"alert_interval":   req.IntervalSeconds,
 		"alert_enabled":    req.Enabled,
 		"alert_contact_id": contactID,
-	}, principal(r), r.Header.Get("Authorization"), &rows)
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -284,7 +304,7 @@ func numericValue(value any) (float64, bool) {
 
 func (a *App) listContactEndpoints(w http.ResponseWriter, r *http.Request) {
 	var rows []map[string]any
-	if err := a.state.RPC(r.Context(), "list_contact_endpoints", map[string]any{}, principal(r), r.Header.Get("Authorization"), &rows); err != nil {
+	if err := a.state.RPC(r.Context(), "list_contact_endpoints", map[string]any{}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -321,7 +341,7 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		"contact_kind":   req.Kind,
 		"contact_target": req.Target,
 		"contact_config": req.Config,
-	}, principal(r), r.Header.Get("Authorization"), &rows)
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -330,7 +350,7 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) listAlertIncidents(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.state.ListAlertIncidents(r.Context(), principal(r), r.Header.Get("Authorization"), 100)
+	rows, err := a.state.ListAlertIncidents(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), 100)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
@@ -343,7 +363,7 @@ func (a *App) listInvites(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var rows []map[string]any
-	if err := a.state.RPC(r.Context(), "list_tenant_invites", map[string]any{}, principal(r), r.Header.Get("Authorization"), &rows); err != nil {
+	if err := a.state.RPC(r.Context(), "list_tenant_invites", map[string]any{}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
@@ -370,7 +390,7 @@ func (a *App) createInvite(w http.ResponseWriter, r *http.Request) {
 	if req.Role == "" {
 		req.Role = "viewer"
 	}
-	user := principal(r)
+	user := statePrincipal(r)
 	var rows []map[string]any
 	if err := a.state.RPC(r.Context(), "create_tenant_invite", map[string]any{
 		"actor_subject":  user.Subject,
@@ -384,8 +404,84 @@ func (a *App) createInvite(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+func (a *App) acceptInvite(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.Token = strings.TrimSpace(req.Token)
+	if req.Token == "" {
+		writeError(w, http.StatusBadRequest, errors.New("invite token is required"))
+		return
+	}
+	user := principal(r)
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "accept_tenant_invite", map[string]any{
+		"invite_token":  req.Token,
+		"user_subject":  user.Subject,
+		"user_email":    user.Email,
+		"user_name":     user.Name,
+		"user_provider": user.Provider,
+	}, user, r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) listMembers(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	user := statePrincipal(r)
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "list_tenant_members", map[string]any{
+		"actor_subject":  user.Subject,
+		"actor_provider": user.Provider,
+	}, user, r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) updateMemberRole(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	var req struct {
+		ID   string `json:"id"`
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	req.Role = strings.TrimSpace(req.Role)
+	if req.ID == "" || req.Role == "" {
+		writeError(w, http.StatusBadRequest, errors.New("member id and role are required"))
+		return
+	}
+	user := statePrincipal(r)
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "update_tenant_member_role", map[string]any{
+		"actor_subject":  user.Subject,
+		"actor_provider": user.Provider,
+		"member_id":      req.ID,
+		"member_role":    req.Role,
+	}, user, r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
 func (a *App) requireStateRole(w http.ResponseWriter, r *http.Request, allowed ...string) bool {
-	ok, err := a.state.CurrentUserHasRole(r.Context(), principal(r), r.Header.Get("Authorization"), allowed)
+	ok, err := a.state.CurrentUserHasRole(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), allowed)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
 		return false
@@ -403,6 +499,12 @@ func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, err)
 			return
+		}
+		if activeTenant := strings.TrimSpace(r.Header.Get("X-DBViz-Tenant")); activeTenant != "" {
+			if user.Headers == nil {
+				user.Headers = map[string]string{}
+			}
+			user.Headers["ActiveTenantID"] = activeTenant
 		}
 		ctx := r.Context()
 		ctx = withPrincipal(ctx, user)

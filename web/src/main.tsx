@@ -12,11 +12,16 @@ import {
   PublicConfig,
   QueryRow,
   TenantInvite,
+  TenantMember,
+  TenantMembership,
+  UserProfile,
   apiGet,
   apiPost,
   clearToken,
+  getActiveTenant,
   getToken,
   randomVerifier,
+  setActiveTenant as storeActiveTenant,
   setToken,
   sha256base64url
 } from './api';
@@ -34,6 +39,10 @@ type QueryState = {
 function App() {
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [user, setUser] = useState<Principal | null>(null);
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [activeTenant, setActiveTenantState] = useState(getActiveTenant());
+  const [memberships, setMemberships] = useState<TenantMembership[]>([]);
+  const [members, setMembers] = useState<TenantMember[]>([]);
   const [rows, setRows] = useState<QueryRow[]>([]);
   const [error, setError] = useState('');
   const [tokenInput, setTokenInput] = useState('');
@@ -45,6 +54,7 @@ function App() {
   const [invites, setInvites] = useState<TenantInvite[]>([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<TenantInvite['role']>('viewer');
+  const [inviteToken, setInviteToken] = useState('');
   const [alertName, setAlertName] = useState('High signal volume');
   const [alertThreshold, setAlertThreshold] = useState('100');
   const [contactName, setContactName] = useState('Primary webhook');
@@ -69,7 +79,8 @@ function App() {
     if (!getToken()) return;
     apiGet<Principal>('/api/me').then((principal) => {
       setUser(principal);
-      apiPost('/api/session/sync', {}).catch(() => undefined);
+      if (!getActiveTenant()) selectTenant(principal.tenantId);
+      apiPost('/api/session/sync', {}).then(() => loadAccessState()).catch(() => undefined);
     }).catch(() => clearToken());
   }, []);
 
@@ -77,7 +88,8 @@ function App() {
     if (!config?.devMode || user) return;
     apiGet<Principal>('/api/me').then((principal) => {
       setUser(principal);
-      apiPost('/api/session/sync', {}).catch(() => undefined);
+      if (!getActiveTenant()) selectTenant(principal.tenantId);
+      apiPost('/api/session/sync', {}).then(() => loadAccessState()).catch(() => undefined);
     }).catch(() => undefined);
   }, [config, user]);
 
@@ -85,10 +97,12 @@ function App() {
 
   useEffect(() => {
     if (!config || !user) return;
+    loadAccessState().catch((err) => setError(err.message));
     loadDashboards().catch((err) => setError(err.message));
     loadAlertState().catch((err) => setError(err.message));
     loadInvites().catch(() => undefined);
-  }, [config, user]);
+    loadMembers().catch(() => setMembers([]));
+  }, [config, user, activeTenant]);
 
   async function handleOIDCCallback() {
     const params = new URLSearchParams(location.search);
@@ -108,7 +122,9 @@ function App() {
     history.replaceState(null, '', location.pathname);
     const principal = await apiGet<Principal>('/api/me');
     setUser(principal);
+    if (!getActiveTenant()) selectTenant(principal.tenantId);
     await apiPost('/api/session/sync', {}).catch(() => undefined);
+    await loadAccessState().catch(() => undefined);
   }
 
   async function login(provider: Provider) {
@@ -149,6 +165,20 @@ function App() {
   async function loadDashboards() {
     const result = await apiGet<Dashboard[]>('/api/dashboards');
     setDashboards(result);
+  }
+
+  async function loadAccessState() {
+    const [nextMemberships, nextProfile] = await Promise.all([
+      apiGet<TenantMembership[]>('/api/session/memberships'),
+      apiGet<UserProfile>('/api/session/profile')
+    ]);
+    setMemberships(nextMemberships);
+    setProfile(nextProfile);
+  }
+
+  async function loadMembers() {
+    const result = await apiGet<TenantMember[]>('/api/members');
+    setMembers(result);
   }
 
   async function saveDashboard() {
@@ -223,6 +253,26 @@ function App() {
     setInviteEmail('');
   }
 
+  async function acceptInvite() {
+    const accepted = await apiPost<UserProfile[]>('/api/invites/accept', { token: inviteToken });
+    if (accepted[0]?.tenant_slug) {
+      selectTenant(accepted[0].tenant_slug);
+      setProfile(accepted[0]);
+    }
+    setInviteToken('');
+    await loadAccessState().catch(() => undefined);
+  }
+
+  async function updateMemberRole(member: TenantMember, role: TenantMember['role']) {
+    const saved = await apiPost<TenantMember[]>('/api/members/role', { id: member.id, role });
+    setMembers((current) => current.map((item) => item.id === member.id ? (saved[0] || item) : item));
+  }
+
+  function selectTenant(tenant: string) {
+    storeActiveTenant(tenant);
+    setActiveTenantState(tenant);
+  }
+
   function openDashboard(dashboard: Dashboard) {
     setDashboardName(dashboard.name);
     const savedQuery = dashboard.layout?.charts?.[0]?.query as Partial<QueryState> | undefined;
@@ -235,7 +285,8 @@ function App() {
     setToken(tokenInput.trim());
     apiGet<Principal>('/api/me').then((principal) => {
       setUser(principal);
-      apiPost('/api/session/sync', {}).catch(() => undefined);
+      if (!getActiveTenant()) selectTenant(principal.tenantId);
+      apiPost('/api/session/sync', {}).then(() => loadAccessState()).catch(() => undefined);
     }).catch((err) => setError(err.message));
   }
 
@@ -253,8 +304,16 @@ function App() {
         {user ? (
           <section className="panel compact">
             <strong>{user.name || user.email}</strong>
-            <span>{user.tenantId}</span>
-            <button onClick={() => { clearToken(); setUser(null); }}>Sign out</button>
+            <span>{profile?.role || 'member'} in {profile?.tenant_slug || activeTenant || user.tenantId}</span>
+            <select value={activeTenant || user.tenantId} onChange={(event) => selectTenant(event.target.value)}>
+              {memberships.length === 0 && <option value={activeTenant || user.tenantId}>{activeTenant || user.tenantId}</option>}
+              {memberships.map((membership) => (
+                <option key={membership.tenant_slug} value={membership.tenant_slug}>
+                  {membership.tenant_name} ({membership.role})
+                </option>
+              ))}
+            </select>
+            <button onClick={() => { clearToken(); storeActiveTenant(''); setUser(null); setProfile(null); }}>Sign out</button>
           </section>
         ) : (
           <section className="panel">
@@ -396,6 +455,11 @@ function App() {
         <section className="panel">
           <h2>Invites</h2>
           <label>
+            Accept token
+            <input value={inviteToken} onChange={(event) => setInviteToken(event.target.value)} />
+          </label>
+          <button disabled={!user || !inviteToken} onClick={acceptInvite}>Accept invite</button>
+          <label>
             Email
             <input value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
           </label>
@@ -410,7 +474,27 @@ function App() {
           <button disabled={!user || !inviteEmail} onClick={createInvite}>Create invite</button>
           <div className="dashboard-list">
             {invites.map((invite) => (
-              <button key={invite.id}>{invite.email} - {invite.role}</button>
+              <button key={invite.id}>{invite.email} - {invite.role}{invite.token ? ` - ${invite.token}` : ''}</button>
+            ))}
+          </div>
+        </section>
+
+        <section className="panel">
+          <h2>Members</h2>
+          <div className="member-list">
+            {members.map((member) => (
+              <div className="member" key={member.id}>
+                <div>
+                  <strong>{member.display_name || member.email}</strong>
+                  <small>{member.provider}</small>
+                </div>
+                <select value={member.role} onChange={(event) => updateMemberRole(member, event.target.value as TenantMember['role'])}>
+                  <option value="owner">Owner</option>
+                  <option value="admin">Admin</option>
+                  <option value="editor">Editor</option>
+                  <option value="viewer">Viewer</option>
+                </select>
+              </div>
             ))}
           </div>
         </section>

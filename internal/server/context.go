@@ -16,3 +16,11 @@ func principal(ctxCarrier interface{ Context() context.Context }) auth.Principal
 	value, _ := ctxCarrier.Context().Value(principalKey{}).(auth.Principal)
 	return value
 }
+
+func statePrincipal(ctxCarrier interface{ Context() context.Context }) auth.Principal {
+	user := principal(ctxCarrier)
+	if activeTenant := user.Headers["ActiveTenantID"]; activeTenant != "" {
+		user.TenantID = activeTenant
+	}
+	return user
+}

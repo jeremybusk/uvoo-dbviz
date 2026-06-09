@@ -38,6 +38,33 @@ export type Principal = {
   provider: string;
 };
 
+export type UserProfile = {
+  id: string;
+  tenant_id: string;
+  tenant_slug: string;
+  subject: string;
+  email: string;
+  display_name: string;
+  provider: string;
+  role: 'owner' | 'admin' | 'editor' | 'viewer';
+};
+
+export type TenantMembership = {
+  tenant_id: string;
+  tenant_slug: string;
+  tenant_name: string;
+  role: 'owner' | 'admin' | 'editor' | 'viewer';
+};
+
+export type TenantMember = {
+  id: string;
+  email: string;
+  display_name: string;
+  provider: string;
+  role: 'owner' | 'admin' | 'editor' | 'viewer';
+  created_at: string;
+};
+
 export type QueryRow = {
   ts: number;
   series: string;
@@ -101,6 +128,7 @@ export type TenantInvite = {
 };
 
 const tokenKey = 'uvoo-dbviz-token';
+const tenantKey = 'uvoo-dbviz-active-tenant';
 
 export function getToken(): string {
   return localStorage.getItem(tokenKey) || '';
@@ -114,10 +142,21 @@ export function clearToken() {
   localStorage.removeItem(tokenKey);
 }
 
+export function getActiveTenant(): string {
+  return localStorage.getItem(tenantKey) || '';
+}
+
+export function setActiveTenant(tenant: string) {
+  if (tenant) localStorage.setItem(tenantKey, tenant);
+  else localStorage.removeItem(tenantKey);
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const headers: Record<string, string> = {};
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  const tenant = getActiveTenant();
+  if (tenant) headers['X-DBViz-Tenant'] = tenant;
   const res = await fetch(path, { headers });
   if (!res.ok) throw new Error(await errorText(res));
   return res.json();
@@ -127,6 +166,8 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  const tenant = getActiveTenant();
+  if (tenant) headers['X-DBViz-Tenant'] = tenant;
   const res = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(await errorText(res));
   return res.json();

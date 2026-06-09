@@ -77,6 +77,10 @@ func (c *Client) RPC(ctx context.Context, name string, body any, user auth.Princ
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-DBViz-Tenant", user.TenantID)
+	req.Header.Set("X-DBViz-Subject", user.Subject)
+	req.Header.Set("X-DBViz-Provider", user.Provider)
+	req.Header.Set("X-DBViz-Email", user.Email)
 	if bearer != "" {
 		req.Header.Set("Authorization", bearer)
 	} else {

@@ -54,6 +54,14 @@ Write operations for dashboards, alert rules, and contact endpoints are checked
 against the synced PostgreSQL role. `owner`, `admin`, and `editor` can write;
 `viewer` can read. Tenant invite management is limited to `owner` and `admin`.
 
+Users can belong to a tenant even when their public IdP does not emit that
+tenant as a claim. Owners and admins create an invite, the invited user signs in
+with the matching email address, and `POST /api/invites/accept` attaches that
+identity to the invited tenant. The UI then sends `X-DBViz-Tenant` for the
+selected active tenant; the Go API forwards it to PostgREST with the verified
+subject/provider headers, and PostgreSQL only resolves the tenant when a
+matching membership exists.
+
 Run the OTel sample emitter after the stack is up:
 
 ```sh
@@ -105,8 +113,13 @@ Alert rule and contact management follows the same pattern:
 - `GET /api/alerts/contacts`
 - `POST /api/alerts/contacts`
 - `GET /api/alerts/incidents`
+- `GET /api/session/profile`
+- `GET /api/session/memberships`
+- `GET /api/members`
+- `POST /api/members/role`
 - `GET /api/invites`
 - `POST /api/invites`
+- `POST /api/invites/accept`
 
 ## Alerts
 

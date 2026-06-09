@@ -145,26 +145,60 @@ ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_incidents ENABLE ROW LEVEL SECURITY;
 
 CREATE OR REPLACE FUNCTION request_tenant_id() RETURNS uuid
-LANGUAGE sql STABLE AS $$
-    WITH claims AS (
-        SELECT
-            NULLIF(current_setting('request.jwt.claim.tenant_id', true), '') AS tenant_id_claim,
-            COALESCE(
-                NULLIF(current_setting('request.jwt.claim.tenant_key', true), ''),
-                NULLIF(current_setting('request.jwt.claim.tenant_slug', true), ''),
-                NULLIF(current_setting('request.jwt.claim.hd', true), ''),
-                NULLIF(current_setting('request.jwt.claim.tid', true), ''),
-                NULLIF(NULLIF(current_setting('request.headers', true), '')::json->>'x-dev-tenant', '')
-            ) AS tenant_slug_claim
-    )
-    SELECT CASE
-        WHEN tenant_id_claim ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
-            THEN tenant_id_claim::uuid
-        WHEN tenant_slug_claim IS NOT NULL
-            THEN (SELECT id FROM tenants WHERE slug = tenant_slug_claim)
-        ELSE NULL
-    END
-    FROM claims
+LANGUAGE plpgsql STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    request_headers jsonb;
+    tenant_id_claim text;
+    tenant_slug_claim text;
+    requested_subject text;
+    requested_provider text;
+    resolved_tenant_id uuid;
+BEGIN
+    request_headers := COALESCE(NULLIF(current_setting('request.headers', true), '')::jsonb, '{}'::jsonb);
+    tenant_id_claim := NULLIF(current_setting('request.jwt.claim.tenant_id', true), '');
+    tenant_slug_claim := COALESCE(
+        NULLIF(request_headers->>'x-dbviz-tenant', ''),
+        NULLIF(request_headers->>'x-dev-tenant', ''),
+        NULLIF(current_setting('request.jwt.claim.tenant_key', true), ''),
+        NULLIF(current_setting('request.jwt.claim.tenant_slug', true), ''),
+        NULLIF(current_setting('request.jwt.claim.hd', true), ''),
+        NULLIF(current_setting('request.jwt.claim.tid', true), '')
+    );
+    requested_subject := NULLIF(request_headers->>'x-dbviz-subject', '');
+    requested_provider := NULLIF(request_headers->>'x-dbviz-provider', '');
+
+    IF tenant_slug_claim ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+        resolved_tenant_id := tenant_slug_claim::uuid;
+    ELSIF tenant_id_claim ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
+        resolved_tenant_id := tenant_id_claim::uuid;
+    ELSIF tenant_slug_claim IS NOT NULL THEN
+        SELECT tenants.id INTO resolved_tenant_id
+        FROM tenants
+        WHERE tenants.slug = tenant_slug_claim;
+    END IF;
+
+    IF resolved_tenant_id IS NULL THEN
+        RETURN NULL;
+    END IF;
+
+    IF requested_subject IS NOT NULL AND requested_provider IS NOT NULL THEN
+        IF EXISTS (
+            SELECT 1
+            FROM users u
+            WHERE u.tenant_id = resolved_tenant_id
+              AND u.subject = requested_subject
+              AND u.provider = requested_provider
+        ) THEN
+            RETURN resolved_tenant_id;
+        END IF;
+        RETURN NULL;
+    END IF;
+
+    RETURN resolved_tenant_id;
+END;
 $$;
 
 DROP POLICY IF EXISTS tenant_self ON tenants;
@@ -550,6 +584,99 @@ $$;
 GRANT EXECUTE ON FUNCTION current_user_profile(text, text) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION current_user_has_role(text, text, text[]) TO dbviz_web;
 
+CREATE OR REPLACE FUNCTION list_user_memberships(user_subject text, user_provider text)
+RETURNS TABLE(tenant_id uuid, tenant_slug text, tenant_name text, role text)
+LANGUAGE sql STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+    SELECT t.id, t.slug, t.name, u.role
+    FROM users u
+    JOIN tenants t ON t.id = u.tenant_id
+    WHERE u.subject = user_subject
+      AND u.provider = user_provider
+    ORDER BY t.name;
+$$;
+
+CREATE OR REPLACE FUNCTION list_tenant_members(actor_subject text, actor_provider text)
+RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, created_at timestamptz)
+LANGUAGE plpgsql STABLE
+AS $$
+BEGIN
+    IF NOT current_user_has_role(actor_subject, actor_provider, ARRAY['owner', 'admin']) THEN
+        RAISE EXCEPTION 'insufficient role';
+    END IF;
+
+    RETURN QUERY
+    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.created_at
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+    ORDER BY u.created_at ASC;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION update_tenant_member_role(actor_subject text, actor_provider text, member_id uuid, member_role text)
+RETURNS TABLE(id uuid, email text, display_name text, provider text, role text, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    actor_role text;
+    target_role text;
+    owner_count integer;
+BEGIN
+    SELECT u.role INTO actor_role
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = actor_subject
+      AND u.provider = actor_provider;
+
+    IF actor_role NOT IN ('owner', 'admin') THEN
+        RAISE EXCEPTION 'insufficient role';
+    END IF;
+
+    IF member_role NOT IN ('owner', 'admin', 'editor', 'viewer') THEN
+        RAISE EXCEPTION 'unsupported member role: %', member_role;
+    END IF;
+
+    SELECT u.role INTO target_role
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.id = member_id;
+
+    IF target_role IS NULL THEN
+        RAISE EXCEPTION 'member is not available for tenant';
+    END IF;
+
+    IF (target_role = 'owner' OR member_role = 'owner') AND actor_role <> 'owner' THEN
+        RAISE EXCEPTION 'owner role changes require owner access';
+    END IF;
+
+    SELECT count(*) INTO owner_count
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.role = 'owner';
+
+    IF target_role = 'owner' AND member_role <> 'owner' AND owner_count <= 1 THEN
+        RAISE EXCEPTION 'cannot remove the last owner';
+    END IF;
+
+    UPDATE users
+    SET role = member_role
+    WHERE users.tenant_id = request_tenant_id()
+      AND users.id = member_id;
+
+    RETURN QUERY
+    SELECT u.id, u.email, u.display_name, u.provider, u.role, u.created_at
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.id = member_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_user_memberships(text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_tenant_members(text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION update_tenant_member_role(text, text, uuid, text) TO dbviz_web;
+
 CREATE OR REPLACE FUNCTION list_tenant_invites()
 RETURNS TABLE(id uuid, email text, role text, accepted_at timestamptz, expires_at timestamptz, created_at timestamptz)
 LANGUAGE sql STABLE
@@ -592,5 +719,65 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION accept_tenant_invite(invite_token text, user_subject text, user_email text, user_name text, user_provider text)
+RETURNS TABLE(id uuid, tenant_id uuid, tenant_slug text, subject text, email text, display_name text, provider text, role text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    invite_row tenant_invites%ROWTYPE;
+    saved_id uuid;
+BEGIN
+    IF invite_token IS NULL OR invite_token = '' THEN
+        RAISE EXCEPTION 'invite token is required';
+    END IF;
+    IF user_subject IS NULL OR user_subject = '' THEN
+        RAISE EXCEPTION 'user subject is required';
+    END IF;
+
+    SELECT i.* INTO invite_row
+    FROM tenant_invites i
+    WHERE i.token = invite_token
+      AND i.accepted_at IS NULL
+      AND i.expires_at > now();
+
+    IF invite_row.id IS NULL THEN
+        RAISE EXCEPTION 'invite is invalid or expired';
+    END IF;
+
+    IF lower(COALESCE(user_email, '')) <> lower(invite_row.email) THEN
+        RAISE EXCEPTION 'invite email does not match current user';
+    END IF;
+
+    INSERT INTO users (tenant_id, subject, email, display_name, provider, role)
+    VALUES (
+        invite_row.tenant_id,
+        user_subject,
+        lower(user_email),
+        COALESCE(user_name, ''),
+        COALESCE(NULLIF(user_provider, ''), 'unknown'),
+        invite_row.role
+    )
+    ON CONFLICT ON CONSTRAINT users_provider_subject_key DO UPDATE
+    SET tenant_id = EXCLUDED.tenant_id,
+        email = EXCLUDED.email,
+        display_name = EXCLUDED.display_name,
+        role = EXCLUDED.role
+    RETURNING users.id INTO saved_id;
+
+    UPDATE tenant_invites
+    SET accepted_at = now()
+    WHERE tenant_invites.id = invite_row.id;
+
+    RETURN QUERY
+    SELECT u.id, u.tenant_id, t.slug AS tenant_slug, u.subject, u.email, u.display_name, u.provider, u.role
+    FROM users u
+    JOIN tenants t ON t.id = u.tenant_id
+    WHERE u.id = saved_id;
+END;
+$$;
+
 GRANT EXECUTE ON FUNCTION list_tenant_invites() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION create_tenant_invite(text, text, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION accept_tenant_invite(text, text, text, text, text) TO dbviz_web;
