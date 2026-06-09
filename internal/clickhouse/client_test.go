@@ -127,6 +127,56 @@ func TestBuildEventsSQLRejectsInvalidEventColumn(t *testing.T) {
 	}
 }
 
+func TestBuildCustomSQLRequiresParameterizedTenantAndTime(t *testing.T) {
+	ds := config.Dataset{
+		ID:               "logs",
+		Table:            "otel_logs",
+		TimeColumn:       "timestamp",
+		TenantColumn:     "tenant_id",
+		MaxLookbackHours: 24,
+	}
+	built, err := BuildCustomSQL(QueryRequest{
+		Dataset: "logs",
+		From:    time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		To:      time.Date(2026, 1, 1, 1, 0, 0, 0, time.UTC),
+		SQL:     "SELECT service_name, count() AS value FROM otel_logs WHERE tenant_id = {tenant:String} AND timestamp >= {from:DateTime} AND timestamp < {to:DateTime} GROUP BY service_name",
+		Limit:   100,
+	}, ds, "tenant-a", 1000, CustomSQLExplore)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"SELECT *", "LIMIT {limit:UInt64}", "FORMAT JSONEachRow"} {
+		if !strings.Contains(built.SQL, want) {
+			t.Fatalf("sql missing %q:\n%s", want, built.SQL)
+		}
+	}
+	if built.Params["tenant"] != "tenant-a" || built.Params["limit"] != "100" {
+		t.Fatalf("unexpected params: %#v", built.Params)
+	}
+}
+
+func TestBuildCustomSQLRejectsUnsafeStatements(t *testing.T) {
+	ds := config.Dataset{ID: "logs", Table: "otel_logs", TimeColumn: "timestamp", TenantColumn: "tenant_id"}
+	_, err := BuildCustomSQL(QueryRequest{
+		Dataset: "logs",
+		SQL:     "SELECT * FROM otel_logs; DROP TABLE otel_logs",
+	}, ds, "tenant-a", 100, CustomSQLExplore)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+}
+
+func TestBuildCustomSQLAlertRequiresValueColumn(t *testing.T) {
+	ds := config.Dataset{ID: "logs", Table: "otel_logs", TimeColumn: "timestamp", TenantColumn: "tenant_id"}
+	_, err := BuildCustomSQL(QueryRequest{
+		Dataset: "logs",
+		SQL:     "SELECT count() AS total FROM otel_logs WHERE tenant_id = {tenant:String} AND timestamp >= {from:DateTime} AND timestamp < {to:DateTime}",
+	}, ds, "tenant-a", 100, CustomSQLAlert)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+}
+
 func TestNewClientDoesNotMutateProvidedHTTPClient(t *testing.T) {
 	shared := &http.Client{}
 	client := NewClient(config.ClickHouseConfig{Timeout: 5 * time.Second}, shared)

@@ -8,6 +8,7 @@ import {
   InputNumber,
   List,
   Select,
+  Segmented,
   Space,
   Tag,
   Typography
@@ -219,6 +220,17 @@ export function QuerySection(props: {
   const q = props.query;
   return (
     <Section title="Query">
+      <Field label="Mode">
+        <Segmented
+          block
+          value={q.mode || 'builder'}
+          options={[
+            { label: 'Builder', value: 'builder' },
+            { label: 'SQL', value: 'sql' }
+          ]}
+          onChange={(value) => props.onQuery({ ...q, mode: value as QueryState['mode'] })}
+        />
+      </Field>
       <Field label="Source">
         <Select value={q.sourceId} onChange={(value) => {
           const selected = props.dataSources.find((source) => source.id === value);
@@ -235,6 +247,7 @@ export function QuerySection(props: {
           props.onQuery({
             ...q,
             dataset: value,
+            sql: q.mode === 'sql' ? defaultDatasetSQL(value) : q.sql,
             groupBy: firstDimension(props.config, value),
             measure: next?.defaultMeasure || '_rows',
             aggregation: next?.defaultAggregation || 'count'
@@ -243,22 +256,26 @@ export function QuerySection(props: {
           {props.config?.datasets.map((item) => <Select.Option key={item.id} value={item.id}>{item.name}</Select.Option>)}
         </Select>
       </Field>
-      <Field label="Group">
-        <Select value={q.groupBy} onChange={(value) => props.onQuery({ ...q, groupBy: value })}>
-          <Select.Option value="">All</Select.Option>
-          {props.dataset?.dimensions.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
-        </Select>
-      </Field>
-      <Field label="Measure">
-        <Select value={q.measure} onChange={(value) => props.onQuery({ ...q, measure: value })}>
-          {props.dataset?.measures.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
-        </Select>
-      </Field>
-      <Field label="Aggregation">
-        <Select value={q.aggregation} onChange={(value) => props.onQuery({ ...q, aggregation: value })}>
-          {props.dataset?.aggregations.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
-        </Select>
-      </Field>
+      {(q.mode || 'builder') === 'builder' && (
+        <>
+          <Field label="Group">
+            <Select value={q.groupBy} onChange={(value) => props.onQuery({ ...q, groupBy: value })}>
+              <Select.Option value="">All</Select.Option>
+              {props.dataset?.dimensions.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
+            </Select>
+          </Field>
+          <Field label="Measure">
+            <Select value={q.measure} onChange={(value) => props.onQuery({ ...q, measure: value })}>
+              {props.dataset?.measures.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
+            </Select>
+          </Field>
+          <Field label="Aggregation">
+            <Select value={q.aggregation} onChange={(value) => props.onQuery({ ...q, aggregation: value })}>
+              {props.dataset?.aggregations.map((item) => <Select.Option key={item} value={item}>{item}</Select.Option>)}
+            </Select>
+          </Field>
+        </>
+      )}
       <Field label="Last">
         <Space.Compact className="full relative-range">
           <InputNumber
@@ -284,16 +301,27 @@ export function QuerySection(props: {
       </Field>
       <Field label="From"><Input type="datetime-local" value={q.from} onChange={(event) => props.onQuery({ ...q, from: event.target.value })} /></Field>
       <Field label="To"><Input type="datetime-local" value={q.to} onChange={(event) => props.onQuery({ ...q, to: event.target.value })} /></Field>
-      <Field label="Search">
-        <Input.Search
-          allowClear
-          enterButton="Run"
-          value={q.search}
-          onChange={(event) => props.onQuery({ ...q, search: event.target.value })}
-          onSearch={() => props.onRun()}
-          placeholder="Search log body, service, trace id"
-        />
-      </Field>
+      {(q.mode || 'builder') === 'sql' ? (
+        <Field label="SQL">
+          <Input.TextArea
+            autoSize={{ minRows: 8, maxRows: 16 }}
+            value={q.sql || ''}
+            onChange={(event) => props.onQuery({ ...q, sql: event.target.value })}
+            placeholder="SELECT count() AS value FROM otel_logs WHERE tenant_id = {tenant:String} AND timestamp >= {from:DateTime} AND timestamp < {to:DateTime}"
+          />
+        </Field>
+      ) : (
+        <Field label="Search">
+          <Input.Search
+            allowClear
+            enterButton="Run"
+            value={q.search}
+            onChange={(event) => props.onQuery({ ...q, search: event.target.value })}
+            onSearch={() => props.onRun()}
+            placeholder="Search log body, service, trace id"
+          />
+        </Field>
+      )}
       <Field label="Event rows">
         <InputNumber className="full" min={10} max={1000} value={q.limit} onChange={(value) => props.onQuery({ ...q, limit: Number(value || 100) })} />
       </Field>
@@ -595,4 +623,14 @@ function ActionList<T>({
 
 function firstDimension(config: PublicConfig | null, datasetID: string): string {
   return config?.datasets.find((item) => item.id === datasetID)?.dimensions[0] || '';
+}
+
+function defaultDatasetSQL(datasetID: string) {
+  if (datasetID === 'metrics') {
+    return 'SELECT service_name, avg(value) AS value\nFROM otel_metrics\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name\nORDER BY value DESC';
+  }
+  if (datasetID === 'traces') {
+    return 'SELECT service_name, count() AS value\nFROM otel_traces\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name\nORDER BY value DESC';
+  }
+  return 'SELECT service_name, severity, count() AS value\nFROM otel_logs\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name, severity\nORDER BY value DESC';
 }

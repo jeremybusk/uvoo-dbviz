@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -34,6 +35,10 @@ func NewClient(cfg config.ClickHouseConfig, client *http.Client) *Client {
 }
 
 func (c *Client) QueryJSONEachRow(ctx context.Context, sql string) ([]map[string]any, error) {
+	return c.QueryJSONEachRowWithParams(ctx, sql, nil)
+}
+
+func (c *Client) QueryJSONEachRowWithParams(ctx context.Context, sql string, params map[string]string) ([]map[string]any, error) {
 	endpoint, err := url.Parse(c.cfg.URL)
 	if err != nil {
 		return nil, err
@@ -42,6 +47,10 @@ func (c *Client) QueryJSONEachRow(ctx context.Context, sql string) ([]map[string
 	query.Set("database", c.cfg.Database)
 	query.Set("max_result_rows", fmt.Sprint(c.cfg.MaxRows))
 	query.Set("max_execution_time", fmt.Sprint(c.cfg.MaxQuerySeconds))
+	query.Set("readonly", "1")
+	for key, value := range params {
+		query.Set("param_"+key, value)
+	}
 	endpoint.RawQuery = query.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewBufferString(sql))
@@ -88,6 +97,8 @@ func (c *Client) QueryJSONEachRow(ctx context.Context, sql string) ([]map[string
 type QueryRequest struct {
 	Dataset       string            `json:"dataset"`
 	SourceID      string            `json:"sourceId"`
+	Mode          string            `json:"mode"`
+	SQL           string            `json:"sql"`
 	From          time.Time         `json:"from"`
 	To            time.Time         `json:"to"`
 	GroupBy       string            `json:"groupBy"`
@@ -99,6 +110,21 @@ type QueryRequest struct {
 	BucketSeconds int               `json:"bucketSeconds"`
 	Limit         int               `json:"limit"`
 }
+
+type CustomSQLMode string
+
+const (
+	CustomSQLExplore CustomSQLMode = "explore"
+	CustomSQLAlert   CustomSQLMode = "alert"
+)
+
+type CustomSQLQuery struct {
+	SQL    string
+	Params map[string]string
+}
+
+var unsafeSQLTokens = regexp.MustCompile(`(?i)\b(INSERT|ALTER|DROP|DELETE|CREATE|TRUNCATE|OPTIMIZE|SYSTEM|ATTACH|DETACH|RENAME|GRANT|REVOKE|KILL|SET|USE|EXPLAIN|DESCRIBE|SHOW|WATCH|BACKUP|RESTORE|CHECK|CHECKSUM|FORMAT|SETTINGS)\b`)
+var unsafeSQLFunctions = regexp.MustCompile(`(?i)\b(url|file|s3|hdfs|mysql|postgresql|remote|remoteSecure|cluster|jdbc|odbc|executable|generateRandom)\s*\(`)
 
 func BuildTimeseriesSQL(req QueryRequest, ds config.Dataset, tenantID string, maxRows int) (string, error) {
 	req, where, err := buildWhere(req, ds, tenantID, maxRows)
@@ -145,6 +171,79 @@ FORMAT JSONEachRow`,
 		req.Limit,
 	)
 	return sql, nil
+}
+
+func BuildCustomSQL(req QueryRequest, ds config.Dataset, tenantID string, maxRows int, mode CustomSQLMode) (CustomSQLQuery, error) {
+	req, _, err := buildWhere(req, ds, tenantID, maxRows)
+	if err != nil {
+		return CustomSQLQuery{}, err
+	}
+	raw := strings.TrimSpace(req.SQL)
+	if raw == "" {
+		return CustomSQLQuery{}, errors.New("sql is required")
+	}
+	if err := validateCustomSQLText(raw); err != nil {
+		return CustomSQLQuery{}, err
+	}
+	if !strings.Contains(raw, "{tenant:String}") {
+		return CustomSQLQuery{}, errors.New("custom sql must include {tenant:String}")
+	}
+	if !strings.Contains(raw, "{from:DateTime}") {
+		return CustomSQLQuery{}, errors.New("custom sql must include {from:DateTime}")
+	}
+	if !strings.Contains(raw, "{to:DateTime}") {
+		return CustomSQLQuery{}, errors.New("custom sql must include {to:DateTime}")
+	}
+	if mode == CustomSQLAlert {
+		if !strings.Contains(strings.ToLower(raw), " as value") && !strings.Contains(raw, "`value`") {
+			return CustomSQLQuery{}, errors.New("alert custom sql must return one numeric column named value")
+		}
+	}
+	limit := req.Limit
+	if limit <= 0 || limit > maxRows {
+		limit = maxRows
+	}
+	if ds.MaxRows > 0 && limit > ds.MaxRows {
+		limit = ds.MaxRows
+	}
+	sql := fmt.Sprintf(`SELECT *
+FROM (
+%s
+)
+LIMIT {limit:UInt64}
+FORMAT JSONEachRow`, raw)
+	return CustomSQLQuery{
+		SQL: sql,
+		Params: map[string]string{
+			"tenant": tenantID,
+			"from":   req.From.UTC().Format("2006-01-02 15:04:05"),
+			"to":     req.To.UTC().Format("2006-01-02 15:04:05"),
+			"limit":  fmt.Sprint(limit),
+		},
+	}, nil
+}
+
+func validateCustomSQLText(sql string) error {
+	if strings.Contains(sql, "\x00") {
+		return errors.New("sql contains invalid null byte")
+	}
+	if strings.Contains(sql, ";") {
+		return errors.New("custom sql must be a single statement without semicolons")
+	}
+	if strings.Contains(sql, "--") || strings.Contains(sql, "/*") || strings.Contains(sql, "*/") {
+		return errors.New("custom sql comments are not allowed")
+	}
+	upperTrimmed := strings.ToUpper(strings.TrimSpace(sql))
+	if !strings.HasPrefix(upperTrimmed, "SELECT ") && !strings.HasPrefix(upperTrimmed, "SELECT\n") {
+		return errors.New("custom sql must start with SELECT")
+	}
+	if unsafeSQLTokens.MatchString(sql) {
+		return errors.New("custom sql contains a blocked statement or clause")
+	}
+	if unsafeSQLFunctions.MatchString(sql) {
+		return errors.New("custom sql contains a blocked table function")
+	}
+	return nil
 }
 
 func BuildEventsSQL(req QueryRequest, ds config.Dataset, tenantID string, maxRows int) (string, error) {

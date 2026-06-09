@@ -230,14 +230,8 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 		w.logger.Warn("alert dataset is unknown", "rule", rule.Name, "dataset", rule.Query.Dataset)
 		return
 	}
-	sql, err := clickhouse.BuildTimeseriesSQL(rule.Query, ds, rule.TenantID, w.maxRows)
+	rows, err := w.queryRows(ctx, rule, ds)
 	if err != nil {
-		w.logger.Warn("alert query rejected", "rule", rule.Name, "error", err)
-		return
-	}
-	rows, err := w.ch.QueryJSONEachRow(ctx, sql)
-	if err != nil {
-		w.logger.Warn("alert query failed", "rule", rule.Name, "error", err)
 		return
 	}
 	value := maxValue(rows)
@@ -312,9 +306,39 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 	}
 }
 
+func (w *Worker) queryRows(ctx context.Context, rule Rule, ds config.Dataset) ([]map[string]any, error) {
+	if rule.Query.Mode == "sql" {
+		built, err := clickhouse.BuildCustomSQL(rule.Query, ds, rule.TenantID, w.maxRows, clickhouse.CustomSQLAlert)
+		if err != nil {
+			w.logger.Warn("alert custom sql rejected", "rule", rule.Name, "error", err)
+			return nil, err
+		}
+		rows, err := w.ch.QueryJSONEachRowWithParams(ctx, built.SQL, built.Params)
+		if err != nil {
+			w.logger.Warn("alert custom sql failed", "rule", rule.Name, "error", err)
+			return nil, err
+		}
+		return rows, nil
+	}
+	sql, err := clickhouse.BuildTimeseriesSQL(rule.Query, ds, rule.TenantID, w.maxRows)
+	if err != nil {
+		w.logger.Warn("alert query rejected", "rule", rule.Name, "error", err)
+		return nil, err
+	}
+	rows, err := w.ch.QueryJSONEachRow(ctx, sql)
+	if err != nil {
+		w.logger.Warn("alert query failed", "rule", rule.Name, "error", err)
+		return nil, err
+	}
+	return rows, nil
+}
+
 func ruleFingerprint(rule Rule) string {
 	if rule.ID != "" {
 		return rule.TenantID + ":" + rule.ID
+	}
+	if rule.Query.Mode == "sql" {
+		return rule.TenantID + ":" + rule.Name + ":" + rule.Query.Dataset + ":sql"
 	}
 	return rule.TenantID + ":" + rule.Name + ":" + rule.Query.Dataset + ":" + rule.Query.GroupBy
 }

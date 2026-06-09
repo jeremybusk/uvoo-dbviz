@@ -45,6 +45,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/session/memberships", a.requireAuth(a.listMemberships))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
 	a.mux.HandleFunc("POST /api/events", a.requireAuth(a.events))
+	a.mux.HandleFunc("POST /api/sql", a.requireAuth(a.customSQL))
 	a.mux.HandleFunc("GET /api/query/history", a.requireAuth(a.listQueryHistory))
 	a.mux.HandleFunc("GET /api/saved-queries", a.requireAuth(a.listSavedQueries))
 	a.mux.HandleFunc("POST /api/saved-queries", a.requireAuth(a.saveSavedQuery))
@@ -227,6 +228,47 @@ func (a *App) events(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
 }
 
+func (a *App) customSQL(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor", "viewer") {
+		return
+	}
+	start := time.Now()
+	var req clickhouse.QueryRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	rows, err := a.runCustomSQL(r, req, clickhouse.CustomSQLExplore)
+	if err != nil {
+		a.recordQueryHistory(r, req, 0, start, "failed", err.Error())
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	a.recordQueryHistory(r, req, len(rows), start, "success", "")
+	writeJSON(w, http.StatusOK, map[string]any{"rows": rows})
+}
+
+func (a *App) runCustomSQL(r *http.Request, req clickhouse.QueryRequest, mode clickhouse.CustomSQLMode) ([]map[string]any, error) {
+	ds, ok := a.cfg.Datasets[req.Dataset]
+	if !ok {
+		return nil, errors.New("unknown dataset")
+	}
+	built, err := clickhouse.BuildCustomSQL(req, ds, statePrincipal(r).TenantID, a.cfg.ClickHouse.MaxRows, mode)
+	if err != nil {
+		return nil, err
+	}
+	ch, err := a.clickHouseForQuery(r, req)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := ch.QueryJSONEachRowWithParams(r.Context(), built.SQL, built.Params)
+	if err != nil {
+		a.logger.Warn("clickhouse custom sql failed", "error", err)
+		return nil, err
+	}
+	return rows, nil
+}
+
 func (a *App) listQueryHistory(w http.ResponseWriter, r *http.Request) {
 	if !a.requireStateRole(w, r, "owner", "admin", "editor", "viewer") {
 		return
@@ -272,7 +314,7 @@ func (a *App) saveSavedQuery(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("saved query name is required"))
 		return
 	}
-	if err := a.validateQueryPayload(req.Query, statePrincipal(r).TenantID); err != nil {
+	if err := a.validateQueryPayload(req.Query, statePrincipal(r).TenantID, clickhouse.CustomSQLExplore); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -599,7 +641,7 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert name is required"))
 		return
 	}
-	if err := a.validateQueryPayload(req.Query, statePrincipal(r).TenantID); err != nil {
+	if err := a.validateQueryPayload(req.Query, statePrincipal(r).TenantID, clickhouse.CustomSQLAlert); err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
@@ -638,7 +680,7 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
-func (a *App) validateQueryPayload(payload map[string]any, tenantID string) error {
+func (a *App) validateQueryPayload(payload map[string]any, tenantID string, customMode clickhouse.CustomSQLMode) error {
 	if payload == nil {
 		return errors.New("query payload is required")
 	}
@@ -653,6 +695,10 @@ func (a *App) validateQueryPayload(payload map[string]any, tenantID string) erro
 	ds, ok := a.cfg.Datasets[query.Dataset]
 	if !ok {
 		return errors.New("unknown query dataset")
+	}
+	if query.Mode == "sql" {
+		_, err = clickhouse.BuildCustomSQL(query, ds, tenantID, a.cfg.ClickHouse.MaxRows, customMode)
+		return err
 	}
 	_, err = clickhouse.BuildTimeseriesSQL(query, ds, tenantID, a.cfg.ClickHouse.MaxRows)
 	return err

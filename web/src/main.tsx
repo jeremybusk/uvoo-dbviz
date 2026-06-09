@@ -113,7 +113,7 @@ function App() {
   const [query, setQuery] = useState<QueryState>(() => {
     const to = new Date();
     const from = new Date(to.getTime() - 60 * 60 * 1000);
-    return { dataset: 'logs', sourceId: '', groupBy: 'service_name', measure: '_rows', aggregation: 'count', from: toInput(from), to: toInput(to), search: '', limit: 200 };
+    return { dataset: 'logs', sourceId: '', mode: 'builder', sql: defaultSQL('logs'), groupBy: 'service_name', measure: '_rows', aggregation: 'count', from: toInput(from), to: toInput(to), search: '', limit: 200 };
   });
 
   useEffect(() => {
@@ -220,6 +220,15 @@ function App() {
 
   async function loadData(nextQuery: QueryState = query) {
     setError('');
+    if ((nextQuery.mode || 'builder') === 'sql') {
+      const result = await apiPost<{ rows: Record<string, unknown>[] }>('/api/sql', queryPayload(nextQuery));
+      setEventRows(result.rows);
+      setRows(chartRowsFromCustomSQL(result.rows));
+      setActiveTab('events');
+      setLastUpdated(new Date().toISOString());
+      loadQueryHistory().catch(() => undefined);
+      return;
+    }
     const [series, events] = await Promise.all([
       apiPost<{ rows: QueryRow[] }>('/api/query', queryPayload(nextQuery)),
       apiPost<{ rows: Record<string, unknown>[] }>('/api/events', queryPayload(nextQuery))
@@ -489,13 +498,13 @@ function App() {
 
   function applyQuery(payload: unknown) {
     const savedQuery = editableQuery(payload as Partial<QueryState>);
-    if (savedQuery.dataset) setQuery((current) => ({ ...current, ...savedQuery }));
+    if (savedQuery.dataset) updateQuery((current) => ({ ...current, ...savedQuery }));
   }
 
   function applyEventFilter(field: string, value: unknown) {
     const term = formatCell(value, field).trim();
     if (!term) return;
-    const nextQuery = { ...query, search: term };
+    const nextQuery = { ...query, mode: 'builder' as const, search: term };
     setQuery(nextQuery);
     setActiveTab('events');
     loadData(nextQuery).catch((err) => setError(err.message));
@@ -513,7 +522,17 @@ function App() {
   function applyRelativeRange(value: number, unit: RelativeRangeUnit) {
     const nextRange = { value: Math.max(1, Math.trunc(value || 1)), unit };
     setRelativeRange(nextRange);
-    setQuery((current) => queryWithRelativeRange(current, nextRange));
+    updateQuery((current) => queryWithRelativeRange(current, nextRange));
+  }
+
+  function updateQuery(next: QueryState | ((current: QueryState) => QueryState)) {
+    setQuery((current) => {
+      const candidate = typeof next === 'function' ? next(current) : next;
+      if ((candidate.mode || 'builder') === 'sql' && !stringsHaveText(candidate.sql)) {
+        return { ...candidate, sql: defaultSQL(candidate.dataset) };
+      }
+      return candidate;
+    });
   }
 
   function defaultPanelTitle() {
@@ -542,7 +561,7 @@ function App() {
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} jwtClaims={jwtClaims} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} /> },
-    { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={setQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
+    { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={updateQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
     { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
@@ -674,6 +693,7 @@ function QuerySummary(props: {
   return (
     <Flex className="query-summary" align="center" gap={8} wrap="wrap">
       <Tag color="blue">{props.datasetName}</Tag>
+      <Tag>{(props.query.mode || 'builder') === 'sql' ? 'SQL' : 'Builder'}</Tag>
       <Tag>{props.tenant || 'default tenant'}</Tag>
       <Tag>{formatRange(props.query.from, props.query.to)}</Tag>
       {props.query.search && <Tag icon={<FilterOutlined />}>{props.query.search}</Tag>}
@@ -821,6 +841,28 @@ function countValues(rows: Record<string, unknown>[], key: string): [string, num
   return Array.from(counts.entries()).sort((left, right) => right[1] - left[1] || left[0].localeCompare(right[0]));
 }
 
+function chartRowsFromCustomSQL(rows: Record<string, unknown>[]): QueryRow[] {
+  return rows.flatMap((row) => {
+    const value = numberFromUnknown(row.value);
+    if (value == null) return [];
+    const ts = numberFromUnknown(row.ts) ?? Math.floor(Date.now() / 1000);
+    return [{
+      ts,
+      series: formatCell(row.series || row.service_name || row.name || 'sql', 'series'),
+      value
+    }];
+  });
+}
+
+function numberFromUnknown(value: unknown): number | null {
+  if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+  if (typeof value === 'string' && value.trim() !== '') {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
 function formatRange(from: string, to: string): string {
   const fromDate = new Date(from);
   const toDate = new Date(to);
@@ -834,12 +876,33 @@ function formatRefresh(seconds: number): string {
 }
 
 function compactQueryDescription(query: QueryState): string {
+  if ((query.mode || 'builder') === 'sql') {
+    return [
+      query.dataset,
+      'custom sql',
+      formatRange(query.from, query.to)
+    ].filter(Boolean).join(' - ');
+  }
   return [
     query.dataset,
     query.groupBy ? `by ${query.groupBy}` : '',
     query.search ? `search ${query.search}` : '',
     formatRange(query.from, query.to)
   ].filter(Boolean).join(' - ');
+}
+
+function stringsHaveText(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() !== '';
+}
+
+function defaultSQL(datasetID: string) {
+  if (datasetID === 'metrics') {
+    return 'SELECT service_name, avg(value) AS value\nFROM otel_metrics\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name\nORDER BY value DESC';
+  }
+  if (datasetID === 'traces') {
+    return 'SELECT service_name, count() AS value\nFROM otel_traces\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name\nORDER BY value DESC';
+  }
+  return 'SELECT service_name, severity, count() AS value\nFROM otel_logs\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name, severity\nORDER BY value DESC';
 }
 
 function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {
