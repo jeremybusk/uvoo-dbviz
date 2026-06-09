@@ -109,6 +109,10 @@ h2.ant-typography {
   width: 96px;
 }
 
+.operator-select {
+  width: 86px;
+}
+
 .identity-grid,
 .claims-grid {
   display: grid;

@@ -10,6 +10,7 @@ import {
   Select,
   Segmented,
   Space,
+  Switch,
   Tag,
   Typography
 } from 'antd';
@@ -417,27 +418,61 @@ export function AlertsSection(props: {
   contacts: ContactEndpoint[];
   alertName: string;
   alertThreshold: string;
+  alertOperator: string;
+  alertInterval: number;
+  alertEnabled: boolean;
+  alertPreview: string;
   selectedContact: string;
+  queryMode: string;
   onName: (value: string) => void;
   onThreshold: (value: string) => void;
+  onOperator: (value: string) => void;
+  onInterval: (value: number) => void;
+  onEnabled: (value: boolean) => void;
   onContact: (value: string) => void;
+  onTest: () => void;
   onSave: () => void;
 }) {
   return (
     <Section title="Alerts">
       <Field label="Rule"><Input value={props.alertName} onChange={(event) => props.onName(event.target.value)} /></Field>
-      <Field label="Threshold"><InputNumber className="full" min={0} value={Number(props.alertThreshold)} onChange={(value) => props.onThreshold(String(value ?? 0))} /></Field>
+      <Field label="Query"><Tag>{props.queryMode === 'sql' ? 'Current SQL query' : 'Current builder query'}</Tag></Field>
+      <Field label="Condition">
+        <Space.Compact className="full">
+          <Select className="operator-select" value={props.alertOperator} onChange={props.onOperator}>
+            <Select.Option value="gt">&gt;</Select.Option>
+            <Select.Option value="gte">&gt;=</Select.Option>
+            <Select.Option value="lt">&lt;</Select.Option>
+            <Select.Option value="lte">&lt;=</Select.Option>
+            <Select.Option value="eq">=</Select.Option>
+          </Select>
+          <InputNumber className="full" min={0} value={Number(props.alertThreshold)} onChange={(value) => props.onThreshold(String(value ?? 0))} />
+        </Space.Compact>
+      </Field>
+      <Field label="Interval">
+        <InputNumber className="full" min={10} max={86400} value={props.alertInterval} onChange={(value) => props.onInterval(Number(value || 60))} addonAfter="seconds" />
+      </Field>
+      <Field label="Enabled">
+        <Switch checked={props.alertEnabled} onChange={props.onEnabled} />
+      </Field>
       <Field label="Contact">
         <Select value={props.selectedContact} onChange={props.onContact}>
           <Select.Option value="">None</Select.Option>
           {props.contacts.map((contact) => <Select.Option key={contact.id} value={contact.id}>{contact.name}</Select.Option>)}
         </Select>
       </Field>
-      <Button icon={<SaveOutlined />} disabled={!props.user} onClick={props.onSave}>Save rule</Button>
+      {props.alertPreview && <Alert type={props.alertPreview.startsWith('Firing') ? 'warning' : 'success'} showIcon message={props.alertPreview} />}
+      <Flex gap={8}>
+        <Button disabled={!props.user} onClick={props.onTest}>Test</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user} onClick={props.onSave}>Save rule</Button>
+      </Flex>
       <ActionList items={props.alertRules} empty="No alert rules" render={(rule) => (
         <Button block key={rule.id} onClick={() => {
           props.onName(rule.name);
+          props.onOperator(rule.condition?.operator || 'gt');
           props.onThreshold(String(rule.condition?.threshold ?? 0));
+          props.onInterval(rule.interval_seconds || 60);
+          props.onEnabled(rule.enabled);
           props.onContact(rule.contact_endpoint_id || '');
         }}>{rule.name}</Button>
       )} />

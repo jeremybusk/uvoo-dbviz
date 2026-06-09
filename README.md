@@ -161,8 +161,10 @@ Alert rule and contact management follows the same pattern:
 - `POST /api/data-sources`
 - `POST /api/data-sources/test`
 - `GET /api/query/history`
+- `POST /api/sql`
 - `GET /api/alerts/rules`
 - `POST /api/alerts/rules`
+- `POST /api/alerts/test`
 - `GET /api/alerts/contacts`
 - `POST /api/alerts/contacts`
 - `GET /api/alerts/incidents`
@@ -176,6 +178,32 @@ Alert rule and contact management follows the same pattern:
 - `GET /api/invites`
 - `POST /api/invites`
 - `POST /api/invites/accept`
+
+## Custom SQL
+
+The UI supports a SQL mode for advanced ClickHouse exploration through
+`POST /api/sql`. SQL queries are still tenant- and time-bounded by required
+ClickHouse parameters:
+
+```sql
+SELECT service_name, severity, count() AS value
+FROM otel_logs
+WHERE tenant_id = {tenant:String}
+  AND timestamp >= {from:DateTime}
+  AND timestamp < {to:DateTime}
+GROUP BY service_name, severity
+ORDER BY value DESC
+```
+
+The server binds `tenant`, `from`, `to`, and `limit`, runs ClickHouse in
+read-only mode, appends a controlled limit, and rejects multi-statement SQL,
+comments, DDL/DML/admin statements, custom `FORMAT`/`SETTINGS`, and risky table
+functions such as `url()`, `file()`, `s3()`, and `remote()`.
+
+Custom SQL alert rules use the same safe execution path with stricter
+validation: the query must return a numeric column named `value`. The alert
+condition compares the maximum returned `value` against the configured
+operator/threshold. `POST /api/alerts/test` previews that value before saving.
 
 ## Alerts
 

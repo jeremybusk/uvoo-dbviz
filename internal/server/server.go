@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -57,6 +58,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/dashboards", a.requireAuth(a.saveDashboard))
 	a.mux.HandleFunc("GET /api/alerts/rules", a.requireAuth(a.listAlertRules))
 	a.mux.HandleFunc("POST /api/alerts/rules", a.requireAuth(a.saveAlertRule))
+	a.mux.HandleFunc("POST /api/alerts/test", a.requireAuth(a.testAlertRule))
 	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
 	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
 	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
@@ -654,6 +656,15 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert threshold must be numeric"))
 		return
 	}
+	operator, _ := req.Condition["operator"].(string)
+	if operator == "" {
+		operator = "gt"
+	}
+	if !validAlertOperator(operator) {
+		writeError(w, http.StatusBadRequest, errors.New("alert operator is not supported"))
+		return
+	}
+	req.Condition["operator"] = operator
 	req.Condition["threshold"] = threshold
 	var alertID, contactID any
 	if req.ID != "" {
@@ -680,28 +691,82 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+func (a *App) testAlertRule(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		Query     map[string]any `json:"query"`
+		Condition map[string]any `json:"condition"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Condition == nil {
+		writeError(w, http.StatusBadRequest, errors.New("alert condition is required"))
+		return
+	}
+	threshold, ok := numericValue(req.Condition["threshold"])
+	if !ok {
+		writeError(w, http.StatusBadRequest, errors.New("alert threshold must be numeric"))
+		return
+	}
+	query, err := a.decodeQueryPayload(req.Query, statePrincipal(r).TenantID, clickhouse.CustomSQLAlert)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	rows, err := a.runAlertPreviewQuery(r, query)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	value := maxNumericValue(rows, "value")
+	operator, _ := req.Condition["operator"].(string)
+	if operator == "" {
+		operator = "gt"
+	}
+	if !validAlertOperator(operator) {
+		writeError(w, http.StatusBadRequest, errors.New("alert operator is not supported"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"value":     value,
+		"operator":  operator,
+		"threshold": threshold,
+		"firing":    compareAlertValue(value, operator, threshold),
+		"rows":      rows,
+	})
+}
+
 func (a *App) validateQueryPayload(payload map[string]any, tenantID string, customMode clickhouse.CustomSQLMode) error {
+	_, err := a.decodeQueryPayload(payload, tenantID, customMode)
+	return err
+}
+
+func (a *App) decodeQueryPayload(payload map[string]any, tenantID string, customMode clickhouse.CustomSQLMode) (clickhouse.QueryRequest, error) {
 	if payload == nil {
-		return errors.New("query payload is required")
+		return clickhouse.QueryRequest{}, errors.New("query payload is required")
 	}
 	queryBytes, err := json.Marshal(payload)
 	if err != nil {
-		return err
+		return clickhouse.QueryRequest{}, err
 	}
 	var query clickhouse.QueryRequest
 	if err := json.Unmarshal(queryBytes, &query); err != nil {
-		return err
+		return clickhouse.QueryRequest{}, err
 	}
 	ds, ok := a.cfg.Datasets[query.Dataset]
 	if !ok {
-		return errors.New("unknown query dataset")
+		return clickhouse.QueryRequest{}, errors.New("unknown query dataset")
 	}
 	if query.Mode == "sql" {
 		_, err = clickhouse.BuildCustomSQL(query, ds, tenantID, a.cfg.ClickHouse.MaxRows, customMode)
-		return err
+		return query, err
 	}
 	_, err = clickhouse.BuildTimeseriesSQL(query, ds, tenantID, a.cfg.ClickHouse.MaxRows)
-	return err
+	return query, err
 }
 
 func numericValue(value any) (float64, bool) {
@@ -713,8 +778,68 @@ func numericValue(value any) (float64, bool) {
 	case json.Number:
 		parsed, err := v.Float64()
 		return parsed, err == nil
+	case string:
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return parsed, err == nil
 	default:
 		return 0, false
+	}
+}
+
+func (a *App) runAlertPreviewQuery(r *http.Request, req clickhouse.QueryRequest) ([]map[string]any, error) {
+	if req.Mode == "sql" {
+		return a.runCustomSQL(r, req, clickhouse.CustomSQLAlert)
+	}
+	ds, ok := a.cfg.Datasets[req.Dataset]
+	if !ok {
+		return nil, errors.New("unknown dataset")
+	}
+	sql, err := clickhouse.BuildTimeseriesSQL(req, ds, statePrincipal(r).TenantID, a.cfg.ClickHouse.MaxRows)
+	if err != nil {
+		return nil, err
+	}
+	ch, err := a.clickHouseForQuery(r, req)
+	if err != nil {
+		return nil, err
+	}
+	return ch.QueryJSONEachRow(r.Context(), sql)
+}
+
+func maxNumericValue(rows []map[string]any, key string) float64 {
+	var max float64
+	for i, row := range rows {
+		value, ok := numericValue(row[key])
+		if !ok {
+			continue
+		}
+		if i == 0 || value > max {
+			max = value
+		}
+	}
+	return max
+}
+
+func compareAlertValue(value float64, op string, threshold float64) bool {
+	switch op {
+	case "gte":
+		return value >= threshold
+	case "lt":
+		return value < threshold
+	case "lte":
+		return value <= threshold
+	case "eq":
+		return value == threshold
+	default:
+		return value > threshold
+	}
+}
+
+func validAlertOperator(op string) bool {
+	switch op {
+	case "gt", "gte", "lt", "lte", "eq":
+		return true
+	default:
+		return false
 	}
 }
 

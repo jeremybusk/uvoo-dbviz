@@ -105,6 +105,10 @@ function App() {
   const [inviteToken, setInviteToken] = useState('');
   const [alertName, setAlertName] = useState('High signal volume');
   const [alertThreshold, setAlertThreshold] = useState('100');
+  const [alertOperator, setAlertOperator] = useState('gt');
+  const [alertInterval, setAlertInterval] = useState(60);
+  const [alertEnabled, setAlertEnabled] = useState(true);
+  const [alertPreview, setAlertPreview] = useState('');
   const [contactName, setContactName] = useState('Primary webhook');
   const [contactTarget, setContactTarget] = useState('');
   const [contactKind, setContactKind] = useState<ContactEndpoint['kind']>('webhook');
@@ -382,13 +386,22 @@ function App() {
       id: null,
       name: alertName,
       query: queryPayload(),
-      condition: { operator: 'gt', threshold: Number(alertThreshold) },
-      intervalSeconds: 60,
-      enabled: true,
+      condition: { operator: alertOperator, threshold: Number(alertThreshold) },
+      intervalSeconds: alertInterval,
+      enabled: alertEnabled,
       contactEndpointId: selectedContact || null
     });
     setAlertRules((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     loadAuditEvents().catch(() => undefined);
+  }
+
+  async function testAlert() {
+    setAlertPreview('');
+    const result = await apiPost<{ value: number; operator: string; threshold: number; firing: boolean }>('/api/alerts/test', {
+      query: queryPayload(),
+      condition: { operator: alertOperator, threshold: Number(alertThreshold) }
+    });
+    setAlertPreview(`${result.firing ? 'Firing' : 'OK'}: value ${formatNumber(result.value)} ${operatorLabel(result.operator)} ${formatNumber(result.threshold)}`);
   }
 
   async function resolveIncident(incident: AlertIncident) {
@@ -565,7 +578,7 @@ function App() {
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
     { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
-    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} alertName={alertName} alertThreshold={alertThreshold} selectedContact={selectedContact} onName={setAlertName} onThreshold={setAlertThreshold} onContact={setSelectedContact} onSave={saveAlert} /> },
+    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onSave={saveContact} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },
@@ -873,6 +886,25 @@ function formatRange(from: string, to: string): string {
 function formatRefresh(seconds: number): string {
   if (seconds >= 60) return `${seconds / 60}m`;
   return `${seconds}s`;
+}
+
+function formatNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(3);
+}
+
+function operatorLabel(operator: string): string {
+  switch (operator) {
+    case 'gte':
+      return '>=';
+    case 'lt':
+      return '<';
+    case 'lte':
+      return '<=';
+    case 'eq':
+      return '=';
+    default:
+      return '>';
+  }
 }
 
 function compactQueryDescription(query: QueryState): string {
