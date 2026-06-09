@@ -14,6 +14,7 @@ data:
   DBVIZ_CLICKHOUSE_DATABASE: {{ .Values.config.clickhouseDatabase | quote }}
   DBVIZ_CLICKHOUSE_USER: {{ .Values.config.clickhouseUser | quote }}
   DBVIZ_POSTGREST_URL: {{ .Values.config.postgrestUrl | quote }}
+  DBVIZ_POSTGREST_FORWARD_BEARER: {{ .Values.config.postgrestForwardBearer | quote }}
   DBVIZ_OIDC_GOOGLE_CLIENT_ID: {{ .Values.config.googleClientId | quote }}
   DBVIZ_OIDC_MICROSOFT_CLIENT_ID: {{ .Values.config.microsoftClientId | quote }}
   DBVIZ_OIDC_KEYCLOAK_ISSUER: {{ .Values.config.keycloakIssuer | quote }}

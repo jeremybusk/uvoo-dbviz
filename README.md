@@ -27,6 +27,18 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+For browser testing from another machine on an isolated LAN, set the host name or
+IP address clients will use before starting Compose:
+
+```sh
+DBVIZ_BIND_ADDR=0.0.0.0
+DBVIZ_PUBLIC_HOST=192.168.1.50
+```
+
+Then open `http://192.168.1.50:8080`. Keycloak will advertise the same public
+host in OIDC issuer and redirect metadata, while the Go backend still discovers
+Keycloak through the internal Docker service URL.
+
 Compose starts:
 
 - `uvoo-dbviz` on <http://localhost:8080>
@@ -48,9 +60,15 @@ Development auth is enabled by default in Compose. The seeded Keycloak users are
 - `bob` / `password`, tenant `example.com`
 
 The UI can also use dev auth when `DBVIZ_AUTH_DEV_MODE=true`. Browser state
-operations go through the Go API, which forwards bearer tokens or local dev
-tenant headers to PostgREST. PostgREST still enforces RLS with JWT tenant claims
-or `X-Dev-Tenant: dev` in local development.
+operations go through the Go API, which validates bearer tokens and forwards the
+verified tenant/user context to PostgREST. PostgREST still enforces RLS with
+that request context or `X-Dev-Tenant: dev` in local development.
+
+In the default Compose profile, the Go API validates OIDC tokens and does not
+forward the browser bearer token to PostgREST
+(`DBVIZ_POSTGREST_FORWARD_BEARER=false`). This avoids PostgREST rejecting local
+Keycloak tokens when it is not configured with Keycloak's signing keys. Enable
+bearer forwarding only when PostgREST has a real JWT verifier configured.
 
 On successful sign-in, the UI calls `POST /api/session/sync`. The backend records
 or updates the current tenant/user in PostgreSQL, making later role and invite

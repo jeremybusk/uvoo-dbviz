@@ -1,5 +1,7 @@
 export type VisualizationType = 'line' | 'bar' | 'area';
 
+export type ThemeMode = 'light' | 'dark';
+
 export type QueryState = {
   dataset: string;
   sourceId: string;

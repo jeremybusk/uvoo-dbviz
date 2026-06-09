@@ -12,9 +12,10 @@ services:
       postgrest:
         condition: service_started
     ports:
-      - "8080:8080"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:8080:8080"
     environment:
       DBVIZ_ADDR: :8080
+      DBVIZ_PUBLIC_URL: http://${DBVIZ_PUBLIC_HOST:-localhost}:8080
       DBVIZ_WEB_ROOT: /app/web/dist
       DBVIZ_AUTH_DEV_MODE: ${DBVIZ_AUTH_DEV_MODE:-true}
       DBVIZ_CLICKHOUSE_URL: http://clickhouse:8123
@@ -22,7 +23,8 @@ services:
       DBVIZ_SECRET_CLICKHOUSE_DEFAULT: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
       DBVIZ_CLICKHOUSE_DATABASE: default
       DBVIZ_POSTGREST_URL: http://postgrest:3000
-      DBVIZ_OIDC_KEYCLOAK_ISSUER: http://localhost:8089/realms/dbviz
+      DBVIZ_POSTGREST_FORWARD_BEARER: ${DBVIZ_POSTGREST_FORWARD_BEARER:-false}
+      DBVIZ_OIDC_KEYCLOAK_ISSUER: http://${DBVIZ_PUBLIC_HOST:-localhost}:8089/realms/dbviz
       DBVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: http://keycloak:8080/realms/dbviz
       DBVIZ_OIDC_KEYCLOAK_CLIENT_ID: uvoo-dbviz-web
       DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: tenant_slug
@@ -40,8 +42,8 @@ services:
       CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:8123:8123"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:9000:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     healthcheck:
@@ -67,7 +69,7 @@ services:
   postgres:
     image: postgres:17-alpine
     ports:
-      - "5432:5432"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:5432:5432"
     environment:
       POSTGRES_DB: dbviz
       POSTGRES_USER: dbviz
@@ -81,7 +83,7 @@ services:
     depends_on:
       - postgres
     ports:
-      - "3000:3000"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:3000:3000"
     environment:
       PGRST_DB_URI: postgres://dbviz:dbviz@postgres:5432/dbviz
       PGRST_DB_SCHEMA: public
@@ -90,9 +92,9 @@ services:
 
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
-    command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://localhost:8089"]
+    command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://${DBVIZ_PUBLIC_HOST:-localhost}:8089"]
     ports:
-      - "8089:8080"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:8089:8080"
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
@@ -106,8 +108,8 @@ services:
       clickhouse:
         condition: service_healthy
     ports:
-      - "4317:4317"
-      - "4318:4318"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:4317:4317"
+      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:4318:4318"
     environment:
       CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
     volumes:

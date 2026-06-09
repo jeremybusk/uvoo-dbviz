@@ -38,6 +38,7 @@ config:
   authDevMode: false
   publicUrl: ""
   postgrestUrl: ""
+  postgrestForwardBearer: false
   clickhouseUrl: ""
   clickhouseDatabase: default
   clickhouseUser: default

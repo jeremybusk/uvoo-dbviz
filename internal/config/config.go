@@ -52,7 +52,8 @@ type ClickHouseConfig struct {
 }
 
 type PostgRESTConfig struct {
-	URL string `json:"url"`
+	URL           string `json:"url"`
+	ForwardBearer bool   `json:"forwardBearer"`
 }
 
 type AlertConfig struct {
@@ -140,7 +141,10 @@ func Load() Config {
 			MaxRows:         envInt("DBVIZ_CLICKHOUSE_MAX_ROWS", 10000),
 			MaxQuerySeconds: envInt("DBVIZ_CLICKHOUSE_MAX_QUERY_SECONDS", 20),
 		},
-		PostgREST: PostgRESTConfig{URL: env("DBVIZ_POSTGREST_URL", "/state")},
+		PostgREST: PostgRESTConfig{
+			URL:           env("DBVIZ_POSTGREST_URL", "/state"),
+			ForwardBearer: envBool("DBVIZ_POSTGREST_FORWARD_BEARER", false),
+		},
 		Alerts: AlertConfig{
 			Enabled:       envBool("DBVIZ_ALERTS_ENABLED", false),
 			Rules:         os.Getenv("DBVIZ_ALERT_RULES_JSON"),

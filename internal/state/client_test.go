@@ -12,7 +12,7 @@ import (
 	"uvoo-dbviz/internal/config"
 )
 
-func TestRPCForwardsPrincipalHeadersAndBearer(t *testing.T) {
+func TestRPCForwardsPrincipalHeadersAndStripsBearerByDefault(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Path != "/rpc/current_user_has_role" {
 			t.Fatalf("path = %s", r.URL.Path)
@@ -21,9 +21,10 @@ func TestRPCForwardsPrincipalHeadersAndBearer(t *testing.T) {
 		assertHeader(t, r, "X-DBViz-Subject", "alice")
 		assertHeader(t, r, "X-DBViz-Provider", "keycloak")
 		assertHeader(t, r, "X-DBViz-Email", "alice@example.com")
-		assertHeader(t, r, "Authorization", "Bearer token")
-		if r.Header.Get("X-Dev-Tenant") != "" {
-			t.Fatalf("unexpected X-Dev-Tenant with bearer auth")
+		assertHeader(t, r, "X-Dev-Tenant", "dev")
+		assertHeader(t, r, "X-Dev-Email", "alice@example.com")
+		if r.Header.Get("Authorization") != "" {
+			t.Fatalf("unexpected Authorization header")
 		}
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -36,6 +37,30 @@ func TestRPCForwardsPrincipalHeadersAndBearer(t *testing.T) {
 	})}
 
 	client := NewClient(config.PostgRESTConfig{URL: "http://postgrest:3000"}, httpClient)
+	ok, err := client.CurrentUserHasRole(context.Background(), auth.Principal{
+		TenantID: "dev",
+		Subject:  "alice",
+		Provider: "keycloak",
+		Email:    "alice@example.com",
+	}, "Bearer token", []string{"viewer"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected role check to return true")
+	}
+}
+
+func TestRPCForwardsBearerWhenEnabled(t *testing.T) {
+	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		assertHeader(t, r, "Authorization", "Bearer token")
+		if r.Header.Get("X-Dev-Tenant") != "" {
+			t.Fatalf("unexpected X-Dev-Tenant with forwarded bearer")
+		}
+		return textResponse(http.StatusOK, `true`), nil
+	})}
+
+	client := NewClient(config.PostgRESTConfig{URL: "http://postgrest:3000", ForwardBearer: true}, httpClient)
 	ok, err := client.CurrentUserHasRole(context.Background(), auth.Principal{
 		TenantID: "dev",
 		Subject:  "alice",

@@ -12,12 +12,24 @@ body {
 
 .app-shell {
   min-height: 100vh;
+  --app-primary: #2563eb;
+  --app-secondary: #64748b;
+  --app-chart-bg: #ffffff;
+  --app-sidebar-bg: #ffffff;
+  --app-workspace-bg: #f8fafc;
+}
+
+.theme-dark {
+  --app-chart-bg: #0f172a;
+  --app-sidebar-bg: #020617;
+  --app-workspace-bg: #020617;
 }
 
 .app-sidebar {
   height: 100vh;
   overflow: auto;
   border-right: 1px solid rgba(127, 127, 127, 0.18);
+  background: var(--app-sidebar-bg);
   padding: 18px;
 }
 
@@ -26,6 +38,7 @@ body {
   grid-template-rows: auto auto minmax(360px, 1fr);
   gap: 14px;
   min-width: 0;
+  background: var(--app-workspace-bg);
   padding: 22px;
 }
 
@@ -36,7 +49,7 @@ body {
   height: 42px;
   flex: 0 0 auto;
   border-radius: 7px;
-  background: #256f72;
+  background: var(--app-primary);
   color: #fff;
   font-weight: 800;
 }
@@ -100,16 +113,12 @@ h2.ant-typography {
   min-height: 520px;
   border: 1px solid rgba(127, 127, 127, 0.22);
   border-radius: 8px;
-  background: var(--chart-bg, #fff);
+  background: var(--app-chart-bg);
 }
 
 .chart-loading {
   display: grid;
   place-items: center;
-}
-
-.ant-layout .chart {
-  background: color-mix(in srgb, Canvas 92%, transparent);
 }
 
 @media (max-width: 920px) {

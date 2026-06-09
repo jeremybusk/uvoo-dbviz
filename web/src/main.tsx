@@ -47,15 +47,17 @@ import {
   SavedQueriesSection,
   SourceSection
 } from './components/ControlSections';
-import { QueryState, VisualizationType } from './types';
+import { QueryState, ThemeMode, VisualizationType } from './types';
 import 'antd/dist/reset.css';
 import './style.css';
 
 const { Content, Sider } = Layout;
 const Chart = React.lazy(() => import('./components/Chart').then((module) => ({ default: module.Chart })));
+const primaryColor = '#2563eb';
+const secondaryColor = '#64748b';
 
 function App() {
-  const [themeMode, setThemeMode] = useState<'light' | 'dark'>('light');
+  const [themeMode, setThemeMode] = useState<ThemeMode>('light');
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [user, setUser] = useState<Principal | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -477,10 +479,19 @@ function App() {
     <ConfigProvider
       theme={{
         algorithm: themeMode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
-        token: { borderRadius: 6, colorPrimary: '#256f72' }
+        token: {
+          borderRadius: 6,
+          colorPrimary: primaryColor,
+          colorInfo: primaryColor,
+          colorLink: primaryColor,
+          colorTextSecondary: secondaryColor,
+          colorBorder: themeMode === 'dark' ? '#334155' : '#cbd5e1',
+          colorBgLayout: themeMode === 'dark' ? '#020617' : '#f8fafc',
+          colorBgContainer: themeMode === 'dark' ? '#0f172a' : '#ffffff'
+        }
       }}
     >
-      <Layout className="app-shell">
+      <Layout className={`app-shell theme-${themeMode}`}>
         <Sider width={390} className="app-sidebar">
           <Space direction="vertical" size={16} className="full">
             <Flex align="center" gap={12}>
@@ -512,7 +523,7 @@ function App() {
           </Flex>
           {error && <Alert type="error" showIcon closable message={error} onClose={() => setError('')} />}
           <React.Suspense fallback={<div className="chart chart-loading"><Spin /></div>}>
-            <Chart rows={rows} type={panelVisualization} />
+            <Chart rows={rows} themeMode={themeMode} type={panelVisualization} />
           </React.Suspense>
         </Content>
       </Layout>
