@@ -113,6 +113,7 @@ function App() {
   const [contactName, setContactName] = useState('Primary webhook');
   const [contactTarget, setContactTarget] = useState('');
   const [contactKind, setContactKind] = useState<ContactEndpoint['kind']>('webhook');
+  const [editingContactId, setEditingContactId] = useState('');
   const [selectedContact, setSelectedContact] = useState('');
   const [relativeRange, setRelativeRange] = useState<RelativeRange>({ value: 1, unit: 'hours' });
   const [query, setQuery] = useState<QueryState>(() => {
@@ -371,7 +372,7 @@ function App() {
 
   async function saveContact() {
     const saved = await apiPost<ContactEndpoint[]>('/api/alerts/contacts', {
-      id: null,
+      id: editingContactId || null,
       name: contactName,
       kind: contactKind,
       target: contactTarget,
@@ -379,7 +380,10 @@ function App() {
     });
     setContacts((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     loadAuditEvents().catch(() => undefined);
-    if (saved[0]) setSelectedContact(saved[0].id);
+    if (saved[0]) {
+      setEditingContactId(saved[0].id);
+      setSelectedContact(saved[0].id);
+    }
   }
 
   async function saveAlert() {
@@ -515,6 +519,25 @@ function App() {
     setAlertPreview('');
   }
 
+  function newContact() {
+    setEditingContactId('');
+    setContactName('Primary webhook');
+    setContactKind('webhook');
+    setContactTarget('');
+  }
+
+  function openContact(contact: ContactEndpoint) {
+    setEditingContactId(contact.id);
+    setContactName(contact.name);
+    setContactKind(contact.kind);
+    setContactTarget(contact.target);
+  }
+
+  function useContactForAlert(contact: ContactEndpoint) {
+    setSelectedContact(contact.id);
+    openContact(contact);
+  }
+
   function openAlertRule(rule: AlertRule) {
     setEditingAlertId(rule.id);
     setAlertName(rule.name);
@@ -626,7 +649,7 @@ function App() {
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
     { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
     { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
-    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onSave={saveContact} /> },
+    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },
     { key: 'invites', label: 'Invites', children: <InvitesSection user={user} invites={invites} inviteEmail={inviteEmail} inviteRole={inviteRole} inviteToken={inviteToken} onEmail={setInviteEmail} onRole={setInviteRole} onToken={setInviteToken} onAccept={acceptInvite} onCreate={createInvite} /> },

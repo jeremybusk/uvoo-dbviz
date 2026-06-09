@@ -518,16 +518,22 @@ function describeQueryMode(query: unknown): string {
 
 export function ContactsSection(props: {
   user: Principal | null;
+  contacts: ContactEndpoint[];
+  editingContactId: string;
   contactName: string;
   contactTarget: string;
   contactKind: ContactEndpoint['kind'];
   onName: (value: string) => void;
   onTarget: (value: string) => void;
   onKind: (value: ContactEndpoint['kind']) => void;
+  onNew: () => void;
+  onOpen: (contact: ContactEndpoint) => void;
+  onUseForAlert: (contact: ContactEndpoint) => void;
   onSave: () => void;
 }) {
   return (
     <Section title="Contacts">
+      {props.editingContactId && <Tag color="blue">Editing existing contact</Tag>}
       <Field label="Name"><Input value={props.contactName} onChange={(event) => props.onName(event.target.value)} /></Field>
       <Field label="Kind">
         <Select value={props.contactKind} onChange={props.onKind}>
@@ -536,10 +542,38 @@ export function ContactsSection(props: {
           <Select.Option value="email">Email</Select.Option>
         </Select>
       </Field>
-      <Field label="Target"><Input value={props.contactTarget} onChange={(event) => props.onTarget(event.target.value)} /></Field>
-      <Button icon={<SaveOutlined />} disabled={!props.user || !props.contactTarget} onClick={props.onSave}>Save contact</Button>
+      <Field label="Target"><Input value={props.contactTarget} onChange={(event) => props.onTarget(event.target.value)} placeholder={contactTargetPlaceholder(props.contactKind)} /></Field>
+      <Flex gap={8} wrap="wrap">
+        <Button onClick={props.onNew}>New</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user || !props.contactTarget} onClick={props.onSave}>{props.editingContactId ? 'Update contact' : 'Save contact'}</Button>
+      </Flex>
+      <ActionList items={props.contacts} empty="No contacts" list render={(contact) => (
+        <List.Item
+          key={contact.id}
+          actions={[
+            <Button key="edit" size="small" onClick={() => props.onOpen(contact)}>Edit</Button>,
+            <Button key="use" size="small" onClick={() => props.onUseForAlert(contact)}>Use in alert</Button>
+          ]}
+        >
+          <List.Item.Meta
+            title={<Flex gap={6} align="center" wrap="wrap"><span>{contact.name}</span><Tag>{contact.kind}</Tag></Flex>}
+            description={contact.target}
+          />
+        </List.Item>
+      )} />
     </Section>
   );
+}
+
+function contactTargetPlaceholder(kind: ContactEndpoint['kind']): string {
+  switch (kind) {
+    case 'email':
+      return 'alerts@example.com';
+    case 'pagerduty':
+      return 'PagerDuty integration URL';
+    default:
+      return 'https://example.com/alerts';
+  }
 }
 
 export function IncidentsSection({ incidents, onResolve }: { incidents: AlertIncident[]; onResolve: (incident: AlertIncident) => void }) {
