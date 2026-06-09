@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import * as echarts from 'echarts';
+import { Alert, Button, ConfigProvider, Flex, Layout, Space, Spin, Switch, Typography, theme } from 'antd';
+import { BulbOutlined, MoonOutlined } from '@ant-design/icons';
 import {
   AlertIncident,
   AlertNotification,
@@ -8,7 +9,6 @@ import {
   AuditEvent,
   ContactEndpoint,
   DataSource,
-  Dataset,
   Dashboard,
   DashboardChart,
   Principal,
@@ -31,19 +31,31 @@ import {
   setToken,
   sha256base64url
 } from './api';
+import {
+  AccessSection,
+  AlertsSection,
+  AuditSection,
+  ContactsSection,
+  ControlSections,
+  DashboardsSection,
+  HistorySection,
+  IncidentsSection,
+  InvitesSection,
+  MembersSection,
+  NotificationsSection,
+  QuerySection,
+  SavedQueriesSection,
+  SourceSection
+} from './components/ControlSections';
+import { QueryState, VisualizationType } from './types';
+import 'antd/dist/reset.css';
 import './style.css';
 
-type QueryState = {
-  dataset: string;
-  sourceId: string;
-  groupBy: string;
-  measure: string;
-  aggregation: string;
-  from: string;
-  to: string;
-};
+const { Content, Sider } = Layout;
+const Chart = React.lazy(() => import('./components/Chart').then((module) => ({ default: module.Chart })));
 
 function App() {
+  const [themeMode, setThemeMode] = useState<'light' | 'dark'>('light');
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [user, setUser] = useState<Principal | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -62,7 +74,7 @@ function App() {
   const [dashboardName, setDashboardName] = useState('Sample Observability');
   const [dashboardPanels, setDashboardPanels] = useState<DashboardChart[]>([]);
   const [panelTitle, setPanelTitle] = useState('Log volume');
-  const [panelVisualization, setPanelVisualization] = useState<'line' | 'bar' | 'area'>('line');
+  const [panelVisualization, setPanelVisualization] = useState<VisualizationType>('line');
   const [editingSavedQueryId, setEditingSavedQueryId] = useState('');
   const [savedQueryName, setSavedQueryName] = useState('Current query');
   const [savedQueryDescription, setSavedQueryDescription] = useState('');
@@ -200,12 +212,7 @@ function App() {
       id: editingSourceId || null,
       name: sourceName,
       kind: 'clickhouse',
-      config: {
-        url: sourceURL,
-        database: sourceDatabase,
-        username: sourceUser,
-        passwordSecretRef: sourceSecretRef
-      }
+      config: { url: sourceURL, database: sourceDatabase, username: sourceUser, passwordSecretRef: sourceSecretRef }
     });
     setDataSources((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     loadAuditEvents().catch(() => undefined);
@@ -226,18 +233,15 @@ function App() {
   }
 
   async function loadQueryHistory() {
-    const result = await apiGet<QueryHistory[]>('/api/query/history');
-    setQueryHistory(result);
+    setQueryHistory(await apiGet<QueryHistory[]>('/api/query/history'));
   }
 
   async function loadSavedQueries() {
-    const result = await apiGet<SavedQuery[]>('/api/saved-queries');
-    setSavedQueries(result);
+    setSavedQueries(await apiGet<SavedQuery[]>('/api/saved-queries'));
   }
 
   async function loadDashboards() {
-    const result = await apiGet<Dashboard[]>('/api/dashboards');
-    setDashboards(result);
+    setDashboards(await apiGet<Dashboard[]>('/api/dashboards'));
   }
 
   async function loadAccessState() {
@@ -250,25 +254,19 @@ function App() {
   }
 
   async function loadMembers() {
-    const result = await apiGet<TenantMember[]>('/api/members');
-    setMembers(result);
+    setMembers(await apiGet<TenantMember[]>('/api/members'));
   }
 
   async function loadAuditEvents() {
-    const result = await apiGet<AuditEvent[]>('/api/audit/events');
-    setAuditEvents(result);
+    setAuditEvents(await apiGet<AuditEvent[]>('/api/audit/events'));
   }
 
   async function saveDashboard() {
     const panels = dashboardPanels.length > 0 ? dashboardPanels : [currentDashboardPanel()];
-    const layout = {
-      version: 1,
-      charts: panels
-    };
     const saved = await apiPost<Dashboard[]>('/api/dashboards', {
       id: editingDashboardId || null,
       name: dashboardName,
-      layout
+      layout: { version: 1, charts: panels }
     });
     setDashboards((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     loadAuditEvents().catch(() => undefined);
@@ -292,12 +290,6 @@ function App() {
       setSavedQueryName(saved[0].name);
       setSavedQueryDescription(saved[0].description || '');
     }
-  }
-
-  function addPanelToDashboard() {
-    const panel = currentDashboardPanel();
-    setDashboardPanels((current) => [...current, panel]);
-    setPanelTitle(defaultPanelTitle());
   }
 
   async function loadAlertState() {
@@ -332,10 +324,7 @@ function App() {
       id: null,
       name: alertName,
       query: queryPayload(),
-      condition: {
-        operator: 'gt',
-        threshold: Number(alertThreshold)
-      },
+      condition: { operator: 'gt', threshold: Number(alertThreshold) },
       intervalSeconds: 60,
       enabled: true,
       contactEndpointId: selectedContact || null
@@ -351,15 +340,11 @@ function App() {
   }
 
   async function loadInvites() {
-    const result = await apiGet<TenantInvite[]>('/api/invites');
-    setInvites(result);
+    setInvites(await apiGet<TenantInvite[]>('/api/invites'));
   }
 
   async function createInvite() {
-    const saved = await apiPost<TenantInvite[]>('/api/invites', {
-      email: inviteEmail,
-      role: inviteRole
-    });
+    const saved = await apiPost<TenantInvite[]>('/api/invites', { email: inviteEmail, role: inviteRole });
     setInvites((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     setInviteEmail('');
     loadAuditEvents().catch(() => undefined);
@@ -388,9 +373,21 @@ function App() {
     loadAuditEvents().catch(() => undefined);
   }
 
+  function addPanelToDashboard() {
+    setDashboardPanels((current) => [...current, currentDashboardPanel()]);
+    setPanelTitle(defaultPanelTitle());
+  }
+
   function selectTenant(tenant: string) {
     storeActiveTenant(tenant);
     setActiveTenantState(tenant);
+  }
+
+  function signOut() {
+    clearToken();
+    storeActiveTenant('');
+    setUser(null);
+    setProfile(null);
   }
 
   function openDashboard(dashboard: Dashboard) {
@@ -398,11 +395,7 @@ function App() {
     setDashboardName(dashboard.name);
     const charts = dashboard.layout?.charts || [];
     setDashboardPanels(charts);
-    if (charts[0]) {
-      setPanelTitle(charts[0].title || defaultPanelTitle());
-      setPanelVisualization((charts[0].visualization?.type as 'line' | 'bar' | 'area') || 'line');
-      applyQuery(charts[0].query);
-    }
+    if (charts[0]) openPanel(charts[0]);
   }
 
   function openSavedQuery(savedQuery: SavedQuery) {
@@ -414,7 +407,7 @@ function App() {
 
   function openPanel(panel: DashboardChart) {
     setPanelTitle(panel.title || defaultPanelTitle());
-    setPanelVisualization((panel.visualization?.type as 'line' | 'bar' | 'area') || 'line');
+    setPanelVisualization((panel.visualization?.type as VisualizationType) || 'line');
     applyQuery(panel.query);
   }
 
@@ -433,24 +426,13 @@ function App() {
     setSourceSecretRef(String(source.config.passwordSecretRef || ''));
   }
 
-  function openHistory(history: QueryHistory) {
-    applyQuery(history.query);
-  }
-
   function applyQuery(payload: unknown) {
     const savedQuery = editableQuery(payload as Partial<QueryState>);
-    if (savedQuery.dataset) {
-      setQuery((current) => ({ ...current, ...savedQuery }));
-    }
+    if (savedQuery.dataset) setQuery((current) => ({ ...current, ...savedQuery }));
   }
 
   function queryPayload(): QueryState {
-    return {
-      ...query,
-      sourceId: query.sourceId || '',
-      from: new Date(query.from).toISOString(),
-      to: new Date(query.to).toISOString()
-    };
+    return { ...query, sourceId: query.sourceId || '', from: new Date(query.from).toISOString(), to: new Date(query.to).toISOString() };
   }
 
   function defaultPanelTitle() {
@@ -475,388 +457,67 @@ function App() {
     }).catch((err) => setError(err.message));
   }
 
+  const controlItems = [
+    { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onSelectTenant={selectTenant} onSignOut={signOut} /> },
+    { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} /> },
+    { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} onQuery={setQuery} onSource={fillDataSource} onRun={loadData} /> },
+    { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
+    { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
+    { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
+    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} alertName={alertName} alertThreshold={alertThreshold} selectedContact={selectedContact} onName={setAlertName} onThreshold={setAlertThreshold} onContact={setSelectedContact} onSave={saveAlert} /> },
+    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onSave={saveContact} /> },
+    { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
+    { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },
+    { key: 'invites', label: 'Invites', children: <InvitesSection user={user} invites={invites} inviteEmail={inviteEmail} inviteRole={inviteRole} inviteToken={inviteToken} onEmail={setInviteEmail} onRole={setInviteRole} onToken={setInviteToken} onAccept={acceptInvite} onCreate={createInvite} /> },
+    { key: 'members', label: 'Members', children: <MembersSection members={members} onRole={updateMemberRole} onDeactivate={deactivateMember} /> },
+    { key: 'audit', label: 'Audit', children: <AuditSection auditEvents={auditEvents} /> }
+  ];
+
   return (
-    <main className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <span className="mark">U</span>
-          <div>
-            <h1>Uvoo DBViz</h1>
-            <p>Tenant-aware ClickHouse analytics</p>
-          </div>
-        </div>
-
-        {user ? (
-          <section className="panel compact">
-            <strong>{user.name || user.email}</strong>
-            <span>{profile?.role || 'member'} in {profile?.tenant_slug || activeTenant || user.tenantId}</span>
-            <select value={activeTenant || user.tenantId} onChange={(event) => selectTenant(event.target.value)}>
-              {memberships.length === 0 && <option value={activeTenant || user.tenantId}>{activeTenant || user.tenantId}</option>}
-              {memberships.map((membership) => (
-                <option key={membership.tenant_slug} value={membership.tenant_slug}>
-                  {membership.tenant_name} ({membership.role})
-                </option>
-              ))}
-            </select>
-            <button onClick={() => { clearToken(); storeActiveTenant(''); setUser(null); setProfile(null); }}>Sign out</button>
-          </section>
-        ) : (
-          <section className="panel">
-            <h2>Access</h2>
-            <div className="providers">
-              {config?.providers.filter((p) => p.enabled).map((provider) => (
-                <button key={provider.id} onClick={() => login(provider)}>{provider.name}</button>
-              ))}
+    <ConfigProvider
+      theme={{
+        algorithm: themeMode === 'dark' ? theme.darkAlgorithm : theme.defaultAlgorithm,
+        token: { borderRadius: 6, colorPrimary: '#256f72' }
+      }}
+    >
+      <Layout className="app-shell">
+        <Sider width={390} className="app-sidebar">
+          <Space direction="vertical" size={16} className="full">
+            <Flex align="center" gap={12}>
+              <div className="mark">U</div>
+              <div>
+                <Typography.Title level={1}>Uvoo DBViz</Typography.Title>
+                <Typography.Text type="secondary">Tenant-aware ClickHouse analytics</Typography.Text>
+              </div>
+            </Flex>
+            <Flex align="center" justify="space-between">
+              <Typography.Text type="secondary">Theme</Typography.Text>
+              <Switch
+                checkedChildren={<MoonOutlined />}
+                unCheckedChildren={<BulbOutlined />}
+                checked={themeMode === 'dark'}
+                onChange={(checked) => setThemeMode(checked ? 'dark' : 'light')}
+              />
+            </Flex>
+            <ControlSections items={controlItems} />
+          </Space>
+        </Sider>
+        <Content className="workspace">
+          <Flex align="center" justify="space-between" gap={16} wrap="wrap">
+            <div>
+              <Typography.Title level={2}>Explore</Typography.Title>
+              <Typography.Text type="secondary">{dataset?.table || 'Waiting for configuration'}</Typography.Text>
             </div>
-            <textarea value={tokenInput} onChange={(event) => setTokenInput(event.target.value)} placeholder="Paste an OIDC JWT" />
-            <button onClick={saveToken}>Use token</button>
-          </section>
-        )}
-
-        <section className="panel">
-          <h2>Sources</h2>
-          <label>
-            Name
-            <input value={sourceName} onChange={(event) => setSourceName(event.target.value)} />
-          </label>
-          <label>
-            URL
-            <input value={sourceURL} onChange={(event) => setSourceURL(event.target.value)} />
-          </label>
-          <label>
-            Database
-            <input value={sourceDatabase} onChange={(event) => setSourceDatabase(event.target.value)} />
-          </label>
-          <label>
-            User
-            <input value={sourceUser} onChange={(event) => setSourceUser(event.target.value)} />
-          </label>
-          <label>
-            Secret
-            <input value={sourceSecretRef} onChange={(event) => setSourceSecretRef(event.target.value)} />
-          </label>
-          <button disabled={!user || !sourceURL} onClick={saveDataSource}>Save source</button>
-          <button disabled={!user || !editingSourceId} onClick={testDataSource}>Test source</button>
-          {sourceStatus && <small>{sourceStatus}</small>}
-          <div className="dashboard-list">
-            {dataSources.map((source) => (
-              <button key={source.id} onClick={() => fillDataSource(source)}>{source.name} - {source.kind}</button>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Query</h2>
-          <label>
-            Source
-            <select value={query.sourceId} onChange={(event) => {
-              const selected = dataSources.find((source) => source.id === event.target.value);
-              setQuery({ ...query, sourceId: event.target.value });
-              if (selected) fillDataSource(selected);
-            }}>
-              <option value="">Server default</option>
-              {dataSources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
-            </select>
-          </label>
-          <label>
-            Dataset
-            <select value={query.dataset} onChange={(event) => {
-              const next = config?.datasets.find((item) => item.id === event.target.value);
-              setQuery({
-                ...query,
-                dataset: event.target.value,
-                groupBy: firstDimension(config, event.target.value),
-                measure: next?.defaultMeasure || '_rows',
-                aggregation: next?.defaultAggregation || 'count'
-              });
-            }}>
-              {config?.datasets.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-            </select>
-          </label>
-          <label>
-            Group
-            <select value={query.groupBy} onChange={(event) => setQuery({ ...query, groupBy: event.target.value })}>
-              <option value="">All</option>
-              {dataset?.dimensions.map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
-          </label>
-          <label>
-            Measure
-            <select value={query.measure} onChange={(event) => setQuery({ ...query, measure: event.target.value })}>
-              {dataset?.measures.map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
-          </label>
-          <label>
-            Aggregation
-            <select value={query.aggregation} onChange={(event) => setQuery({ ...query, aggregation: event.target.value })}>
-              {dataset?.aggregations.map((item) => <option key={item} value={item}>{item}</option>)}
-            </select>
-          </label>
-          <label>
-            From
-            <input type="datetime-local" value={query.from} onChange={(event) => setQuery({ ...query, from: event.target.value })} />
-          </label>
-          <label>
-            To
-            <input type="datetime-local" value={query.to} onChange={(event) => setQuery({ ...query, to: event.target.value })} />
-          </label>
-          <button disabled={!user} onClick={loadData}>Run</button>
-        </section>
-
-        <section className="panel">
-          <h2>History</h2>
-          <div className="history-list">
-            {queryHistory.slice(0, 8).map((history) => (
-              <button className={history.status === 'failed' ? 'history failed' : 'history'} key={history.id} onClick={() => openHistory(history)}>
-                <strong>{history.dataset}</strong>
-                <span>{history.rows_count} rows - {history.duration_ms} ms</span>
-                <small>{new Date(history.created_at).toLocaleString()}</small>
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Saved Queries</h2>
-          <label>
-            Name
-            <input value={savedQueryName} onChange={(event) => setSavedQueryName(event.target.value)} />
-          </label>
-          <label>
-            Description
-            <textarea value={savedQueryDescription} onChange={(event) => setSavedQueryDescription(event.target.value)} />
-          </label>
-          <button disabled={!user || !savedQueryName} onClick={saveSavedQuery}>Save query</button>
-          <div className="dashboard-list">
-            {savedQueries.map((savedQuery) => (
-              <button key={savedQuery.id} onClick={() => openSavedQuery(savedQuery)}>
-                {savedQuery.name}
-              </button>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Dashboards</h2>
-          <label>
-            Name
-            <input value={dashboardName} onChange={(event) => setDashboardName(event.target.value)} />
-          </label>
-          <label>
-            Panel title
-            <input value={panelTitle} onChange={(event) => setPanelTitle(event.target.value)} />
-          </label>
-          <label>
-            Visualization
-            <select value={panelVisualization} onChange={(event) => setPanelVisualization(event.target.value as 'line' | 'bar' | 'area')}>
-              <option value="line">Line</option>
-              <option value="area">Area</option>
-              <option value="bar">Bar</option>
-            </select>
-          </label>
-          <button disabled={!user} onClick={addPanelToDashboard}>Add panel</button>
-          <button disabled={!user || !dashboardName} onClick={saveDashboard}>Save dashboard</button>
-          <div className="panel-list">
-            {dashboardPanels.map((panel, index) => (
-              <div className="dashboard-panel" key={panel.id || `${panel.title}-${index}`}>
-                <button onClick={() => openPanel(panel)}>{panel.title}</button>
-                <button aria-label={`Remove ${panel.title}`} onClick={() => removePanel(index)}>Remove</button>
-              </div>
-            ))}
-          </div>
-          <div className="dashboard-list">
-            {dashboards.map((dashboard) => (
-              <button key={dashboard.id} onClick={() => openDashboard(dashboard)}>{dashboard.name}</button>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Alerts</h2>
-          <label>
-            Rule
-            <input value={alertName} onChange={(event) => setAlertName(event.target.value)} />
-          </label>
-          <label>
-            Threshold
-            <input type="number" min="0" value={alertThreshold} onChange={(event) => setAlertThreshold(event.target.value)} />
-          </label>
-          <label>
-            Contact
-            <select value={selectedContact} onChange={(event) => setSelectedContact(event.target.value)}>
-              <option value="">None</option>
-              {contacts.map((contact) => <option key={contact.id} value={contact.id}>{contact.name}</option>)}
-            </select>
-          </label>
-          <button disabled={!user} onClick={saveAlert}>Save rule</button>
-          <div className="dashboard-list">
-            {alertRules.map((rule) => (
-              <button key={rule.id} onClick={() => {
-                setAlertName(rule.name);
-                setAlertThreshold(String(rule.condition?.threshold ?? 0));
-                setSelectedContact(rule.contact_endpoint_id || '');
-              }}>{rule.name}</button>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Contacts</h2>
-          <label>
-            Name
-            <input value={contactName} onChange={(event) => setContactName(event.target.value)} />
-          </label>
-          <label>
-            Kind
-            <select value={contactKind} onChange={(event) => setContactKind(event.target.value as ContactEndpoint['kind'])}>
-              <option value="webhook">Webhook</option>
-              <option value="pagerduty">PagerDuty</option>
-              <option value="email">Email</option>
-            </select>
-          </label>
-          <label>
-            Target
-            <input value={contactTarget} onChange={(event) => setContactTarget(event.target.value)} />
-          </label>
-          <button disabled={!user || !contactTarget} onClick={saveContact}>Save contact</button>
-        </section>
-
-        <section className="panel">
-          <h2>Incidents</h2>
-          <div className="incident-list">
-            {incidents.slice(0, 8).map((incident) => (
-              <div className="incident" key={incident.id}>
-                <strong>{incident.status}</strong>
-                <span>{incident.value} x{incident.occurrence_count || 1}</span>
-                <small>{new Date(incident.last_seen_at || incident.created_at).toLocaleString()}</small>
-                {incident.status === 'firing' && (
-                  <button onClick={() => resolveIncident(incident)}>Resolve</button>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Notifications</h2>
-          <div className="notification-list">
-            {notifications.slice(0, 8).map((notification) => (
-              <div className={notification.status === 'failed' ? 'notification failed' : 'notification'} key={notification.id}>
-                <strong>{notification.status}</strong>
-                <span>{notification.contact_kind}{notification.status_code ? ` - ${notification.status_code}` : ''}</span>
-                <small>{notification.contact_target}</small>
-                {notification.error && <small>{notification.error}</small>}
-                <small>{new Date(notification.created_at).toLocaleString()}</small>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Invites</h2>
-          <label>
-            Accept token
-            <input value={inviteToken} onChange={(event) => setInviteToken(event.target.value)} />
-          </label>
-          <button disabled={!user || !inviteToken} onClick={acceptInvite}>Accept invite</button>
-          <label>
-            Email
-            <input value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
-          </label>
-          <label>
-            Role
-            <select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as TenantInvite['role'])}>
-              <option value="viewer">Viewer</option>
-              <option value="editor">Editor</option>
-              <option value="admin">Admin</option>
-            </select>
-          </label>
-          <button disabled={!user || !inviteEmail} onClick={createInvite}>Create invite</button>
-          <div className="dashboard-list">
-            {invites.map((invite) => (
-              <button key={invite.id}>{invite.email} - {invite.role}{invite.token ? ` - ${invite.token}` : ''}</button>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Members</h2>
-          <div className="member-list">
-            {members.map((member) => (
-              <div className={member.disabled_at ? 'member disabled' : 'member'} key={member.id}>
-                <div>
-                  <strong>{member.display_name || member.email}</strong>
-                  <small>{member.provider}{member.disabled_at ? ' - disabled' : ''}</small>
-                </div>
-                <select disabled={Boolean(member.disabled_at)} value={member.role} onChange={(event) => updateMemberRole(member, event.target.value as TenantMember['role'])}>
-                  <option value="owner">Owner</option>
-                  <option value="admin">Admin</option>
-                  <option value="editor">Editor</option>
-                  <option value="viewer">Viewer</option>
-                </select>
-                {!member.disabled_at && <button onClick={() => deactivateMember(member)}>Deactivate</button>}
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="panel">
-          <h2>Audit</h2>
-          <div className="audit-list">
-            {auditEvents.slice(0, 10).map((event) => (
-              <div className="audit-event" key={event.id}>
-                <strong>{event.action}</strong>
-                <span>{event.actor_email || 'system'}</span>
-                <small>{event.target_type}{event.target_id ? ` - ${event.target_id}` : ''}</small>
-                <small>{new Date(event.created_at).toLocaleString()}</small>
-              </div>
-            ))}
-          </div>
-        </section>
-      </aside>
-
-      <section className="workspace">
-        <div className="toolbar">
-          <div>
-            <h2>Explore</h2>
-            <p>{dataset?.table || 'Waiting for configuration'}</p>
-          </div>
-          <span>{rows.length} rows</span>
-        </div>
-        {error && <div className="error">{error}</div>}
-        <Chart rows={rows} type={panelVisualization} />
-      </section>
-    </main>
+            <Button>{rows.length} rows</Button>
+          </Flex>
+          {error && <Alert type="error" showIcon closable message={error} onClose={() => setError('')} />}
+          <React.Suspense fallback={<div className="chart chart-loading"><Spin /></div>}>
+            <Chart rows={rows} type={panelVisualization} />
+          </React.Suspense>
+        </Content>
+      </Layout>
+    </ConfigProvider>
   );
-}
-
-function Chart({ rows, type }: { rows: QueryRow[]; type: 'line' | 'bar' | 'area' }) {
-  const ref = React.useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!ref.current) return;
-    const chart = echarts.init(ref.current, undefined, { renderer: 'canvas' });
-    const seriesNames = Array.from(new Set(rows.map((row) => row.series || 'all')));
-    chart.setOption({
-      grid: { top: 24, right: 24, bottom: 36, left: 54 },
-      tooltip: { trigger: 'axis' },
-      xAxis: { type: 'time' },
-      yAxis: { type: 'value' },
-      series: seriesNames.map((name) => ({
-        name,
-        type: type === 'bar' ? 'bar' : 'line',
-        areaStyle: type === 'area' ? {} : undefined,
-        showSymbol: false,
-        data: rows.filter((row) => (row.series || 'all') === name).map((row) => [row.ts * 1000, row.value])
-      }))
-    });
-    const resize = () => chart.resize();
-    window.addEventListener('resize', resize);
-    return () => {
-      window.removeEventListener('resize', resize);
-      chart.dispose();
-    };
-  }, [rows, type]);
-  return <div className="chart" ref={ref} />;
 }
 
 function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {
@@ -870,10 +531,6 @@ function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {
     if (!Number.isNaN(to.getTime())) next.to = toInput(to);
   }
   return next;
-}
-
-function firstDimension(config: PublicConfig | null, datasetID: string): string {
-  return config?.datasets.find((item) => item.id === datasetID)?.dimensions[0] || '';
 }
 
 function toInput(date: Date): string {
