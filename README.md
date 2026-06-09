@@ -95,7 +95,12 @@ cannot bypass tenant scoping with arbitrary SQL.
 
 Tenants can also keep ClickHouse connection metadata in `data_sources`. The
 application stores non-secret connection fields and a `passwordSecretRef`; raw
-passwords are rejected by the Go API and stripped by PostgreSQL RPCs.
+passwords are rejected by the Go API and stripped by PostgreSQL RPCs. At query
+time, a selected `sourceId` is loaded through tenant-scoped RLS and converted
+into a ClickHouse client. The `passwordSecretRef` value maps to an environment
+variable by uppercasing and replacing non-alphanumerics with `_`, prefixed with
+`DBVIZ_SECRET_`; for example, `clickhouse-default` resolves from
+`DBVIZ_SECRET_CLICKHOUSE_DEFAULT`.
 
 ## Dashboards
 
@@ -114,6 +119,7 @@ Alert rule and contact management follows the same pattern:
 
 - `GET /api/data-sources`
 - `POST /api/data-sources`
+- `POST /api/data-sources/test`
 - `GET /api/query/history`
 - `GET /api/alerts/rules`
 - `POST /api/alerts/rules`

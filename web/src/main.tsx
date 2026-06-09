@@ -31,6 +31,7 @@ import './style.css';
 
 type QueryState = {
   dataset: string;
+  sourceId: string;
   groupBy: string;
   measure: string;
   aggregation: string;
@@ -52,11 +53,13 @@ function App() {
   const [dataSources, setDataSources] = useState<DataSource[]>([]);
   const [queryHistory, setQueryHistory] = useState<QueryHistory[]>([]);
   const [dashboardName, setDashboardName] = useState('Sample Observability');
+  const [editingSourceId, setEditingSourceId] = useState('');
   const [sourceName, setSourceName] = useState('Default ClickHouse');
   const [sourceURL, setSourceURL] = useState('http://clickhouse:8123');
   const [sourceDatabase, setSourceDatabase] = useState('default');
   const [sourceUser, setSourceUser] = useState('default');
   const [sourceSecretRef, setSourceSecretRef] = useState('clickhouse-default');
+  const [sourceStatus, setSourceStatus] = useState('');
   const [alertRules, setAlertRules] = useState<AlertRule[]>([]);
   const [contacts, setContacts] = useState<ContactEndpoint[]>([]);
   const [incidents, setIncidents] = useState<AlertIncident[]>([]);
@@ -73,7 +76,7 @@ function App() {
   const [query, setQuery] = useState<QueryState>(() => {
     const to = new Date();
     const from = new Date(to.getTime() - 60 * 60 * 1000);
-    return { dataset: 'logs', groupBy: 'service_name', measure: '_rows', aggregation: 'count', from: toInput(from), to: toInput(to) };
+    return { dataset: 'logs', sourceId: '', groupBy: 'service_name', measure: '_rows', aggregation: 'count', from: toInput(from), to: toInput(to) };
   });
 
   useEffect(() => {
@@ -164,6 +167,7 @@ function App() {
     setError('');
     const result = await apiPost<{ rows: QueryRow[] }>('/api/query', {
       dataset: query.dataset,
+      sourceId: query.sourceId || undefined,
       groupBy: query.groupBy,
       measure: query.measure,
       aggregation: query.aggregation,
@@ -177,12 +181,15 @@ function App() {
   async function loadDataSources() {
     const result = await apiGet<DataSource[]>('/api/data-sources');
     setDataSources(result);
-    if (result[0]) fillDataSource(result[0]);
+    if (result[0] && !editingSourceId) {
+      fillDataSource(result[0]);
+      if (!query.sourceId) setQuery((current) => ({ ...current, sourceId: result[0].id }));
+    }
   }
 
   async function saveDataSource() {
     const saved = await apiPost<DataSource[]>('/api/data-sources', {
-      id: null,
+      id: editingSourceId || null,
       name: sourceName,
       kind: 'clickhouse',
       config: {
@@ -193,6 +200,20 @@ function App() {
       }
     });
     setDataSources((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    if (saved[0]) {
+      setEditingSourceId(saved[0].id);
+      setQuery((current) => ({ ...current, sourceId: saved[0].id }));
+    }
+  }
+
+  async function testDataSource() {
+    setSourceStatus('');
+    if (!editingSourceId) {
+      setSourceStatus('Save source before testing');
+      return;
+    }
+    const result = await apiPost<{ ok: boolean; durationMs: number }>('/api/data-sources/test', { id: editingSourceId });
+    setSourceStatus(result.ok ? `Connected in ${result.durationMs} ms` : 'Connection failed');
   }
 
   async function loadQueryHistory() {
@@ -325,6 +346,9 @@ function App() {
   }
 
   function fillDataSource(source: DataSource) {
+    setEditingSourceId(source.id);
+    setQuery((current) => ({ ...current, sourceId: source.id }));
+    setSourceStatus('');
     setSourceName(source.name);
     setSourceURL(String(source.config.url || ''));
     setSourceDatabase(String(source.config.database || 'default'));
@@ -406,6 +430,8 @@ function App() {
             <input value={sourceSecretRef} onChange={(event) => setSourceSecretRef(event.target.value)} />
           </label>
           <button disabled={!user || !sourceURL} onClick={saveDataSource}>Save source</button>
+          <button disabled={!user || !editingSourceId} onClick={testDataSource}>Test source</button>
+          {sourceStatus && <small>{sourceStatus}</small>}
           <div className="dashboard-list">
             {dataSources.map((source) => (
               <button key={source.id} onClick={() => fillDataSource(source)}>{source.name} - {source.kind}</button>
@@ -415,6 +441,17 @@ function App() {
 
         <section className="panel">
           <h2>Query</h2>
+          <label>
+            Source
+            <select value={query.sourceId} onChange={(event) => {
+              const selected = dataSources.find((source) => source.id === event.target.value);
+              setQuery({ ...query, sourceId: event.target.value });
+              if (selected) fillDataSource(selected);
+            }}>
+              <option value="">Server default</option>
+              {dataSources.map((source) => <option key={source.id} value={source.id}>{source.name}</option>)}
+            </select>
+          </label>
           <label>
             Dataset
             <select value={query.dataset} onChange={(event) => {

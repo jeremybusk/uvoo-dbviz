@@ -84,6 +84,7 @@ func (c *Client) QueryJSONEachRow(ctx context.Context, sql string) ([]map[string
 
 type QueryRequest struct {
 	Dataset       string            `json:"dataset"`
+	SourceID      string            `json:"sourceId"`
 	From          time.Time         `json:"from"`
 	To            time.Time         `json:"to"`
 	GroupBy       string            `json:"groupBy"`

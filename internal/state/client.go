@@ -44,6 +44,15 @@ type UserProfile struct {
 	Role        string `json:"role"`
 }
 
+type DataSource struct {
+	ID        string         `json:"id"`
+	Name      string         `json:"name"`
+	Kind      string         `json:"kind"`
+	Config    map[string]any `json:"config"`
+	UpdatedAt string         `json:"updated_at"`
+	CreatedAt string         `json:"created_at"`
+}
+
 type AlertIncident struct {
 	ID              string         `json:"id"`
 	AlertRuleID     *string        `json:"alert_rule_id"`
@@ -141,6 +150,20 @@ func (c *Client) CurrentUserHasRole(ctx context.Context, user auth.Principal, be
 		"allowed_roles": allowed,
 	}, user, bearer, &ok)
 	return ok, err
+}
+
+func (c *Client) GetDataSource(ctx context.Context, user auth.Principal, bearer string, sourceID string) (DataSource, error) {
+	var rows []DataSource
+	err := c.RPC(ctx, "get_data_source", map[string]any{
+		"source_id": sourceID,
+	}, user, bearer, &rows)
+	if err != nil {
+		return DataSource{}, err
+	}
+	if len(rows) == 0 {
+		return DataSource{}, fmt.Errorf("data source not found")
+	}
+	return rows[0], nil
 }
 
 func (c *Client) ListAlertIncidents(ctx context.Context, user auth.Principal, bearer string, limit int) ([]AlertIncident, error) {

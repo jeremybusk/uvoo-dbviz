@@ -19,6 +19,7 @@ services:
       DBVIZ_AUTH_DEV_MODE: ${DBVIZ_AUTH_DEV_MODE:-true}
       DBVIZ_CLICKHOUSE_URL: http://clickhouse:8123
       DBVIZ_CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      DBVIZ_SECRET_CLICKHOUSE_DEFAULT: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
       DBVIZ_CLICKHOUSE_DATABASE: default
       DBVIZ_POSTGREST_URL: http://localhost:3000
       DBVIZ_OIDC_KEYCLOAK_ISSUER: http://localhost:8089/realms/dbviz
@@ -29,6 +30,7 @@ services:
       DBVIZ_ALERT_LOAD_PERSISTED: ${DBVIZ_ALERT_LOAD_PERSISTED:-true}
       DBVIZ_ALERT_WORKER_KEY: ${DBVIZ_ALERT_WORKER_KEY:-dev-alert-worker-key}
       DBVIZ_ALERT_POLL_SECONDS: ${DBVIZ_ALERT_POLL_SECONDS:-30}
+      DBVIZ_ALERT_DEDUPE_SECONDS: ${DBVIZ_ALERT_DEDUPE_SECONDS:-300}
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5-alpine

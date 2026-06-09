@@ -3,10 +3,13 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -44,6 +47,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/query/history", a.requireAuth(a.listQueryHistory))
 	a.mux.HandleFunc("GET /api/data-sources", a.requireAuth(a.listDataSources))
 	a.mux.HandleFunc("POST /api/data-sources", a.requireAuth(a.saveDataSource))
+	a.mux.HandleFunc("POST /api/data-sources/test", a.requireAuth(a.testDataSource))
 	a.mux.HandleFunc("GET /api/dashboards", a.requireAuth(a.listDashboards))
 	a.mux.HandleFunc("POST /api/dashboards", a.requireAuth(a.saveDashboard))
 	a.mux.HandleFunc("GET /api/alerts/rules", a.requireAuth(a.listAlertRules))
@@ -161,7 +165,13 @@ func (a *App) query(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	rows, err := a.ch.QueryJSONEachRow(r.Context(), sql)
+	ch, err := a.clickHouseForQuery(r, req)
+	if err != nil {
+		a.recordQueryHistory(r, req, 0, start, "failed", err.Error())
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	rows, err := ch.QueryJSONEachRow(r.Context(), sql)
 	if err != nil {
 		a.logger.Warn("clickhouse query failed", "error", err)
 		a.recordQueryHistory(r, req, 0, start, "failed", err.Error())
@@ -214,6 +224,46 @@ func (a *App) listDataSources(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+func (a *App) testDataSource(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("data source id is required"))
+		return
+	}
+	source, err := a.state.GetDataSource(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), req.ID)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	cfg, err := a.clickHouseConfigFromSource(source)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	start := time.Now()
+	client := clickhouse.NewClient(cfg, nil)
+	rows, err := client.QueryJSONEachRow(r.Context(), "SELECT 1 AS ok FORMAT JSONEachRow")
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":         true,
+		"rows":       rows,
+		"durationMs": int(time.Since(start).Milliseconds()),
+	})
+}
+
 func (a *App) saveDataSource(w http.ResponseWriter, r *http.Request) {
 	if !a.requireStateRole(w, r, "owner", "admin") {
 		return
@@ -248,6 +298,9 @@ func (a *App) saveDataSource(w http.ResponseWriter, r *http.Request) {
 	if urlValue, _ := req.Config["url"].(string); strings.TrimSpace(urlValue) == "" {
 		writeError(w, http.StatusBadRequest, errors.New("data source config.url is required"))
 		return
+	} else if err := validateDataSourceURL(urlValue); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
 	}
 	var sourceID any
 	if req.ID != "" {
@@ -264,6 +317,81 @@ func (a *App) saveDataSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) clickHouseForQuery(r *http.Request, req clickhouse.QueryRequest) (*clickhouse.Client, error) {
+	if strings.TrimSpace(req.SourceID) == "" {
+		return a.ch, nil
+	}
+	source, err := a.state.GetDataSource(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), req.SourceID)
+	if err != nil {
+		return nil, err
+	}
+	cfg, err := a.clickHouseConfigFromSource(source)
+	if err != nil {
+		return nil, err
+	}
+	return clickhouse.NewClient(cfg, nil), nil
+}
+
+func (a *App) clickHouseConfigFromSource(source state.DataSource) (config.ClickHouseConfig, error) {
+	if source.Kind != "clickhouse" {
+		return config.ClickHouseConfig{}, errors.New("data source is not clickhouse")
+	}
+	cfg := a.cfg.ClickHouse
+	if value, _ := source.Config["url"].(string); strings.TrimSpace(value) != "" {
+		if err := validateDataSourceURL(value); err != nil {
+			return config.ClickHouseConfig{}, err
+		}
+		cfg.URL = strings.TrimSpace(value)
+	}
+	if value, _ := source.Config["database"].(string); strings.TrimSpace(value) != "" {
+		cfg.Database = strings.TrimSpace(value)
+	}
+	if value, _ := source.Config["username"].(string); strings.TrimSpace(value) != "" {
+		cfg.User = strings.TrimSpace(value)
+	}
+	if value, _ := source.Config["passwordSecretRef"].(string); strings.TrimSpace(value) != "" {
+		secretValue, ok := resolveSecretRef(value)
+		if !ok {
+			return config.ClickHouseConfig{}, fmt.Errorf("secret ref is not configured: %s", value)
+		}
+		cfg.Password = secretValue
+	}
+	return cfg, nil
+}
+
+func validateDataSourceURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return errors.New("data source url must use http or https")
+	}
+	if parsed.Host == "" {
+		return errors.New("data source url host is required")
+	}
+	if parsed.User != nil {
+		return errors.New("data source url must not include credentials")
+	}
+	return nil
+}
+
+func resolveSecretRef(ref string) (string, bool) {
+	name := secretEnvName(ref)
+	value, ok := os.LookupEnv(name)
+	if ok {
+		return value, true
+	}
+	return "", false
+}
+
+var secretRefCleaner = regexp.MustCompile(`[^A-Za-z0-9]+`)
+
+func secretEnvName(ref string) string {
+	clean := strings.Trim(secretRefCleaner.ReplaceAllString(strings.ToUpper(strings.TrimSpace(ref)), "_"), "_")
+	return "DBVIZ_SECRET_" + clean
 }
 
 func (a *App) listDashboards(w http.ResponseWriter, r *http.Request) {

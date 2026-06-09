@@ -304,6 +304,17 @@ AS $$
     ORDER BY ds.name;
 $$;
 
+CREATE OR REPLACE FUNCTION get_data_source(source_id uuid)
+RETURNS TABLE(id uuid, name text, kind text, config jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT ds.id, ds.name, ds.kind, ds.config - 'password' AS config, ds.updated_at, ds.created_at
+    FROM data_sources ds
+    WHERE ds.tenant_id = request_tenant_id()
+      AND ds.id = source_id
+    LIMIT 1;
+$$;
+
 CREATE OR REPLACE FUNCTION save_data_source(source_id uuid, source_name text, source_kind text, source_config jsonb)
 RETURNS TABLE(id uuid, name text, kind text, config jsonb, updated_at timestamptz, created_at timestamptz)
 LANGUAGE plpgsql
@@ -402,6 +413,7 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION list_data_sources() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION get_data_source(uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_data_source(uuid, text, text, jsonb) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_query_history(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION record_query_history(text, text, text, jsonb, integer, integer, text, text) TO dbviz_web;

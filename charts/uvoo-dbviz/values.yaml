@@ -50,10 +50,12 @@ config:
   alertLoadPersisted: true
   alertWorkerKey: dev-alert-worker-key
   alertPollSeconds: "30"
+  alertDedupeSeconds: "300"
   extraEnv: []
 
 secret:
   clickhousePassword: "clickhouse"
+  clickhouseDefaultSecret: "clickhouse"
   keycloakClientSecret: ""
   existingSecret: ""
 

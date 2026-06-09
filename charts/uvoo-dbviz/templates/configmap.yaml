@@ -23,3 +23,4 @@ data:
   DBVIZ_ALERT_LOAD_PERSISTED: {{ .Values.config.alertLoadPersisted | quote }}
   DBVIZ_ALERT_WORKER_KEY: {{ .Values.config.alertWorkerKey | quote }}
   DBVIZ_ALERT_POLL_SECONDS: {{ .Values.config.alertPollSeconds | quote }}
+  DBVIZ_ALERT_DEDUPE_SECONDS: {{ .Values.config.alertDedupeSeconds | quote }}
