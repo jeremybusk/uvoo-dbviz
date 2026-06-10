@@ -28,6 +28,11 @@ export type PublicConfig = {
   providers: Provider[];
   datasets: Dataset[];
   devMode: boolean;
+  alertDelivery: {
+    alertsEnabled: boolean;
+    smtpConfigured: boolean;
+    smtpHasAuth: boolean;
+  };
 };
 
 export type Principal = {

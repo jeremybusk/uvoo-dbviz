@@ -112,9 +112,16 @@ type PublicProvider struct {
 }
 
 type PublicConfig struct {
-	Providers []PublicProvider `json:"providers"`
-	Datasets  []Dataset        `json:"datasets"`
-	DevMode   bool             `json:"devMode"`
+	Providers     []PublicProvider    `json:"providers"`
+	Datasets      []Dataset           `json:"datasets"`
+	DevMode       bool                `json:"devMode"`
+	AlertDelivery PublicAlertDelivery `json:"alertDelivery"`
+}
+
+type PublicAlertDelivery struct {
+	AlertsEnabled  bool `json:"alertsEnabled"`
+	SMTPConfigured bool `json:"smtpConfigured"`
+	SMTPHasAuth    bool `json:"smtpHasAuth"`
 }
 
 func Load() Config {
@@ -365,6 +372,11 @@ func (c Config) Public() PublicConfig {
 		Providers: providers,
 		Datasets:  datasets,
 		DevMode:   c.Auth.DevMode,
+		AlertDelivery: PublicAlertDelivery{
+			AlertsEnabled:  c.Alerts.Enabled,
+			SMTPConfigured: strings.TrimSpace(c.Alerts.SMTPHost) != "" && strings.TrimSpace(c.Alerts.SMTPFrom) != "",
+			SMTPHasAuth:    strings.TrimSpace(c.Alerts.SMTPUser) != "",
+		},
 	}
 }
 

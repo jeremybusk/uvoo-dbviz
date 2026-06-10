@@ -1014,6 +1014,8 @@ export function ContactsSection(props: {
   contactTarget: string;
   contactKind: ContactEndpoint['kind'];
   contactStatus: string;
+  smtpConfigured: boolean;
+  smtpHasAuth: boolean;
   webhookTokenSecretRef: string;
   webhookTokenValue: string;
   webhookHeaderName: string;
@@ -1080,6 +1082,13 @@ export function ContactsSection(props: {
         </Select>
       </Field>
       <Field label="Target"><Input value={props.contactTarget} onChange={(event) => props.onTarget(event.target.value)} placeholder={contactTargetPlaceholder(props.contactKind)} /></Field>
+      {props.contactKind === 'email' && (
+        <Alert
+          type={props.smtpConfigured ? 'success' : 'warning'}
+          showIcon
+          message={props.smtpConfigured ? `SMTP delivery configured${props.smtpHasAuth ? ' with auth' : ''}` : 'SMTP delivery is not configured'}
+        />
+      )}
       {props.contactKind === 'webhook' && (
         <>
           <Field label="Bearer token secret">
@@ -1231,18 +1240,79 @@ export function IncidentsSection({ incidents, onResolve }: { incidents: AlertInc
 }
 
 export function NotificationsSection({ notifications }: { notifications: AlertNotification[] }) {
+  const [statusFilter, setStatusFilter] = React.useState('all');
+  const [kindFilter, setKindFilter] = React.useState('all');
+  const [notificationSearch, setNotificationSearch] = React.useState('');
+  const kinds = React.useMemo(() => Array.from(new Set(notifications.map((notification) => notification.contact_kind).filter(Boolean))).sort(), [notifications]);
+  const filteredNotifications = React.useMemo(() => {
+    const term = notificationSearch.trim().toLowerCase();
+    return notifications.filter((notification) => {
+      if (statusFilter !== 'all' && notification.status !== statusFilter) return false;
+      if (kindFilter !== 'all' && notification.contact_kind !== kindFilter) return false;
+      if (!term) return true;
+      return [
+        notification.contact_kind,
+        notification.contact_target,
+        notification.status,
+        notification.error,
+        notification.alert_rule_id ? 'alert' : 'contact test'
+      ].some((value) => String(value || '').toLowerCase().includes(term));
+    });
+  }, [kindFilter, notificationSearch, notifications, statusFilter]);
+
   return (
     <Section title="Notifications">
-      <ActionList items={notifications.slice(0, 8)} empty="No notifications" render={(notification) => (
+      <Flex gap={8} wrap="wrap">
+        <Select size="small" value={statusFilter} onChange={setStatusFilter} className="role-select">
+          <Select.Option value="all">All statuses</Select.Option>
+          <Select.Option value="failed">Failed</Select.Option>
+          <Select.Option value="skipped">Skipped</Select.Option>
+          <Select.Option value="success">Success</Select.Option>
+        </Select>
+        <Select size="small" value={kindFilter} onChange={setKindFilter} className="role-select">
+          <Select.Option value="all">All kinds</Select.Option>
+          {kinds.map((kind) => <Select.Option key={kind} value={kind}>{kind}</Select.Option>)}
+        </Select>
+      </Flex>
+      <Field label="Find notification">
+        <Input.Search allowClear value={notificationSearch} onChange={(event) => setNotificationSearch(event.target.value)} />
+      </Field>
+      <ActionList items={filteredNotifications.slice(0, 25)} empty="No notifications" render={(notification) => (
         <List.Item key={notification.id}>
           <List.Item.Meta
-            title={<Space><Tag color={notification.status === 'failed' ? 'red' : 'green'}>{notification.status}</Tag><span>{notification.contact_kind}</span></Space>}
-            description={[notification.contact_target, notification.error, new Date(notification.created_at).toLocaleString()].filter(Boolean).join(' - ')}
+            title={<Space wrap><Tag color={notificationStatusColor(notification.status)}>{notification.status}</Tag><Tag>{notification.contact_kind}</Tag><Tag>{notification.alert_rule_id ? 'alert' : 'test'}</Tag>{notification.status_code > 0 && <Tag>HTTP {notification.status_code}</Tag>}</Space>}
+            description={
+              <Space direction="vertical" size={4} className="full">
+                <Typography.Text type="secondary">{[notification.contact_target, notification.error, new Date(notification.created_at).toLocaleString()].filter(Boolean).join(' - ')}</Typography.Text>
+                <Collapse
+                  size="small"
+                  ghost
+                  items={[{
+                    key: 'details',
+                    label: 'Details',
+                    children: <pre className="json-preview">{JSON.stringify(notification.payload, null, 2)}</pre>
+                  }]}
+                />
+              </Space>
+            }
           />
         </List.Item>
       )} list />
     </Section>
   );
+}
+
+function notificationStatusColor(status: string): string {
+  switch (status) {
+    case 'failed':
+      return 'red';
+    case 'skipped':
+      return 'orange';
+    case 'success':
+      return 'green';
+    default:
+      return 'default';
+  }
 }
 
 export function InvitesSection(props: {
