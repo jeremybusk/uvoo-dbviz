@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, ConfigProvider, Dropdown, Flex, Input, Layout, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, theme } from 'antd';
+import { Alert, Button, ConfigProvider, Dropdown, Flex, Input, Layout, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message, theme } from 'antd';
 import { BulbOutlined, DownOutlined, FilterOutlined, MoonOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import {
   AlertIncident,
@@ -61,6 +61,7 @@ const secondaryColor = '#64748b';
 const themeStorageKey = 'uvoo-dbviz-theme';
 
 function App() {
+  const [messageApi, messageContext] = message.useMessage();
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [user, setUser] = useState<Principal | null>(null);
@@ -85,6 +86,7 @@ function App() {
   const [dashboardName, setDashboardName] = useState('Sample Observability');
   const [dashboardPanels, setDashboardPanels] = useState<DashboardChart[]>([]);
   const [dashboardSavedSignature, setDashboardSavedSignature] = useState('');
+  const [dashboardImportText, setDashboardImportText] = useState('');
   const [editingPanelId, setEditingPanelId] = useState('');
   const [panelTitle, setPanelTitle] = useState('Log volume');
   const [panelVisualization, setPanelVisualization] = useState<VisualizationType>('line');
@@ -338,6 +340,34 @@ function App() {
       setDashboardPanels(savedPanels);
       setDashboardSavedSignature(dashboardSignature(saved[0].name, savedPanels));
       if (!editingPanelId && savedPanels[0]?.id) setEditingPanelId(savedPanels[0].id);
+      messageApi.success('Dashboard saved');
+    }
+  }
+
+  async function saveDashboardAsCopy() {
+    setError('');
+    const cleanName = dashboardName.trim();
+    const copyName = cleanName.endsWith(' copy') ? cleanName : `${cleanName || 'Dashboard'} copy`;
+    const panels = normalizeDashboardPanels(dashboardPanels);
+    if (panels.length === 0) {
+      setError('Add at least one panel before saving the dashboard');
+      return;
+    }
+    const saved = await apiPost<Dashboard[]>('/api/dashboards', {
+      id: null,
+      name: copyName,
+      layout: { version: 1, charts: panels.map((panel, index) => normalizeDashboardPanel({ ...panel, id: newClientID() }, index)) }
+    });
+    setDashboards((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
+    loadAuditEvents().catch(() => undefined);
+    if (saved[0]) {
+      setEditingDashboardId(saved[0].id);
+      setDashboardName(saved[0].name);
+      const savedPanels = normalizeDashboardPanels(saved[0].layout?.charts || panels);
+      setDashboardPanels(savedPanels);
+      setDashboardSavedSignature(dashboardSignature(saved[0].name, savedPanels));
+      if (savedPanels[0]?.id) setEditingPanelId(savedPanels[0].id);
+      messageApi.success('Dashboard copied');
     }
   }
 
@@ -352,6 +382,8 @@ function App() {
     loadAuditEvents().catch(() => undefined);
     if (deleted.length === 0) {
       setError('Dashboard was not deleted. It may already be gone or belong to another tenant.');
+    } else {
+      messageApi.success('Dashboard deleted');
     }
   }
 
@@ -502,6 +534,7 @@ function App() {
     setEditingPanelId(panel.id || '');
     setActiveTab('dashboard');
     setPanelTitle(defaultPanelTitle());
+    messageApi.success('Panel added');
   }
 
   function updateSelectedPanel() {
@@ -515,6 +548,7 @@ function App() {
     }
     setDashboardPanels((current) => current.map((panel) => panel.id === editingPanelId ? currentDashboardPanel(panel) : panel));
     setActiveTab('dashboard');
+    messageApi.success('Panel updated');
   }
 
   function duplicatePanel(index: number) {
@@ -529,6 +563,7 @@ function App() {
     setDashboardPanels((current) => [...current.slice(0, index + 1), copy, ...current.slice(index + 1)]);
     setEditingPanelId(copy.id || '');
     setActiveTab('dashboard');
+    messageApi.success('Panel copied');
   }
 
   function resizePanel(panelID: string, width: number) {
@@ -561,6 +596,7 @@ function App() {
     setPanelTitle(defaultPanelTitle());
     setPanelVisualization('line');
     setActiveTab('dashboard');
+    messageApi.success('New dashboard started');
   }
 
   function duplicateDashboard(dashboard: Dashboard) {
@@ -576,6 +612,54 @@ function App() {
     setActiveTab('dashboard');
     if (charts[0]) openPanel(charts[0]);
     else setEditingPanelId('');
+    messageApi.success('Dashboard copied');
+  }
+
+  function exportDashboard() {
+    const payload = {
+      version: 1,
+      name: dashboardName.trim() || 'Dashboard',
+      layout: {
+        version: 1,
+        charts: normalizeDashboardPanels(dashboardPanels)
+      }
+    };
+    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `${safeFileName(payload.name)}.dashboard.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+    messageApi.success('Dashboard exported');
+  }
+
+  function importDashboard() {
+    setError('');
+    try {
+      const parsed = JSON.parse(dashboardImportText) as { name?: unknown; layout?: { charts?: unknown }; charts?: unknown };
+      const charts = Array.isArray(parsed.layout?.charts)
+        ? parsed.layout.charts
+        : Array.isArray(parsed.charts)
+          ? parsed.charts
+          : [];
+      if (charts.length === 0) {
+        throw new Error('Imported dashboard does not contain panels');
+      }
+      const importedPanels = normalizeDashboardPanels(charts as DashboardChart[]);
+      setEditingDashboardId('');
+      setDashboardName(typeof parsed.name === 'string' && parsed.name.trim() ? parsed.name.trim() : 'Imported Dashboard');
+      setDashboardPanels(importedPanels);
+      setDashboardSavedSignature('');
+      setDashboardImportText('');
+      setActiveTab('dashboard');
+      if (importedPanels[0]) openPanel(importedPanels[0]);
+      messageApi.success('Dashboard imported');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Dashboard JSON could not be imported';
+      setError(message);
+      messageApi.error(message);
+    }
   }
 
   function selectTenant(tenant: string) {
@@ -779,7 +863,40 @@ function App() {
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={updateQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
-    { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} editingDashboardId={editingDashboardId} activePanelId={editingPanelId} dashboardName={dashboardName} dashboardDirty={dashboardDirty} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onNewDashboard={newDashboard} onAddPanel={addPanelToDashboard} onUpdatePanel={updateSelectedPanel} onSave={saveDashboard} onOpen={openDashboard} onDuplicateDashboard={duplicateDashboard} onDeleteDashboard={(dashboard) => deleteDashboard(dashboard).catch((err) => setError(err.message))} onOpenPanel={openPanel} onDuplicatePanel={duplicatePanel} onMovePanel={movePanel} onRemovePanel={removePanel} /> },
+    {
+      key: 'dashboards',
+      label: 'Dashboards',
+      children: <DashboardsSection
+        user={user}
+        dashboards={dashboards}
+        dashboardPanels={dashboardPanels}
+        editingDashboardId={editingDashboardId}
+        activePanelId={editingPanelId}
+        dashboardName={dashboardName}
+        dashboardDirty={dashboardDirty}
+        dashboardImportText={dashboardImportText}
+        panelTitle={panelTitle}
+        panelVisualization={panelVisualization}
+        onDashboardName={setDashboardName}
+        onPanelTitle={setPanelTitle}
+        onPanelVisualization={setPanelVisualization}
+        onDashboardImportText={setDashboardImportText}
+        onNewDashboard={newDashboard}
+        onAddPanel={addPanelToDashboard}
+        onUpdatePanel={updateSelectedPanel}
+        onSave={saveDashboard}
+        onSaveAs={() => saveDashboardAsCopy().catch((err) => setError(err.message))}
+        onExport={exportDashboard}
+        onImport={importDashboard}
+        onOpen={openDashboard}
+        onDuplicateDashboard={duplicateDashboard}
+        onDeleteDashboard={(dashboard) => deleteDashboard(dashboard).catch((err) => setError(err.message))}
+        onOpenPanel={openPanel}
+        onDuplicatePanel={duplicatePanel}
+        onMovePanel={movePanel}
+        onRemovePanel={removePanel}
+      />
+    },
     { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
@@ -809,6 +926,7 @@ function App() {
         }
       }}
     >
+      {messageContext}
       <Layout className={`app-shell theme-${themeMode}`}>
         <Sider width={390} className="app-sidebar">
           <Space direction="vertical" size={16} className="full">
@@ -1363,6 +1481,11 @@ function dashboardSignature(name: string, panels: DashboardChart[]): string {
       position: panel.position
     }))
   });
+}
+
+function safeFileName(value: string): string {
+  const cleaned = value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return cleaned || 'dashboard';
 }
 
 function newClientID(): string {

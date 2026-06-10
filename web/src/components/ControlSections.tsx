@@ -415,15 +415,20 @@ export function DashboardsSection(props: {
   activePanelId: string;
   dashboardName: string;
   dashboardDirty: boolean;
+  dashboardImportText: string;
   panelTitle: string;
   panelVisualization: VisualizationType;
   onDashboardName: (value: string) => void;
   onPanelTitle: (value: string) => void;
   onPanelVisualization: (value: VisualizationType) => void;
+  onDashboardImportText: (value: string) => void;
   onNewDashboard: () => void;
   onAddPanel: () => void;
   onUpdatePanel: () => void;
   onSave: () => void;
+  onSaveAs: () => void;
+  onExport: () => void;
+  onImport: () => void;
   onOpen: (dashboard: Dashboard) => void;
   onDuplicateDashboard: (dashboard: Dashboard) => void;
   onDeleteDashboard: (dashboard: Dashboard) => void;
@@ -452,7 +457,17 @@ export function DashboardsSection(props: {
         <Button icon={<PlusOutlined />} disabled={!props.user} onClick={props.onAddPanel}>Add</Button>
         <Button icon={<EditOutlined />} disabled={!props.user || !props.activePanelId} onClick={props.onUpdatePanel}>Update</Button>
         <Button icon={<SaveOutlined />} disabled={!props.user || !props.dashboardName || props.dashboardPanels.length === 0} onClick={props.onSave}>Save</Button>
+        <Button disabled={!props.user || props.dashboardPanels.length === 0} onClick={props.onSaveAs}>Save as</Button>
+        <Button disabled={props.dashboardPanels.length === 0} onClick={props.onExport}>Export</Button>
       </Flex>
+      <Field label="Import JSON">
+        <Input.TextArea
+          autoSize={{ minRows: 3, maxRows: 7 }}
+          value={props.dashboardImportText}
+          onChange={(event) => props.onDashboardImportText(event.target.value)}
+        />
+      </Field>
+      <Button disabled={!props.dashboardImportText.trim()} onClick={props.onImport}>Import</Button>
       <ActionList items={props.dashboardPanels} empty="No staged panels" render={(panel, index) => (
         <Flex key={panel.id || `${panel.title}-${index}`} gap={6}>
           <Button className="grow stack-button" type={panel.id === props.activePanelId ? 'primary' : 'default'} onClick={() => props.onOpenPanel(panel)}>
