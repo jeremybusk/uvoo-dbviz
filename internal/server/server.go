@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"uvoo-dbviz/internal/alert"
 	"uvoo-dbviz/internal/auth"
 	"uvoo-dbviz/internal/clickhouse"
 	"uvoo-dbviz/internal/config"
@@ -827,13 +828,12 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert condition is required"))
 		return
 	}
-	operator, threshold, err := normalizeAlertCondition(req.Condition)
+	condition, err := normalizeAlertCondition(req.Condition)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	req.Condition["operator"] = operator
-	req.Condition["threshold"] = threshold
+	applyNormalizedAlertCondition(req.Condition, condition)
 	var alertID, contactID any
 	if req.ID != "" {
 		alertID = req.ID
@@ -902,7 +902,7 @@ func (a *App) testAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert condition is required"))
 		return
 	}
-	operator, threshold, err := normalizeAlertCondition(req.Condition)
+	condition, err := normalizeAlertCondition(req.Condition)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -917,13 +917,20 @@ func (a *App) testAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	value := maxNumericValue(rows, "value")
+	evaluations := alert.EvaluateRows(condition, rows, "preview")
+	value := 0.0
+	if len(evaluations) > 0 {
+		value = evaluations[0].Value
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"value":     value,
-		"operator":  operator,
-		"threshold": threshold,
-		"firing":    compareAlertValue(value, operator, threshold),
-		"rows":      rows,
+		"value":       value,
+		"operator":    condition.Operator,
+		"threshold":   condition.Threshold,
+		"condition":   condition,
+		"firing":      len(evaluations) > 0,
+		"matches":     evaluations,
+		"match_count": len(evaluations),
+		"rows":        rows,
 	})
 }
 
@@ -992,63 +999,78 @@ func (a *App) runAlertPreviewQuery(r *http.Request, req clickhouse.QueryRequest)
 	return ch.QueryJSONEachRow(r.Context(), sql)
 }
 
-func maxNumericValue(rows []map[string]any, key string) float64 {
-	var max float64
-	for i, row := range rows {
-		value, ok := numericValue(row[key])
-		if !ok {
-			continue
-		}
-		if i == 0 || value > max {
-			max = value
-		}
-	}
-	return max
-}
-
-func compareAlertValue(value float64, op string, threshold float64) bool {
-	switch op {
-	case "gte":
-		return value >= threshold
-	case "lt":
-		return value < threshold
-	case "lte":
-		return value <= threshold
-	case "eq":
-		return value == threshold
-	default:
-		return value > threshold
-	}
-}
-
-func normalizeAlertCondition(condition map[string]any) (string, float64, error) {
-	threshold, ok := numericValue(condition["threshold"])
-	if !ok {
-		return "", 0, errors.New("alert threshold must be numeric")
-	}
+func normalizeAlertCondition(condition map[string]any) (alert.Condition, error) {
+	conditionType, _ := condition["type"].(string)
 	operator, _ := condition["operator"].(string)
-	if operator == "" {
-		operator = "gt"
+	field, _ := condition["field"].(string)
+	textValue, _ := condition["value"].(string)
+	threshold, hasThreshold := numericValue(condition["threshold"])
+	normalized := alert.NormalizeCondition(alert.Condition{
+		Type:      strings.TrimSpace(conditionType),
+		Operator:  strings.TrimSpace(operator),
+		Field:     strings.TrimSpace(field),
+		Threshold: threshold,
+		Value:     textValue,
+	})
+	if alertConditionNeedsThreshold(normalized.Type) && !hasThreshold {
+		return alert.Condition{}, errors.New("alert threshold must be numeric")
 	}
-	if !validAlertOperator(operator) {
-		return "", 0, errors.New("alert operator is not supported")
+	if !validAlertOperator(normalized.Type, normalized.Operator) {
+		return alert.Condition{}, errors.New("alert operator is not supported")
+	}
+	if normalized.Type == "text_match" && strings.TrimSpace(normalized.Value) == "" {
+		return alert.Condition{}, errors.New("alert text match value is required")
 	}
 	if rawFor, ok := condition["for"].(string); ok && strings.TrimSpace(rawFor) != "" {
 		holdFor, err := time.ParseDuration(strings.TrimSpace(rawFor))
 		if err != nil || holdFor < 0 {
-			return "", 0, errors.New("alert for duration must be a valid duration such as 5m or 1h")
+			return alert.Condition{}, errors.New("alert for duration must be a valid duration such as 5m or 1h")
 		}
-		condition["for"] = strings.TrimSpace(rawFor)
+		normalized.For = strings.TrimSpace(rawFor)
 	}
-	return operator, threshold, nil
+	return normalized, nil
 }
 
-func validAlertOperator(op string) bool {
-	switch op {
-	case "gt", "gte", "lt", "lte", "eq":
+func applyNormalizedAlertCondition(target map[string]any, condition alert.Condition) {
+	target["type"] = condition.Type
+	target["operator"] = condition.Operator
+	target["field"] = condition.Field
+	target["threshold"] = condition.Threshold
+	target["value"] = condition.Value
+	if condition.For != "" {
+		target["for"] = condition.For
+	} else {
+		delete(target, "for")
+	}
+}
+
+func alertConditionNeedsThreshold(conditionType string) bool {
+	switch conditionType {
+	case "row_count", "numeric_threshold", "":
 		return true
 	default:
 		return false
+	}
+}
+
+func validAlertOperator(conditionType string, op string) bool {
+	switch conditionType {
+	case "text_match":
+		switch op {
+		case "contains", "not_contains", "eq", "neq", "regex":
+			return true
+		default:
+			return false
+		}
+	case "any_rows", "sql_result", "no_data":
+		return op != ""
+	default:
+		switch op {
+		case "gt", "gte", "lt", "lte", "eq", "neq":
+			return true
+		default:
+			return false
+		}
 	}
 }
 

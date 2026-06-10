@@ -166,14 +166,14 @@ func TestBuildCustomSQLRejectsUnsafeStatements(t *testing.T) {
 	}
 }
 
-func TestBuildCustomSQLAlertRequiresValueColumn(t *testing.T) {
+func TestBuildCustomSQLAlertAllowsNonNumericResultColumns(t *testing.T) {
 	ds := config.Dataset{ID: "logs", Table: "otel_logs", TimeColumn: "timestamp", TenantColumn: "tenant_id"}
 	_, err := BuildCustomSQL(QueryRequest{
 		Dataset: "logs",
 		SQL:     "SELECT count() AS total FROM otel_logs WHERE tenant_id = {tenant:String} AND timestamp >= {from:DateTime} AND timestamp < {to:DateTime}",
 	}, ds, "tenant-a", 100, CustomSQLAlert)
-	if err == nil {
-		t.Fatal("expected an error")
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 

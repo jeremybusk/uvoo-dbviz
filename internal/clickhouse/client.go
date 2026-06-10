@@ -194,11 +194,6 @@ func BuildCustomSQL(req QueryRequest, ds config.Dataset, tenantID string, maxRow
 	if !strings.Contains(raw, "{to:DateTime}") {
 		return CustomSQLQuery{}, errors.New("custom sql must include {to:DateTime}")
 	}
-	if mode == CustomSQLAlert {
-		if !strings.Contains(strings.ToLower(raw), " as value") && !strings.Contains(raw, "`value`") {
-			return CustomSQLQuery{}, errors.New("alert custom sql must return one numeric column named value")
-		}
-	}
 	limit := req.Limit
 	if limit <= 0 || limit > maxRows {
 		limit = maxRows

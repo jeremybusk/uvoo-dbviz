@@ -173,8 +173,11 @@ export type AlertRule = {
   name: string;
   query: unknown;
   condition: {
+    type?: 'numeric_threshold' | 'row_count' | 'any_rows' | 'sql_result' | 'no_data' | 'text_match';
     operator: string;
+    field?: string;
     threshold: number;
+    value?: string;
     for?: string;
   };
   interval_seconds: number;

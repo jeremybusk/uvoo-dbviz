@@ -739,6 +739,9 @@ export function AlertsSection(props: {
   contacts: ContactEndpoint[];
   editingAlertId: string;
   alertName: string;
+  alertConditionType: string;
+  alertField: string;
+  alertTextValue: string;
   alertThreshold: string;
   alertOperator: string;
   alertFor: string;
@@ -748,6 +751,9 @@ export function AlertsSection(props: {
   selectedContact: string;
   queryMode: string;
   onName: (value: string) => void;
+  onConditionType: (value: string) => void;
+  onField: (value: string) => void;
+  onTextValue: (value: string) => void;
   onThreshold: (value: string) => void;
   onOperator: (value: string) => void;
   onFor: (value: string) => void;
@@ -779,17 +785,45 @@ export function AlertsSection(props: {
       {props.editingAlertId && <Tag color="blue">Editing existing rule</Tag>}
       <Field label="Rule"><Input value={props.alertName} onChange={(event) => props.onName(event.target.value)} /></Field>
       <Field label="Query"><Tag>{props.queryMode === 'sql' ? 'Current SQL query' : 'Current builder query'}</Tag></Field>
+      <Field label="Evaluator">
+        <Select value={props.alertConditionType} onChange={props.onConditionType}>
+          <Select.Option value="numeric_threshold">Threshold</Select.Option>
+          <Select.Option value="row_count">Row count</Select.Option>
+          <Select.Option value="any_rows">Rows exist</Select.Option>
+          <Select.Option value="no_data">No data</Select.Option>
+          <Select.Option value="text_match">Text match</Select.Option>
+          <Select.Option value="sql_result">Advanced SQL</Select.Option>
+        </Select>
+      </Field>
       <Field label="Condition">
-        <Space.Compact className="full">
-          <Select className="operator-select" value={props.alertOperator} onChange={props.onOperator}>
-            <Select.Option value="gt">&gt;</Select.Option>
-            <Select.Option value="gte">&gt;=</Select.Option>
-            <Select.Option value="lt">&lt;</Select.Option>
-            <Select.Option value="lte">&lt;=</Select.Option>
-            <Select.Option value="eq">=</Select.Option>
-          </Select>
-          <InputNumber className="full" min={0} value={Number(props.alertThreshold)} onChange={(value) => props.onThreshold(String(value ?? 0))} />
-        </Space.Compact>
+        {props.alertConditionType === 'text_match' ? (
+          <Space.Compact className="full">
+            <Input className="query-filter-name" value={props.alertField} onChange={(event) => props.onField(event.target.value)} placeholder="message" />
+            <Select className="operator-select" value={props.alertOperator} onChange={props.onOperator}>
+              <Select.Option value="contains">contains</Select.Option>
+              <Select.Option value="not_contains">not contains</Select.Option>
+              <Select.Option value="eq">=</Select.Option>
+              <Select.Option value="neq">!=</Select.Option>
+              <Select.Option value="regex">regex</Select.Option>
+            </Select>
+            <Input className="full" value={props.alertTextValue} onChange={(event) => props.onTextValue(event.target.value)} />
+          </Space.Compact>
+        ) : alertNeedsThreshold(props.alertConditionType) ? (
+          <Space.Compact className="full">
+            {props.alertConditionType === 'numeric_threshold' && <Input className="query-filter-name" value={props.alertField} onChange={(event) => props.onField(event.target.value)} placeholder="value" />}
+            <Select className="operator-select" value={props.alertOperator} onChange={props.onOperator}>
+              <Select.Option value="gt">&gt;</Select.Option>
+              <Select.Option value="gte">&gt;=</Select.Option>
+              <Select.Option value="lt">&lt;</Select.Option>
+              <Select.Option value="lte">&lt;=</Select.Option>
+              <Select.Option value="eq">=</Select.Option>
+              <Select.Option value="neq">!=</Select.Option>
+            </Select>
+            <InputNumber className="full" min={0} value={Number(props.alertThreshold)} onChange={(value) => props.onThreshold(String(value ?? 0))} />
+          </Space.Compact>
+        ) : (
+          <Tag>{props.alertConditionType === 'no_data' ? 'query returns no rows' : 'query returns rows'}</Tag>
+        )}
       </Field>
       <Field label="For">
         <Input value={props.alertFor} onChange={(event) => props.onFor(event.target.value)} placeholder="0s, 5m, 1h" />
@@ -846,8 +880,22 @@ export function AlertsSection(props: {
 }
 
 function describeAlertCondition(rule: AlertRule): string {
+  const condition = normalizeAlertCondition(rule.condition);
   const hold = rule.condition?.for ? ` for ${rule.condition.for}` : '';
-  return `value ${operatorSymbol(rule.condition?.operator || 'gt')} ${rule.condition?.threshold ?? 0}${hold}`;
+  switch (condition.type) {
+    case 'row_count':
+      return `row count ${operatorSymbol(condition.operator)} ${condition.threshold}${hold}`;
+    case 'any_rows':
+      return `rows exist${hold}`;
+    case 'sql_result':
+      return `SQL returns rows${hold}`;
+    case 'no_data':
+      return `no data${hold}`;
+    case 'text_match':
+      return `text ${condition.field || 'message'} ${operatorSymbol(condition.operator)} ${condition.value || ''}${hold}`;
+    default:
+      return `${condition.field || 'value'} ${operatorSymbol(condition.operator)} ${condition.threshold}${hold}`;
+  }
 }
 
 function operatorSymbol(operator: string): string {
@@ -860,9 +908,33 @@ function operatorSymbol(operator: string): string {
       return '<=';
     case 'eq':
       return '=';
+    case 'neq':
+      return '!=';
+    case 'contains':
+      return 'contains';
+    case 'not_contains':
+      return 'does not contain';
+    case 'regex':
+      return 'matches';
     default:
       return '>';
   }
+}
+
+function alertNeedsThreshold(type: string): boolean {
+  return type === 'numeric_threshold' || type === 'row_count' || !type;
+}
+
+function normalizeAlertCondition(condition: AlertRule['condition']) {
+  const type = condition?.type || 'numeric_threshold';
+  return {
+    type,
+    operator: condition?.operator || (type === 'text_match' ? 'contains' : 'gt'),
+    field: condition?.field || (type === 'text_match' ? 'message' : 'value'),
+    threshold: condition?.threshold ?? 0,
+    value: condition?.value || '',
+    for: condition?.for || ''
+  };
 }
 
 function describeQueryMode(query: unknown): string {

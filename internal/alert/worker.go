@@ -3,6 +3,8 @@ package alert
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +12,9 @@ import (
 	"net"
 	"net/http"
 	"net/smtp"
+	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -32,9 +37,18 @@ type Rule struct {
 }
 
 type Condition struct {
+	Type      string  `json:"type"`
 	Operator  string  `json:"operator"`
+	Field     string  `json:"field"`
 	Threshold float64 `json:"threshold"`
+	Value     string  `json:"value"`
 	For       string  `json:"for"`
+}
+
+type Evaluation struct {
+	Fingerprint string
+	Value       float64
+	Payload     map[string]any
 }
 
 type ContactEndpoint struct {
@@ -56,6 +70,7 @@ type Worker struct {
 	dedupe   time.Duration
 	smtp     SMTPConfig
 	pending  map[string]time.Time
+	active   map[string]map[string]struct{}
 	stop     chan struct{}
 	wg       sync.WaitGroup
 }
@@ -122,6 +137,7 @@ func NewPollingWorker(datasets map[string]config.Dataset, maxRows int, ch *click
 		poll:     poll,
 		dedupe:   5 * time.Minute,
 		pending:  map[string]time.Time{},
+		active:   map[string]map[string]struct{}{},
 		stop:     make(chan struct{}),
 	}
 }
@@ -138,9 +154,7 @@ func RulesFromJSON(raw string) ([]Rule, error) {
 		if rules[i].IntervalSeconds <= 0 {
 			rules[i].IntervalSeconds = 60
 		}
-		if rules[i].Condition.Operator == "" {
-			rules[i].Condition.Operator = "gt"
-		}
+		rules[i].Condition = NormalizeCondition(rules[i].Condition)
 		rules[i].Enabled = true
 	}
 	return rules, nil
@@ -165,9 +179,7 @@ func RulesFromPersisted(rows []state.PersistedAlertRule) ([]Rule, error) {
 		if err := json.Unmarshal(conditionBytes, &condition); err != nil {
 			return nil, err
 		}
-		if condition.Operator == "" {
-			condition.Operator = "gt"
-		}
+		condition = NormalizeCondition(condition)
 		rule := Rule{
 			ID:              row.ID,
 			Name:            row.Name,
@@ -252,46 +264,39 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 	if err != nil {
 		return
 	}
-	value := maxValue(rows)
-	fingerprint := ruleFingerprint(rule)
-	if !compare(value, rule.Condition.Operator, rule.Condition.Threshold) {
-		delete(w.pending, fingerprint)
-		if w.record != nil {
-			resolved := map[string]any{
-				"ruleId":     rule.ID,
-				"ruleName":   rule.Name,
-				"tenantId":   rule.TenantID,
-				"value":      value,
-				"threshold":  rule.Condition.Threshold,
-				"operator":   rule.Condition.Operator,
-				"labels":     rule.Labels,
-				"resolvedAt": time.Now().UTC().Format(time.RFC3339),
-			}
-			if _, err := w.record(ctx, rule, "resolved", value, resolved, fingerprint, int(w.dedupe.Seconds())); err != nil {
-				w.logger.Warn("alert incident resolve failed", "rule", rule.Name, "error", err)
-			}
+	baseFingerprint := ruleFingerprint(rule)
+	evaluations := EvaluateRows(rule.Condition, rows, baseFingerprint)
+	held := map[string]struct{}{}
+	current := map[string]struct{}{}
+	for _, evaluation := range evaluations {
+		current[evaluation.Fingerprint] = struct{}{}
+		if !w.conditionHeldLongEnough(rule, evaluation.Fingerprint) {
+			w.logger.Info("alert condition is pending", "rule", rule.Name, "for", rule.Condition.For, "fingerprint", evaluation.Fingerprint)
+			continue
 		}
-		return
+		held[evaluation.Fingerprint] = struct{}{}
+		w.recordAndNotify(ctx, rule, evaluation)
 	}
-	if !w.conditionHeldLongEnough(rule, fingerprint) {
-		w.logger.Info("alert condition is pending", "rule", rule.Name, "for", rule.Condition.For, "fingerprint", fingerprint)
-		return
+	w.resolveInactive(ctx, rule, baseFingerprint, rows, current)
+	if len(held) > 0 {
+		w.active[baseFingerprint] = held
+	} else if len(current) == 0 {
+		delete(w.active, baseFingerprint)
 	}
-	incident := map[string]any{
-		"ruleId":      rule.ID,
-		"ruleName":    rule.Name,
-		"tenantId":    rule.TenantID,
-		"value":       value,
-		"threshold":   rule.Condition.Threshold,
-		"operator":    rule.Condition.Operator,
-		"labels":      rule.Labels,
-		"fingerprint": fingerprint,
-		"firedAt":     time.Now().UTC().Format(time.RFC3339),
-	}
+}
+
+func (w *Worker) recordAndNotify(ctx context.Context, rule Rule, evaluation Evaluation) {
+	incident := evaluation.Payload
+	incident["ruleId"] = rule.ID
+	incident["ruleName"] = rule.Name
+	incident["tenantId"] = rule.TenantID
+	incident["labels"] = rule.Labels
+	incident["fingerprint"] = evaluation.Fingerprint
+	incident["firedAt"] = time.Now().UTC().Format(time.RFC3339)
 	shouldNotify := true
 	incidentID := ""
 	if w.record != nil {
-		result, err := w.record(ctx, rule, "firing", value, incident, fingerprint, int(w.dedupe.Seconds()))
+		result, err := w.record(ctx, rule, "firing", evaluation.Value, incident, evaluation.Fingerprint, int(w.dedupe.Seconds()))
 		if err != nil {
 			w.logger.Warn("alert incident record failed", "rule", rule.Name, "error", err)
 		} else {
@@ -300,7 +305,7 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 		}
 	}
 	if !shouldNotify {
-		w.logger.Info("alert notification suppressed by cooldown", "rule", rule.Name, "fingerprint", fingerprint)
+		w.logger.Info("alert notification suppressed by cooldown", "rule", rule.Name, "fingerprint", evaluation.Fingerprint)
 		return
 	}
 	for _, contact := range rule.Contacts {
@@ -321,11 +326,53 @@ func (w *Worker) evaluate(ctx context.Context, rule Rule) {
 				failed["contactTarget"] = contact.Target
 				failed["statusCode"] = result.StatusCode
 				failed["error"] = result.Error
-				if _, recordErr := w.record(ctx, rule, "notify_failed", value, failed, fingerprint+":notify:"+contact.Kind+":"+contact.Target, int(w.dedupe.Seconds())); recordErr != nil {
+				if _, recordErr := w.record(ctx, rule, "notify_failed", evaluation.Value, failed, evaluation.Fingerprint+":notify:"+contact.Kind+":"+contact.Target, int(w.dedupe.Seconds())); recordErr != nil {
 					w.logger.Warn("alert notification failure record failed", "rule", rule.Name, "error", recordErr)
 				}
 			}
 		}
+	}
+}
+
+func (w *Worker) resolveInactive(ctx context.Context, rule Rule, baseFingerprint string, rows []map[string]any, current map[string]struct{}) {
+	previous := w.active[baseFingerprint]
+	if len(previous) == 0 && len(current) > 0 {
+		return
+	}
+	resolvedAt := time.Now().UTC().Format(time.RFC3339)
+	if len(previous) == 0 {
+		delete(w.pending, baseFingerprint)
+		w.recordResolved(ctx, rule, baseFingerprint, maxValue(rows, NormalizeCondition(rule.Condition).Field), map[string]any{
+			"condition":  NormalizeCondition(rule.Condition),
+			"rowCount":   len(rows),
+			"resolvedAt": resolvedAt,
+		})
+		return
+	}
+	for fingerprint := range previous {
+		if _, stillFiring := current[fingerprint]; stillFiring {
+			continue
+		}
+		delete(w.pending, fingerprint)
+		w.recordResolved(ctx, rule, fingerprint, 0, map[string]any{
+			"condition":  NormalizeCondition(rule.Condition),
+			"rowCount":   len(rows),
+			"resolvedAt": resolvedAt,
+		})
+	}
+}
+
+func (w *Worker) recordResolved(ctx context.Context, rule Rule, fingerprint string, value float64, payload map[string]any) {
+	if w.record == nil {
+		return
+	}
+	payload["ruleId"] = rule.ID
+	payload["ruleName"] = rule.Name
+	payload["tenantId"] = rule.TenantID
+	payload["value"] = value
+	payload["labels"] = rule.Labels
+	if _, err := w.record(ctx, rule, "resolved", value, payload, fingerprint, int(w.dedupe.Seconds())); err != nil {
+		w.logger.Warn("alert incident resolve failed", "rule", rule.Name, "error", err)
 	}
 }
 
@@ -446,10 +493,166 @@ func (w *Worker) notifyEmail(contact ContactEndpoint, incident map[string]any) D
 	return DeliveryResult{Status: "success"}
 }
 
-func maxValue(rows []map[string]any) float64 {
+func NormalizeCondition(condition Condition) Condition {
+	if condition.Type == "" {
+		condition.Type = "numeric_threshold"
+	}
+	switch condition.Type {
+	case "numeric_threshold", "row_count", "any_rows", "sql_result", "no_data", "text_match":
+	default:
+		condition.Type = "numeric_threshold"
+	}
+	if condition.Operator == "" {
+		switch condition.Type {
+		case "text_match":
+			condition.Operator = "contains"
+		default:
+			condition.Operator = "gt"
+		}
+	}
+	if condition.Field == "" {
+		switch condition.Type {
+		case "text_match":
+			condition.Field = "message"
+		default:
+			condition.Field = "value"
+		}
+	}
+	return condition
+}
+
+func EvaluateRows(condition Condition, rows []map[string]any, baseFingerprint string) []Evaluation {
+	condition = NormalizeCondition(condition)
+	switch condition.Type {
+	case "any_rows", "sql_result":
+		evaluations := make([]Evaluation, 0, len(rows))
+		for index, row := range rows {
+			evaluations = append(evaluations, rowEvaluation(condition, row, baseFingerprint, index))
+		}
+		return evaluations
+	case "no_data":
+		if len(rows) == 0 {
+			return []Evaluation{{
+				Fingerprint: baseFingerprint,
+				Value:       0,
+				Payload:     basePayload(condition, 0),
+			}}
+		}
+		return nil
+	case "row_count":
+		value := float64(len(rows))
+		if compare(value, condition.Operator, condition.Threshold) {
+			payload := basePayload(condition, value)
+			payload["rowCount"] = len(rows)
+			return []Evaluation{{Fingerprint: baseFingerprint, Value: value, Payload: payload}}
+		}
+		return nil
+	case "text_match":
+		evaluations := []Evaluation{}
+		for index, row := range rows {
+			text := rowText(row, condition.Field)
+			if compareText(text, condition.Operator, condition.Value) {
+				evaluation := rowEvaluation(condition, row, baseFingerprint, index)
+				evaluation.Payload["text"] = text
+				evaluations = append(evaluations, evaluation)
+			}
+		}
+		return evaluations
+	default:
+		value := maxValue(rows, condition.Field)
+		if compare(value, condition.Operator, condition.Threshold) {
+			return []Evaluation{{
+				Fingerprint: baseFingerprint,
+				Value:       value,
+				Payload:     basePayload(condition, value),
+			}}
+		}
+		return nil
+	}
+}
+
+func basePayload(condition Condition, value float64) map[string]any {
+	return map[string]any{
+		"value":     value,
+		"condition": condition,
+		"threshold": condition.Threshold,
+		"operator":  condition.Operator,
+		"field":     condition.Field,
+	}
+}
+
+func rowEvaluation(condition Condition, row map[string]any, baseFingerprint string, index int) Evaluation {
+	value, ok := asFloat(row[condition.Field])
+	if condition.Field != "value" && !ok {
+		value, _ = asFloat(row["value"])
+	}
+	fingerprint := rowFingerprint(row, baseFingerprint, index)
+	payload := basePayload(condition, value)
+	payload["row"] = row
+	if message := rowText(row, "message"); message != "" {
+		payload["message"] = message
+	}
+	return Evaluation{Fingerprint: fingerprint, Value: value, Payload: payload}
+}
+
+func rowFingerprint(row map[string]any, baseFingerprint string, index int) string {
+	if value := strings.TrimSpace(fmt.Sprint(row["fingerprint"])); value != "" && value != "<nil>" {
+		return baseFingerprint + ":" + value
+	}
+	encoded, err := json.Marshal(row)
+	if err != nil {
+		return fmt.Sprintf("%s:row:%d", baseFingerprint, index)
+	}
+	sum := sha256.Sum256(encoded)
+	return baseFingerprint + ":row:" + hex.EncodeToString(sum[:8])
+}
+
+func rowText(row map[string]any, field string) string {
+	if field != "" {
+		if value, ok := row[field]; ok {
+			return strings.TrimSpace(fmt.Sprint(value))
+		}
+	}
+	keys := make([]string, 0, len(row))
+	for key := range row {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := []string{}
+	for _, key := range keys {
+		switch value := row[key].(type) {
+		case string:
+			if strings.TrimSpace(value) != "" {
+				parts = append(parts, value)
+			}
+		}
+	}
+	return strings.Join(parts, " ")
+}
+
+func compareText(text string, op string, pattern string) bool {
+	switch op {
+	case "eq":
+		return text == pattern
+	case "neq":
+		return text != pattern
+	case "not_contains":
+		return !strings.Contains(strings.ToLower(text), strings.ToLower(pattern))
+	case "regex":
+		matched, err := regexp.MatchString(pattern, text)
+		return err == nil && matched
+	default:
+		return strings.Contains(strings.ToLower(text), strings.ToLower(pattern))
+	}
+}
+
+func maxValue(rows []map[string]any, field string) float64 {
+	if field == "" {
+		field = "value"
+	}
 	var max float64
 	for i, row := range rows {
-		value, ok := asFloat(row["value"])
+		value, ok := asFloat(row[field])
 		if !ok {
 			continue
 		}
@@ -464,11 +667,17 @@ func asFloat(value any) (float64, bool) {
 	switch v := value.(type) {
 	case float64:
 		return v, true
+	case float32:
+		return float64(v), true
 	case int:
 		return float64(v), true
+	case int64:
+		return float64(v), true
+	case json.Number:
+		parsed, err := v.Float64()
+		return parsed, err == nil
 	case string:
-		var parsed float64
-		_, err := fmt.Sscanf(v, "%f", &parsed)
+		parsed, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
 		return parsed, err == nil
 	default:
 		return 0, false
@@ -485,6 +694,8 @@ func compare(value float64, op string, threshold float64) bool {
 		return value <= threshold
 	case "eq":
 		return value == threshold
+	case "neq":
+		return value != threshold
 	default:
 		return value > threshold
 	}

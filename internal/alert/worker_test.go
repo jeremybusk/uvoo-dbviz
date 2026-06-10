@@ -129,6 +129,45 @@ func TestEvaluateResolvedRuleRecordsClear(t *testing.T) {
 	}
 }
 
+func TestEvaluateRowsSupportsRowCountAndTextMatch(t *testing.T) {
+	rows := []map[string]any{
+		{"message": "request timeout", "value": 1, "fingerprint": "svc-a"},
+		{"message": "ok", "value": 1, "fingerprint": "svc-b"},
+	}
+	rowCount := EvaluateRows(Condition{Type: "row_count", Operator: "gte", Threshold: 2}, rows, "rule")
+	if len(rowCount) != 1 || rowCount[0].Value != 2 {
+		t.Fatalf("row count evaluations = %#v", rowCount)
+	}
+	text := EvaluateRows(Condition{Type: "text_match", Field: "message", Operator: "contains", Value: "timeout"}, rows, "rule")
+	if len(text) != 1 || text[0].Fingerprint != "rule:svc-a" {
+		t.Fatalf("text evaluations = %#v", text)
+	}
+}
+
+func TestEvaluateAnyRowsRecordsPerRowFingerprints(t *testing.T) {
+	ch := fakeClickHouse(t, `{"value":2,"message":"timeout","fingerprint":"svc-a"}
+{"value":3,"message":"panic","fingerprint":"svc-b"}`)
+	worker := testWorker(ch)
+	var fingerprints []string
+	worker.SetIncidentRecorder(func(_ context.Context, _ Rule, status string, _ float64, _ map[string]any, fingerprint string, _ int) (RecordResult, error) {
+		if status == "firing" {
+			fingerprints = append(fingerprints, fingerprint)
+		}
+		return RecordResult{ShouldNotify: true}, nil
+	})
+	rule := testRule("http://example.invalid/webhook", 0)
+	rule.Condition = Condition{Type: "any_rows", Operator: "exists"}
+	rule.Contacts = nil
+	worker.evaluate(context.Background(), rule)
+
+	if len(fingerprints) != 2 {
+		t.Fatalf("fingerprints = %#v", fingerprints)
+	}
+	if fingerprints[0] != "dev:rule-1:svc-a" || fingerprints[1] != "dev:rule-1:svc-b" {
+		t.Fatalf("unexpected fingerprints = %#v", fingerprints)
+	}
+}
+
 func TestEmailContactSkipsWhenSMTPIsNotConfigured(t *testing.T) {
 	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
 	result := worker.notify(context.Background(), ContactEndpoint{Kind: "email", Target: "alerts@example.com"}, map[string]any{"ruleName": "Email alert"})

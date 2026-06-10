@@ -116,6 +116,9 @@ function App() {
   const [inviteToken, setInviteToken] = useState('');
   const [alertName, setAlertName] = useState('High signal volume');
   const [editingAlertId, setEditingAlertId] = useState('');
+  const [alertConditionType, setAlertConditionType] = useState('numeric_threshold');
+  const [alertField, setAlertField] = useState('value');
+  const [alertTextValue, setAlertTextValue] = useState('');
   const [alertThreshold, setAlertThreshold] = useState('100');
   const [alertOperator, setAlertOperator] = useState('gt');
   const [alertFor, setAlertFor] = useState('');
@@ -519,7 +522,7 @@ function App() {
       id: editingAlertId || null,
       name: alertName,
       query: queryPayload(),
-      condition: { operator: alertOperator, threshold: Number(alertThreshold), for: alertFor.trim() },
+      condition: currentAlertCondition(),
       intervalSeconds: alertInterval,
       enabled: alertEnabled,
       contactEndpointId: selectedContact || null
@@ -543,7 +546,7 @@ function App() {
       id: rule.id,
       name: rule.name,
       query: rule.query,
-      condition: rule.condition || { operator: 'gt', threshold: 0 },
+      condition: normalizeAlertConditionPayload(rule.condition),
       intervalSeconds: rule.interval_seconds || 60,
       enabled: !rule.enabled,
       contactEndpointId: rule.contact_endpoint_id || null
@@ -554,11 +557,11 @@ function App() {
 
   async function testAlert() {
     setAlertPreview('');
-    const result = await apiPost<{ value: number; operator: string; threshold: number; firing: boolean }>('/api/alerts/test', {
+    const result = await apiPost<{ value: number; operator: string; threshold: number; firing: boolean; match_count: number; condition: AlertRule['condition'] }>('/api/alerts/test', {
       query: queryPayload(),
-      condition: { operator: alertOperator, threshold: Number(alertThreshold), for: alertFor.trim() }
+      condition: currentAlertCondition()
     });
-    setAlertPreview(`${result.firing ? 'Firing' : 'OK'}: value ${formatNumber(result.value)} ${operatorLabel(result.operator)} ${formatNumber(result.threshold)}`);
+    setAlertPreview(alertPreviewText(result));
   }
 
   async function resolveIncident(incident: AlertIncident) {
@@ -817,6 +820,9 @@ function App() {
   function newAlertRule() {
     setEditingAlertId('');
     setAlertName('High signal volume');
+    setAlertConditionType('numeric_threshold');
+    setAlertField('value');
+    setAlertTextValue('');
     setAlertOperator('gt');
     setAlertThreshold('100');
     setAlertFor('');
@@ -862,11 +868,15 @@ function App() {
   }
 
   function openAlertRule(rule: AlertRule) {
+    const condition = normalizeAlertConditionPayload(rule.condition);
     setEditingAlertId(rule.id);
     setAlertName(rule.name);
-    setAlertOperator(rule.condition?.operator || 'gt');
-    setAlertThreshold(String(rule.condition?.threshold ?? 0));
-    setAlertFor(rule.condition?.for || '');
+    setAlertConditionType(condition.type || 'numeric_threshold');
+    setAlertField(condition.field || defaultAlertField(condition.type || 'numeric_threshold'));
+    setAlertTextValue(condition.value || '');
+    setAlertOperator(condition.operator || defaultAlertOperator(condition.type || 'numeric_threshold'));
+    setAlertThreshold(String(condition.threshold ?? 0));
+    setAlertFor(condition.for || '');
     setAlertInterval(rule.interval_seconds || 60);
     setAlertEnabled(rule.enabled);
     setSelectedContact(rule.contact_endpoint_id || '');
@@ -935,6 +945,24 @@ function App() {
 
   function queryPayload(nextQuery: QueryState = query): QueryState {
     return apiQueryPayload(nextQuery);
+  }
+
+  function currentAlertCondition(): AlertRule['condition'] {
+    return {
+      type: alertConditionType as AlertRule['condition']['type'],
+      operator: alertOperator,
+      field: alertField.trim() || defaultAlertField(alertConditionType),
+      threshold: Number(alertThreshold),
+      value: alertTextValue,
+      for: alertFor.trim()
+    };
+  }
+
+  function changeAlertConditionType(nextType: string) {
+    setAlertConditionType(nextType);
+    setAlertOperator(defaultAlertOperator(nextType));
+    setAlertField(defaultAlertField(nextType));
+    if (nextType !== 'text_match') setAlertTextValue('');
   }
 
   function changeTheme(nextTheme: ThemeMode) {
@@ -1099,7 +1127,7 @@ function App() {
         onRemovePanel={removePanel}
       />
     },
-    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
+    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertConditionType={alertConditionType} alertField={alertField} alertTextValue={alertTextValue} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onConditionType={changeAlertConditionType} onField={setAlertField} onTextValue={setAlertTextValue} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} onDelete={(contact) => deleteContact(contact).catch((err) => setError(err.message))} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },
@@ -1669,9 +1697,56 @@ function operatorLabel(operator: string): string {
       return '<=';
     case 'eq':
       return '=';
+    case 'neq':
+      return '!=';
+    case 'contains':
+      return 'contains';
+    case 'not_contains':
+      return 'does not contain';
+    case 'regex':
+      return 'matches regex';
     default:
       return '>';
   }
+}
+
+function defaultAlertOperator(type: string): string {
+  switch (type) {
+    case 'text_match':
+      return 'contains';
+    case 'any_rows':
+    case 'sql_result':
+    case 'no_data':
+      return 'exists';
+    default:
+      return 'gt';
+  }
+}
+
+function defaultAlertField(type: string): string {
+  return type === 'text_match' ? 'message' : 'value';
+}
+
+function normalizeAlertConditionPayload(condition?: AlertRule['condition']): AlertRule['condition'] {
+  const type = condition?.type || 'numeric_threshold';
+  return {
+    type,
+    operator: condition?.operator || defaultAlertOperator(type),
+    field: condition?.field || defaultAlertField(type),
+    threshold: Number(condition?.threshold ?? 0),
+    value: condition?.value || '',
+    for: condition?.for || ''
+  };
+}
+
+function alertPreviewText(result: { value: number; operator: string; threshold: number; firing: boolean; match_count: number; condition: AlertRule['condition'] }): string {
+  const condition = normalizeAlertConditionPayload(result.condition);
+  const prefix = result.firing ? 'Firing' : 'OK';
+  if (condition.type === 'any_rows' || condition.type === 'sql_result') return `${prefix}: ${result.match_count} matching rows`;
+  if (condition.type === 'no_data') return `${prefix}: ${result.match_count > 0 ? 'no rows returned' : 'rows returned'}`;
+  if (condition.type === 'row_count') return `${prefix}: row count ${formatNumber(result.value)} ${operatorLabel(result.operator)} ${formatNumber(result.threshold)}`;
+  if (condition.type === 'text_match') return `${prefix}: ${result.match_count} text matches`;
+  return `${prefix}: ${condition.field || 'value'} ${formatNumber(result.value)} ${operatorLabel(result.operator)} ${formatNumber(result.threshold)}`;
 }
 
 function compactQueryDescription(query: QueryState): string {
