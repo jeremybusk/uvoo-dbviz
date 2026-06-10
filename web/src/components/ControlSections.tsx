@@ -18,11 +18,13 @@ import {
   CheckCircleOutlined,
   CopyOutlined,
   DeleteOutlined,
+  DownOutlined,
   EditOutlined,
   LoginOutlined,
   PlayCircleOutlined,
   PlusOutlined,
-  SaveOutlined
+  SaveOutlined,
+  UpOutlined
 } from '@ant-design/icons';
 import React from 'react';
 import {
@@ -423,6 +425,7 @@ export function DashboardsSection(props: {
   onOpen: (dashboard: Dashboard) => void;
   onOpenPanel: (panel: DashboardChart) => void;
   onDuplicatePanel: (index: number) => void;
+  onMovePanel: (index: number, direction: -1 | 1) => void;
   onRemovePanel: (index: number) => void;
 }) {
   return (
@@ -448,6 +451,8 @@ export function DashboardsSection(props: {
             <span>{panel.title}</span>
             <small>{describePanelQuery(panel.query)}</small>
           </Button>
+          <Button icon={<UpOutlined />} disabled={index === 0} onClick={() => props.onMovePanel(index, -1)} />
+          <Button icon={<DownOutlined />} disabled={index === props.dashboardPanels.length - 1} onClick={() => props.onMovePanel(index, 1)} />
           <Button icon={<CopyOutlined />} onClick={() => props.onDuplicatePanel(index)} />
           <Button icon={<DeleteOutlined />} danger onClick={() => props.onRemovePanel(index)} />
         </Flex>

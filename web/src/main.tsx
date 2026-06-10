@@ -73,6 +73,7 @@ function App() {
   const [eventRows, setEventRows] = useState<Record<string, unknown>[]>([]);
   const [activeTab, setActiveTab] = useState('chart');
   const [refreshSeconds, setRefreshSeconds] = useState(0);
+  const [dashboardRefreshKey, setDashboardRefreshKey] = useState(0);
   const [lastUpdated, setLastUpdated] = useState('');
   const [error, setError] = useState('');
   const [tokenInput, setTokenInput] = useState('');
@@ -515,6 +516,20 @@ function App() {
     } : panel));
   }
 
+  function movePanel(index: number, direction: -1 | 1) {
+    const targetIndex = index + direction;
+    if (targetIndex < 0 || targetIndex >= dashboardPanels.length) return;
+    setDashboardPanels((current) => {
+      const next = [...current];
+      const [panel] = next.splice(index, 1);
+      next.splice(targetIndex, 0, panel);
+      return next.map((item, itemIndex) => ({
+        ...item,
+        position: { ...(item.position || {}), y: itemIndex }
+      }));
+    });
+  }
+
   function newDashboard() {
     setEditingDashboardId('');
     setDashboardName('Untitled Dashboard');
@@ -677,6 +692,7 @@ function App() {
     const nextRange = { value: Math.max(1, Math.trunc(value || 1)), unit };
     setRelativeRange(nextRange);
     updateQuery((current) => queryWithRelativeRange(current, nextRange));
+    setDashboardRefreshKey((current) => current + 1);
   }
 
   function updateQuery(next: QueryState | ((current: QueryState) => QueryState)) {
@@ -719,7 +735,7 @@ function App() {
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={updateQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
-    { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} activePanelId={editingPanelId} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onNewDashboard={newDashboard} onAddPanel={addPanelToDashboard} onUpdatePanel={updateSelectedPanel} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onDuplicatePanel={duplicatePanel} onRemovePanel={removePanel} /> },
+    { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} activePanelId={editingPanelId} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onNewDashboard={newDashboard} onAddPanel={addPanelToDashboard} onUpdatePanel={updateSelectedPanel} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onDuplicatePanel={duplicatePanel} onMovePanel={movePanel} onRemovePanel={removePanel} /> },
     { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
@@ -805,7 +821,20 @@ function App() {
                 </Button>
               </Dropdown>
               <Button icon={<SaveOutlined />} disabled={!user} onClick={() => saveCurrentView().catch((err) => setError(err.message))}>Save view</Button>
-              <Button icon={<ReloadOutlined />} disabled={!user} onClick={() => loadData().catch((err) => setError(err.message))}>{rows.length} rows</Button>
+              <Button
+                icon={<ReloadOutlined />}
+                disabled={!user}
+                onClick={() => {
+                  if (activeTab === 'dashboard') {
+                    setDashboardRefreshKey((current) => current + 1);
+                    setLastUpdated(new Date().toISOString());
+                    return;
+                  }
+                  loadData().catch((err) => setError(err.message));
+                }}
+              >
+                {activeTab === 'dashboard' ? 'Refresh panels' : `${rows.length} rows`}
+              </Button>
             </Flex>
           </Flex>
           {error && <Alert type="error" showIcon closable message={error} onClose={() => setError('')} />}
@@ -833,7 +862,7 @@ function App() {
               {
                 key: 'dashboard',
                 label: `Dashboard (${dashboardPanels.length})`,
-                children: <DashboardGrid panels={dashboardPanels} activePanelId={editingPanelId} themeMode={themeMode} refreshSeconds={refreshSeconds} config={config} onOpen={openPanel} onDuplicate={duplicatePanel} onResize={resizePanel} onRemove={removePanel} />
+                children: <DashboardGrid panels={dashboardPanels} activePanelId={editingPanelId} themeMode={themeMode} relativeRange={relativeRange} refreshSeconds={refreshSeconds} refreshKey={dashboardRefreshKey} config={config} onOpen={openPanel} onDuplicate={duplicatePanel} onMove={movePanel} onResize={resizePanel} onRemove={removePanel} />
               }
             ]}
           />
@@ -871,20 +900,26 @@ function DashboardGrid({
   panels,
   activePanelId,
   themeMode,
+  relativeRange,
   refreshSeconds,
+  refreshKey,
   config,
   onOpen,
   onDuplicate,
+  onMove,
   onResize,
   onRemove
 }: {
   panels: DashboardChart[];
   activePanelId: string;
   themeMode: ThemeMode;
+  relativeRange: RelativeRange;
   refreshSeconds: number;
+  refreshKey: number;
   config: PublicConfig | null;
   onOpen: (panel: DashboardChart) => void;
   onDuplicate: (index: number) => void;
+  onMove: (index: number, direction: -1 | 1) => void;
   onResize: (panelID: string, width: number) => void;
   onRemove: (index: number) => void;
 }) {
@@ -898,12 +933,16 @@ function DashboardGrid({
           key={panel.id || `${panel.title}-${index}`}
           panel={panel}
           index={index}
+          panelCount={panels.length}
           active={panel.id === activePanelId}
           themeMode={themeMode}
+          relativeRange={relativeRange}
           refreshSeconds={refreshSeconds}
+          refreshKey={refreshKey}
           config={config}
           onOpen={onOpen}
           onDuplicate={onDuplicate}
+          onMove={onMove}
           onResize={onResize}
           onRemove={onRemove}
         />
@@ -915,49 +954,59 @@ function DashboardGrid({
 function DashboardPanelCard({
   panel,
   index,
+  panelCount,
   active,
   themeMode,
+  relativeRange,
   refreshSeconds,
+  refreshKey,
   config,
   onOpen,
   onDuplicate,
+  onMove,
   onResize,
   onRemove
 }: {
   panel: DashboardChart;
   index: number;
+  panelCount: number;
   active: boolean;
   themeMode: ThemeMode;
+  relativeRange: RelativeRange;
   refreshSeconds: number;
+  refreshKey: number;
   config: PublicConfig | null;
   onOpen: (panel: DashboardChart) => void;
   onDuplicate: (index: number) => void;
+  onMove: (index: number, direction: -1 | 1) => void;
   onResize: (panelID: string, width: number) => void;
   onRemove: (index: number) => void;
 }) {
   const [panelRows, setPanelRows] = useState<QueryRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [panelError, setPanelError] = useState('');
-  const panelQuery = useMemo(() => normalizePanelQuery(panel.query, config), [config, panel.query]);
-  const queryKey = useMemo(() => JSON.stringify(panelQuery), [panelQuery]);
+  const basePanelQuery = useMemo(() => normalizePanelQuery(panel.query, config), [config, panel.query]);
+  const displayPanelQuery = useMemo(() => basePanelQuery ? queryWithRelativeRange(basePanelQuery, relativeRange) : null, [basePanelQuery, relativeRange]);
+  const queryKey = useMemo(() => JSON.stringify({ query: basePanelQuery, range: relativeRange }), [basePanelQuery, relativeRange]);
   const width = Math.max(1, Math.min(2, Number(panel.position?.w || 1)));
 
   useEffect(() => {
     let cancelled = false;
     async function run() {
-      if (!panelQuery) {
+      if (!basePanelQuery) {
         setPanelError('Panel query is incomplete');
         setPanelRows([]);
         return;
       }
+      const effectiveQuery = queryWithRelativeRange(basePanelQuery, relativeRange);
       setLoading(true);
       setPanelError('');
       try {
-        if ((panelQuery.mode || 'builder') === 'sql') {
-          const result = await apiPost<{ rows: Record<string, unknown>[] }>('/api/sql', apiQueryPayload(panelQuery));
+        if ((effectiveQuery.mode || 'builder') === 'sql') {
+          const result = await apiPost<{ rows: Record<string, unknown>[] }>('/api/sql', apiQueryPayload(effectiveQuery));
           if (!cancelled) setPanelRows(chartRowsFromCustomSQL(result.rows));
         } else {
-          const result = await apiPost<{ rows: QueryRow[] }>('/api/query', apiQueryPayload(panelQuery));
+          const result = await apiPost<{ rows: QueryRow[] }>('/api/query', apiQueryPayload(effectiveQuery));
           if (!cancelled) setPanelRows(result.rows);
         }
       } catch (err) {
@@ -980,7 +1029,7 @@ function DashboardPanelCard({
       cancelled = true;
       window.clearInterval(interval);
     };
-  }, [queryKey, refreshSeconds]);
+  }, [queryKey, refreshKey, refreshSeconds]);
 
   return (
     <div
@@ -990,7 +1039,7 @@ function DashboardPanelCard({
       <Flex justify="space-between" gap={10} align="start" className="dashboard-panel-header">
         <div>
           <Typography.Title level={4}>{panel.title}</Typography.Title>
-          <Typography.Text type="secondary">{panelQuery ? compactQueryDescription(panelQuery) : 'Incomplete query'}</Typography.Text>
+          <Typography.Text type="secondary">{displayPanelQuery ? compactQueryDescription(displayPanelQuery) : 'Incomplete query'}</Typography.Text>
         </div>
         <Space size={6} wrap>
           <Tag>{panel.visualization?.type || 'line'}</Tag>
@@ -1004,6 +1053,8 @@ function DashboardPanelCard({
             onChange={(value) => panel.id && onResize(panel.id, Number(value))}
           />
           <Button size="small" onClick={() => onOpen(panel)}>Edit</Button>
+          <Button size="small" disabled={index === 0} onClick={() => onMove(index, -1)}>Up</Button>
+          <Button size="small" disabled={index === panelCount - 1} onClick={() => onMove(index, 1)}>Down</Button>
           <Button size="small" onClick={() => onDuplicate(index)}>Copy</Button>
           <Button size="small" danger onClick={() => onRemove(index)}>Remove</Button>
         </Space>
