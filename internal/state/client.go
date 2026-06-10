@@ -43,6 +43,13 @@ type TenantSecret struct {
 	UpdatedAt   string `json:"updated_at"`
 }
 
+type TenantSecretUsage struct {
+	ResourceType string `json:"resource_type"`
+	ResourceID   string `json:"resource_id"`
+	ResourceName string `json:"resource_name"`
+	Field        string `json:"field"`
+}
+
 type EncryptedTenantSecret struct {
 	Name       string `json:"name"`
 	Ciphertext string `json:"ciphertext"`
@@ -193,6 +200,14 @@ func (c *Client) GetTenantSecret(ctx context.Context, user auth.Principal, beare
 	return rows[0], nil
 }
 
+func (c *Client) ListTenantSecretUsage(ctx context.Context, user auth.Principal, bearer string, secretName string) ([]TenantSecretUsage, error) {
+	var rows []TenantSecretUsage
+	err := c.RPC(ctx, "list_tenant_secret_usage", map[string]any{
+		"secret_name": secretName,
+	}, user, bearer, &rows)
+	return rows, err
+}
+
 func (c *Client) SaveTenantSecret(ctx context.Context, user auth.Principal, bearer string, id string, name string, description string, ciphertext string, nonce string, keyVersion string) ([]TenantSecret, error) {
 	var rows []TenantSecret
 	var secretID any
@@ -271,6 +286,25 @@ func (c *Client) ListAlertNotifications(ctx context.Context, user auth.Principal
 		"notification_limit": limit,
 	}, user, bearer, &rows)
 	return rows, err
+}
+
+func (c *Client) RecordContactTestNotification(ctx context.Context, user auth.Principal, bearer string, contactKind, contactTarget, status string, statusCode int, errorText string, payload map[string]any) (AlertNotification, error) {
+	var rows []AlertNotification
+	err := c.RPC(ctx, "record_contact_test_notification", map[string]any{
+		"notification_contact_kind":   contactKind,
+		"notification_contact_target": contactTarget,
+		"delivery_status":             status,
+		"delivery_status_code":        statusCode,
+		"delivery_error":              errorText,
+		"delivery_payload":            payload,
+	}, user, bearer, &rows)
+	if err != nil {
+		return AlertNotification{}, err
+	}
+	if len(rows) == 0 {
+		return AlertNotification{}, nil
+	}
+	return rows[0], nil
 }
 
 func (c *Client) RecordAlertIncident(ctx context.Context, workerKey, ruleID, tenantID, status string, value float64, payload map[string]any, fingerprint string, cooldownSeconds int) (AlertIncident, error) {

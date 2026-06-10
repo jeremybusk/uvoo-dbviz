@@ -510,8 +510,18 @@ func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident m
 			return DeliveryResult{Status: "failed", Error: err.Error()}
 		}
 		req.Header.Set("Content-Type", "application/json")
-		if token := contact.Config["token"]; token != "" {
+		tenantID := strings.TrimSpace(fmt.Sprint(incident["tenantId"]))
+		if token, err := w.webhookSecretValue(ctx, tenantID, contact, "tokenSecretRef", "token"); err != nil {
+			return DeliveryResult{Status: "failed", Error: err.Error()}
+		} else if token != "" {
 			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		if headerName := strings.TrimSpace(contact.Config["headerName"]); headerName != "" {
+			if headerValue, err := w.webhookSecretValue(ctx, tenantID, contact, "headerValueSecretRef", "headerValue"); err != nil {
+				return DeliveryResult{Status: "failed", Error: err.Error()}
+			} else if headerValue != "" {
+				req.Header.Set(headerName, headerValue)
+			}
 		}
 		resp, err := w.http.Do(req)
 		if err != nil {
@@ -532,6 +542,21 @@ func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident m
 	default:
 		return DeliveryResult{Status: "failed", Error: fmt.Sprintf("unsupported contact kind: %s", contact.Kind)}
 	}
+}
+
+func (w *Worker) webhookSecretValue(ctx context.Context, tenantID string, contact ContactEndpoint, refKey string, inlineKey string) (string, error) {
+	if value := strings.TrimSpace(contact.Config[inlineKey]); value != "" {
+		return value, nil
+	}
+	ref := strings.TrimSpace(contact.Config[refKey])
+	if ref == "" {
+		return "", nil
+	}
+	value, ok := w.secrets(ctx, tenantID, ref)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("webhook secret ref is not configured: %s", ref)
+	}
+	return strings.TrimSpace(value), nil
 }
 
 func (w *Worker) notifyEmail(contact ContactEndpoint, incident map[string]any) DeliveryResult {

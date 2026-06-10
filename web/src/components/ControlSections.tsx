@@ -946,6 +946,7 @@ function describeQueryMode(query: unknown): string {
 export function SecretsSection(props: {
   user: Principal | null;
   secrets: TenantSecret[];
+  secretUsages: Record<string, string[]>;
   editingSecretId: string;
   secretName: string;
   secretDescription: string;
@@ -970,6 +971,9 @@ export function SecretsSection(props: {
       </Flex>
       <ActionList items={props.secrets} empty="No secrets" list render={(secret) => (
         <List.Item key={secret.id}>
+          {(() => {
+            const usages = props.secretUsages[secret.name] || [];
+            return (
           <Flex gap={8} align="start" className="action-row full">
             <RowActions items={[
               { key: 'edit', label: 'Edit', onClick: () => props.onOpen(secret) },
@@ -981,17 +985,20 @@ export function SecretsSection(props: {
                 danger: true,
                 confirm: {
                   title: 'Delete secret?',
-                  content: 'Contacts that reference this secret will fail until they are updated.',
+                  content: 'This deletes the encrypted value for this tenant.',
                   okText: 'Delete'
                 },
+                disabled: usages.length > 0,
                 onClick: () => props.onDelete(secret)
               }
             ]} />
             <List.Item.Meta
-              title={<Flex gap={6} align="center" wrap="wrap"><span>{secret.name}</span><Tag>{secret.key_version}</Tag></Flex>}
-              description={[secret.description, `id ${secret.id}`, `updated ${new Date(secret.updated_at).toLocaleString()}`].filter(Boolean).join(' - ')}
+              title={<Flex gap={6} align="center" wrap="wrap"><span>{secret.name}</span><Tag>{secret.key_version}</Tag>{usages.length > 0 && <Tag color="orange">used {usages.length}</Tag>}</Flex>}
+              description={[secret.description, usages.length > 0 ? `used by ${usages.join(', ')}` : '', `id ${secret.id}`, `updated ${new Date(secret.updated_at).toLocaleString()}`].filter(Boolean).join(' - ')}
             />
           </Flex>
+            );
+          })()}
         </List.Item>
       )} />
     </Section>
@@ -1007,6 +1014,11 @@ export function ContactsSection(props: {
   contactTarget: string;
   contactKind: ContactEndpoint['kind'];
   contactStatus: string;
+  webhookTokenSecretRef: string;
+  webhookTokenValue: string;
+  webhookHeaderName: string;
+  webhookHeaderValueSecretRef: string;
+  webhookHeaderValue: string;
   pagerDutyRoutingKeySecretRef: string;
   pagerDutyRoutingKeyValue: string;
   pagerDutyRestApiKeySecretRef: string;
@@ -1019,6 +1031,11 @@ export function ContactsSection(props: {
   onName: (value: string) => void;
   onTarget: (value: string) => void;
   onKind: (value: ContactEndpoint['kind']) => void;
+  onWebhookTokenSecretRef: (value: string) => void;
+  onWebhookTokenValue: (value: string) => void;
+  onWebhookHeaderName: (value: string) => void;
+  onWebhookHeaderValueSecretRef: (value: string) => void;
+  onWebhookHeaderValue: (value: string) => void;
   onPagerDutyRoutingKeySecretRef: (value: string) => void;
   onPagerDutyRoutingKeyValue: (value: string) => void;
   onPagerDutyRestApiKeySecretRef: (value: string) => void;
@@ -1063,6 +1080,39 @@ export function ContactsSection(props: {
         </Select>
       </Field>
       <Field label="Target"><Input value={props.contactTarget} onChange={(event) => props.onTarget(event.target.value)} placeholder={contactTargetPlaceholder(props.contactKind)} /></Field>
+      {props.contactKind === 'webhook' && (
+        <>
+          <Field label="Bearer token secret">
+            <Select
+              allowClear
+              showSearch
+              value={props.webhookTokenSecretRef || undefined}
+              onChange={(value) => props.onWebhookTokenSecretRef(value || '')}
+              options={secretOptions}
+              placeholder="Optional"
+            />
+          </Field>
+          <Field label="Paste bearer token">
+            <Input.Password value={props.webhookTokenValue} onChange={(event) => props.onWebhookTokenValue(event.target.value)} placeholder="Paste to encrypt and store" />
+          </Field>
+          <Field label="Custom header name">
+            <Input value={props.webhookHeaderName} onChange={(event) => props.onWebhookHeaderName(event.target.value)} placeholder="X-API-Key" />
+          </Field>
+          <Field label="Custom header value secret">
+            <Select
+              allowClear
+              showSearch
+              value={props.webhookHeaderValueSecretRef || undefined}
+              onChange={(value) => props.onWebhookHeaderValueSecretRef(value || '')}
+              options={secretOptions}
+              placeholder="Optional"
+            />
+          </Field>
+          <Field label="Paste custom header value">
+            <Input.Password value={props.webhookHeaderValue} onChange={(event) => props.onWebhookHeaderValue(event.target.value)} placeholder="Paste to encrypt and store" />
+          </Field>
+        </>
+      )}
       {props.contactKind === 'pagerduty' && (
         <>
           <Field label="Events integration key secret">
@@ -1334,7 +1384,7 @@ export function AuditSection({ auditEvents }: { auditEvents: AuditEvent[] }) {
 }
 
 export function ControlSections(props: {
-  items: { key: string; label: string; children: React.ReactNode }[];
+  items: { key: string; label: React.ReactNode; children: React.ReactNode }[];
 }) {
   return <Collapse bordered={false} defaultActiveKey={['access', 'settings', 'query']} items={props.items} />;
 }

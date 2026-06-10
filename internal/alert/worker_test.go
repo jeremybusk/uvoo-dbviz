@@ -270,6 +270,47 @@ func TestDeliveryTesterSendsWebhookTestPayload(t *testing.T) {
 	}
 }
 
+func TestWebhookUsesSecretBackedAuthorizationAndHeader(t *testing.T) {
+	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
+	worker.SetSecretResolver(func(_ context.Context, tenantID string, ref string) (string, bool) {
+		if tenantID != "dev" {
+			t.Fatalf("tenantID = %s", tenantID)
+		}
+		switch ref {
+		case "webhook-token":
+			return "token-value", true
+		case "webhook-api-key":
+			return "api-key-value", true
+		default:
+			t.Fatalf("secret ref = %s", ref)
+		}
+		return "", false
+	})
+	worker.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("Authorization"); got != "Bearer token-value" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if got := r.Header.Get("X-API-Key"); got != "api-key-value" {
+			t.Fatalf("x-api-key = %q", got)
+		}
+		return textResponse(http.StatusOK, ""), nil
+	})}
+
+	result := worker.notify(context.Background(), ContactEndpoint{
+		Kind:   "webhook",
+		Target: "http://webhook.local/alerts",
+		Config: map[string]string{
+			"tokenSecretRef":       "webhook-token",
+			"headerName":           "X-API-Key",
+			"headerValueSecretRef": "webhook-api-key",
+		},
+	}, map[string]any{"tenantId": "dev", "ruleName": "Webhook alert"})
+
+	if result.Status != "success" || result.StatusCode != http.StatusOK {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestDeliveryTesterSendsPagerDutyTestPayload(t *testing.T) {
 	tester := NewDeliveryTester(SMTPConfig{}, func(_ context.Context, tenantID string, ref string) (string, bool) {
 		if tenantID != "dev" || ref != "pagerduty-test-key" {

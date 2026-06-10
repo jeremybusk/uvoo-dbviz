@@ -1160,6 +1160,9 @@ func (a *App) testContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		From:     a.cfg.Alerts.SMTPFrom,
 	}, a.resolveTenantSecretForRequest(r), a.logger)
 	result, payload := tester.TestContact(r.Context(), statePrincipal(r).TenantID, contact)
+	if _, err := a.state.RecordContactTestNotification(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), contact.Kind, contact.Target, result.Status, result.StatusCode, result.Error, payload); err != nil {
+		a.logger.Warn("contact test notification record failed", "kind", contact.Kind, "target", contact.Target, "error", err)
+	}
 	a.recordAuditEvent(r, "contact_endpoint.test", "contact_endpoint", strings.TrimSpace(req.ID), map[string]any{"kind": contact.Kind, "status": result.Status})
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":     result.Status,
@@ -1253,6 +1256,9 @@ func (a *App) normalizeContactConfig(r *http.Request, kind string, name string, 
 			output[key] = strings.TrimSpace(text)
 		}
 	}
+	if kind == "webhook" {
+		return a.normalizeWebhookContactConfig(r, name, output)
+	}
 	if kind != "pagerduty" {
 		return output, nil
 	}
@@ -1303,6 +1309,42 @@ func (a *App) normalizeContactConfig(r *http.Request, kind string, name string, 
 	if value, _ := output["severity"].(string); value == "" {
 		output["severity"] = "error"
 	}
+	return output, nil
+}
+
+func (a *App) normalizeWebhookContactConfig(r *http.Request, name string, output map[string]any) (map[string]any, error) {
+	if value, _ := output["tokenValue"].(string); value != "" {
+		ref, _ := output["tokenSecretRef"].(string)
+		if ref == "" {
+			ref = defaultSecretRef(name, "webhook-token")
+		}
+		if err := a.saveEncryptedTenantSecret(r, "", ref, "Webhook bearer token", value); err != nil {
+			return nil, err
+		}
+		output["tokenSecretRef"] = ref
+	}
+	delete(output, "tokenValue")
+	if headerName, _ := output["headerName"].(string); headerName != "" {
+		if !safeHTTPHeaderName(headerName) {
+			return nil, errors.New("webhook header name is invalid")
+		}
+		output["headerName"] = headerName
+	}
+	if value, _ := output["headerValue"].(string); value != "" {
+		headerName, _ := output["headerName"].(string)
+		if headerName == "" {
+			return nil, errors.New("webhook header name is required when a header value is provided")
+		}
+		ref, _ := output["headerValueSecretRef"].(string)
+		if ref == "" {
+			ref = defaultSecretRef(name, headerName+"-header")
+		}
+		if err := a.saveEncryptedTenantSecret(r, "", ref, "Webhook custom header value", value); err != nil {
+			return nil, err
+		}
+		output["headerValueSecretRef"] = ref
+	}
+	delete(output, "headerValue")
 	return output, nil
 }
 
@@ -1363,6 +1405,22 @@ func (a *App) deleteTenantSecret(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	secret, ok, err := a.tenantSecretByID(r, strings.TrimSpace(req.ID))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if ok {
+		usages, err := a.state.ListTenantSecretUsage(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), secret.Name)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		if len(usages) > 0 {
+			writeError(w, http.StatusConflict, fmt.Errorf("secret is still in use: %s", tenantSecretUsageSummary(usages)))
+			return
+		}
+	}
 	rows, err := a.state.DeleteTenantSecret(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), strings.TrimSpace(req.ID))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
@@ -1370,6 +1428,30 @@ func (a *App) deleteTenantSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordAuditEvent(r, "tenant_secret.delete", "tenant_secret", strings.TrimSpace(req.ID), nil)
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) tenantSecretByID(r *http.Request, id string) (state.TenantSecret, bool, error) {
+	if id == "" {
+		return state.TenantSecret{}, false, nil
+	}
+	rows, err := a.state.ListTenantSecrets(r.Context(), statePrincipal(r), r.Header.Get("Authorization"))
+	if err != nil {
+		return state.TenantSecret{}, false, err
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row, true, nil
+		}
+	}
+	return state.TenantSecret{}, false, nil
+}
+
+func tenantSecretUsageSummary(usages []state.TenantSecretUsage) string {
+	parts := make([]string, 0, len(usages))
+	for _, usage := range usages {
+		parts = append(parts, strings.TrimSpace(usage.ResourceName+" "+usage.Field))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func (a *App) saveEncryptedTenantSecret(r *http.Request, id string, name string, description string, value string) error {
@@ -1401,6 +1483,12 @@ func defaultSecretRef(name string, suffix string) string {
 }
 
 var secretNameCleaner = regexp.MustCompile(`[^a-z0-9]+`)
+var httpHeaderNamePattern = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
+
+func safeHTTPHeaderName(name string) bool {
+	name = strings.TrimSpace(name)
+	return name != "" && httpHeaderNamePattern.MatchString(name)
+}
 
 func targetIDFromSecretRows(rows []state.TenantSecret) string {
 	if len(rows) == 0 {

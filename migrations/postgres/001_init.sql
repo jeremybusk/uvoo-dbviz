@@ -750,6 +750,37 @@ AS $$
     LIMIT 1;
 $$;
 
+CREATE OR REPLACE FUNCTION list_tenant_secret_usage(secret_name text)
+RETURNS TABLE(resource_type text, resource_id uuid, resource_name text, field text)
+LANGUAGE sql STABLE
+AS $$
+    SELECT 'contact'::text, c.id, c.name, 'PagerDuty Events integration key'::text
+    FROM contact_endpoints c
+    WHERE c.tenant_id = request_tenant_id()
+      AND c.config->>'routingKeySecretRef' = secret_name
+    UNION ALL
+    SELECT 'contact'::text, c.id, c.name, 'PagerDuty REST API key'::text
+    FROM contact_endpoints c
+    WHERE c.tenant_id = request_tenant_id()
+      AND c.config->>'restApiKeySecretRef' = secret_name
+    UNION ALL
+    SELECT 'contact'::text, c.id, c.name, 'Webhook bearer token'::text
+    FROM contact_endpoints c
+    WHERE c.tenant_id = request_tenant_id()
+      AND c.config->>'tokenSecretRef' = secret_name
+    UNION ALL
+    SELECT 'contact'::text, c.id, c.name, 'Webhook custom header'::text
+    FROM contact_endpoints c
+    WHERE c.tenant_id = request_tenant_id()
+      AND c.config->>'headerValueSecretRef' = secret_name
+    UNION ALL
+    SELECT 'data_source'::text, d.id, d.name, 'Password'::text
+    FROM data_sources d
+    WHERE d.tenant_id = request_tenant_id()
+      AND d.config->>'passwordSecretRef' = secret_name
+    ORDER BY 1, 3, 4;
+$$;
+
 CREATE OR REPLACE FUNCTION save_tenant_secret(secret_id uuid, secret_name text, secret_description text, secret_ciphertext text, secret_nonce text, secret_key_version text)
 RETURNS TABLE(id uuid, name text, description text, key_version text, created_at timestamptz, updated_at timestamptz)
 LANGUAGE plpgsql
@@ -825,6 +856,7 @@ $$;
 
 GRANT EXECUTE ON FUNCTION list_tenant_secrets() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION get_tenant_secret(text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_tenant_secret_usage(text) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_tenant_secret(uuid, text, text, text, text, text) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION delete_tenant_secret(uuid) TO dbviz_web;
 
@@ -972,6 +1004,78 @@ AS $$
     LIMIT LEAST(GREATEST(COALESCE(notification_limit, 100), 1), 500);
 $$;
 
+CREATE OR REPLACE FUNCTION record_contact_test_notification(
+    notification_contact_kind text,
+    notification_contact_target text,
+    delivery_status text,
+    delivery_status_code integer,
+    delivery_error text,
+    delivery_payload jsonb
+)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    alert_incident_id uuid,
+    contact_kind text,
+    contact_target text,
+    status text,
+    status_code integer,
+    error text,
+    payload jsonb,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    normalized_status text;
+    saved_id uuid;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    normalized_status := COALESCE(NULLIF(delivery_status, ''), 'failed');
+    IF normalized_status NOT IN ('success', 'failed', 'skipped') THEN
+        normalized_status := 'failed';
+    END IF;
+
+    INSERT INTO alert_notifications (
+        tenant_id,
+        contact_kind,
+        contact_target,
+        status,
+        status_code,
+        error,
+        payload
+    )
+    VALUES (
+        request_tenant_id(),
+        COALESCE(notification_contact_kind, ''),
+        COALESCE(notification_contact_target, ''),
+        normalized_status,
+        GREATEST(COALESCE(delivery_status_code, 0), 0),
+        LEFT(COALESCE(delivery_error, ''), 2000),
+        COALESCE(delivery_payload, '{}'::jsonb)
+    )
+    RETURNING alert_notifications.id INTO saved_id;
+
+    RETURN QUERY
+    SELECT
+        n.id,
+        n.alert_rule_id,
+        n.alert_incident_id,
+        n.contact_kind,
+        n.contact_target,
+        n.status,
+        n.status_code,
+        n.error,
+        n.payload,
+        n.created_at
+    FROM alert_notifications n
+    WHERE n.id = saved_id;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION resolve_alert_incident(actor_subject text, actor_provider text, incident_id uuid)
 RETURNS TABLE(
     id uuid,
@@ -1102,6 +1206,7 @@ GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boo
 GRANT EXECUTE ON FUNCTION delete_alert_rule(uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_notifications(integer) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION record_contact_test_notification(text, text, text, integer, text, jsonb) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION resolve_alert_incident(text, text, uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_enabled_alert_rules_for_worker(worker_key text)
