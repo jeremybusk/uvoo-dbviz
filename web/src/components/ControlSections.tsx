@@ -1167,6 +1167,7 @@ export function ContactsSection(props: {
     value: secret.name
   }));
   const historyByContact = React.useMemo(() => contactNotificationHistory(props.contacts, props.notifications), [props.contacts, props.notifications]);
+  const saveBlockReason = contactSaveBlockReason(props);
 
   return (
     <Section title="Contacts">
@@ -1277,15 +1278,16 @@ export function ContactsSection(props: {
           <Alert
             type={pagerDutyRestReady(props) ? 'success' : props.pagerDutyRestSyncEnabled ? 'warning' : 'info'}
             showIcon
-            message={pagerDutyRestReady(props) ? 'PagerDuty REST incident sync ready' : props.pagerDutyRestSyncEnabled ? 'REST sync needs a REST API key secret, service ID, and From email.' : 'Events API delivery works with the integration key. Turn on REST sync to create and resolve incidents through the REST API.'}
+            message={pagerDutyRestReady(props) ? 'PagerDuty REST incident sync ready' : props.pagerDutyRestSyncEnabled ? saveBlockReason || 'REST sync needs PagerDuty REST settings.' : 'Events API delivery works with the integration key. Turn on REST sync to create and resolve incidents through the REST API.'}
           />
         </>
       )}
       <Flex gap={8} wrap="wrap">
         <Button onClick={props.onNew}>New</Button>
-        <Button icon={<SaveOutlined />} disabled={!props.user || !contactCanSave(props)} onClick={props.onSave}>{props.editingContactId ? 'Update contact' : 'Save contact'}</Button>
-        <Button icon={<PlayCircleOutlined />} disabled={!props.user || !contactCanSave(props)} onClick={props.onTest}>Save and test</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user || Boolean(saveBlockReason)} onClick={props.onSave}>{props.editingContactId ? 'Update contact' : 'Save contact'}</Button>
+        <Button icon={<PlayCircleOutlined />} disabled={!props.user || Boolean(saveBlockReason)} onClick={props.onTest}>Save and test</Button>
       </Flex>
+      {saveBlockReason && <Typography.Text type="secondary">{saveBlockReason}</Typography.Text>}
       {props.contactStatus && <Alert type={props.contactStatus.startsWith('Success') ? 'success' : props.contactStatus.startsWith('Skipped') ? 'warning' : 'error'} showIcon message={props.contactStatus} />}
       <Field label="Find contact">
         <Input.Search allowClear value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} />
@@ -1391,7 +1393,7 @@ function contactNotificationHistory(contacts: ContactEndpoint[], notifications: 
   return byContact;
 }
 
-function contactCanSave(props: {
+function contactSaveBlockReason(props: {
   contactKind: ContactEndpoint['kind'];
   contactTarget: string;
   pagerDutyRoutingKeySecretRef: string;
@@ -1401,18 +1403,19 @@ function contactCanSave(props: {
   pagerDutyRestApiKeyValue?: string;
   pagerDutyServiceID?: string;
   pagerDutyFromEmail?: string;
-}): boolean {
+}): string {
   if (props.contactKind === 'pagerduty') {
     if (props.pagerDutyRestSyncEnabled) {
-      return Boolean(
-        (props.pagerDutyRestApiKeySecretRef?.trim() || props.pagerDutyRestApiKeyValue?.trim()) &&
-        props.pagerDutyServiceID?.trim() &&
-        props.pagerDutyFromEmail?.trim()
-      );
+      const missing = [
+        props.pagerDutyRestApiKeySecretRef?.trim() || props.pagerDutyRestApiKeyValue?.trim() ? '' : 'REST API key secret or pasted key',
+        props.pagerDutyServiceID?.trim() ? '' : 'REST service ID',
+        props.pagerDutyFromEmail?.trim() ? '' : 'REST From email'
+      ].filter(Boolean);
+      return missing.length > 0 ? `REST sync is missing: ${missing.join(', ')}.` : '';
     }
-    return Boolean(props.pagerDutyRoutingKeySecretRef.trim() || props.pagerDutyRoutingKeyValue.trim());
+    return props.pagerDutyRoutingKeySecretRef.trim() || props.pagerDutyRoutingKeyValue.trim() ? '' : 'PagerDuty Events delivery needs an integration key secret or pasted integration key.';
   }
-  return Boolean(props.contactTarget.trim());
+  return props.contactTarget.trim() ? '' : 'Contact target is required.';
 }
 
 function pagerDutyRestReady(props: {
