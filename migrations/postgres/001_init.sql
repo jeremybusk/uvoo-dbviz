@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name text NOT NULL DEFAULT '',
     provider text NOT NULL,
     role text NOT NULL DEFAULT 'viewer' CHECK (role IN ('owner', 'admin', 'editor', 'viewer')),
+    preferences jsonb NOT NULL DEFAULT '{}'::jsonb,
     disabled_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(provider, subject),
@@ -170,6 +171,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE data_sources ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS fingerprint text NOT NULL DEFAULT '';
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS occurrence_count integer NOT NULL DEFAULT 1;
@@ -1333,6 +1335,38 @@ AS $$
     LIMIT 1;
 $$;
 
+CREATE OR REPLACE FUNCTION current_user_preferences(user_subject text, user_provider text)
+RETURNS jsonb
+LANGUAGE sql STABLE
+AS $$
+    SELECT COALESCE(u.preferences, '{}'::jsonb)
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = user_subject
+      AND u.provider = user_provider
+      AND u.disabled_at IS NULL
+    LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION save_current_user_preferences(user_subject text, user_provider text, user_preferences jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_preferences jsonb;
+BEGIN
+    UPDATE users
+    SET preferences = COALESCE(user_preferences, '{}'::jsonb)
+    WHERE users.tenant_id = request_tenant_id()
+      AND users.subject = user_subject
+      AND users.provider = user_provider
+      AND users.disabled_at IS NULL
+    RETURNING users.preferences INTO saved_preferences;
+
+    RETURN COALESCE(saved_preferences, '{}'::jsonb);
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION current_user_has_role(user_subject text, user_provider text, allowed_roles text[])
 RETURNS boolean
 LANGUAGE sql STABLE
@@ -1349,6 +1383,8 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION current_user_profile(text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION current_user_preferences(text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION save_current_user_preferences(text, text, jsonb) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION current_user_has_role(text, text, text[]) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_user_memberships(user_subject text, user_provider text)

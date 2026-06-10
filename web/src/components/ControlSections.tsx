@@ -50,7 +50,7 @@ import {
   UserProfile,
   Principal
 } from '../api';
-import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, VisualizationType } from '../types';
+import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, ThemeMode, VisualizationType } from '../types';
 
 type Role = 'owner' | 'admin' | 'editor' | 'viewer';
 type RowAction = {
@@ -166,6 +166,106 @@ export function AccessSection(props: {
           </Button>
         )}
       </Space>
+    </Section>
+  );
+}
+
+export function SettingsSection(props: {
+  user: Principal | null;
+  config: PublicConfig | null;
+  dataSources: DataSource[];
+  preferencesStatus: string;
+  themeMode: ThemeMode;
+  refreshSeconds: number;
+  relativeRange: RelativeRange;
+  eventLimit: number;
+  dataset: string;
+  sourceId: string;
+  visualization: VisualizationType;
+  onTheme: (value: ThemeMode) => void;
+  onRefreshSeconds: (value: number) => void;
+  onRelativeRange: (value: number, unit: RelativeRangeUnit) => void;
+  onEventLimit: (value: number) => void;
+  onDataset: (value: string) => void;
+  onSourceId: (value: string) => void;
+  onVisualization: (value: VisualizationType) => void;
+  onSave: () => void;
+}) {
+  return (
+    <Section title="Settings">
+      <Field label="Theme">
+        <Segmented
+          block
+          value={props.themeMode}
+          options={[
+            { label: 'Light', value: 'light' },
+            { label: 'Dark', value: 'dark' }
+          ]}
+          onChange={(value) => props.onTheme(value as ThemeMode)}
+        />
+      </Field>
+      <Field label="Refresh">
+        <Segmented
+          block
+          value={props.refreshSeconds}
+          options={[
+            { label: 'Off', value: 0 },
+            { label: '10s', value: 10 },
+            { label: '30s', value: 30 },
+            { label: '1m', value: 60 },
+            { label: '5m', value: 300 }
+          ]}
+          onChange={(value) => props.onRefreshSeconds(Number(value))}
+        />
+      </Field>
+      <Field label="Default range">
+        <Space.Compact className="full relative-range">
+          <InputNumber
+            className="relative-range-value"
+            min={1}
+            max={999}
+            value={props.relativeRange.value}
+            onChange={(value) => props.onRelativeRange(Number(value || 1), props.relativeRange.unit)}
+          />
+          <Select
+            className="relative-range-unit"
+            value={props.relativeRange.unit}
+            onChange={(unit: RelativeRangeUnit) => props.onRelativeRange(props.relativeRange.value, unit)}
+          >
+            <Select.Option value="minutes">minutes</Select.Option>
+            <Select.Option value="hours">hours</Select.Option>
+            <Select.Option value="days">days</Select.Option>
+            <Select.Option value="weeks">weeks</Select.Option>
+            <Select.Option value="months">months</Select.Option>
+            <Select.Option value="years">years</Select.Option>
+          </Select>
+        </Space.Compact>
+      </Field>
+      <Field label="Event rows">
+        <InputNumber className="full" min={10} max={1000} value={props.eventLimit} onChange={(value) => props.onEventLimit(Number(value || 200))} />
+      </Field>
+      <Field label="Dataset">
+        <Select value={props.dataset} onChange={props.onDataset}>
+          {props.config?.datasets.map((item) => <Select.Option key={item.id} value={item.id}>{item.name}</Select.Option>)}
+        </Select>
+      </Field>
+      <Field label="Source">
+        <Select value={props.sourceId} onChange={props.onSourceId}>
+          <Select.Option value="">Server default</Select.Option>
+          {props.dataSources.map((source) => <Select.Option key={source.id} value={source.id}>{source.name}</Select.Option>)}
+        </Select>
+      </Field>
+      <Field label="Visualization">
+        <Select value={props.visualization} onChange={props.onVisualization}>
+          <Select.Option value="line">Line</Select.Option>
+          <Select.Option value="area">Area</Select.Option>
+          <Select.Option value="bar">Bar</Select.Option>
+        </Select>
+      </Field>
+      <Flex align="center" gap={8} wrap="wrap">
+        <Button icon={<SaveOutlined />} disabled={!props.user} onClick={props.onSave}>Save now</Button>
+        {props.preferencesStatus && <Typography.Text type="secondary">{props.preferencesStatus}</Typography.Text>}
+      </Flex>
     </Section>
   );
 }
@@ -1027,7 +1127,7 @@ export function AuditSection({ auditEvents }: { auditEvents: AuditEvent[] }) {
 export function ControlSections(props: {
   items: { key: string; label: string; children: React.ReactNode }[];
 }) {
-  return <Collapse bordered={false} defaultActiveKey={['access', 'query']} items={props.items} />;
+  return <Collapse bordered={false} defaultActiveKey={['access', 'settings', 'query']} items={props.items} />;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {

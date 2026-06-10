@@ -20,6 +20,7 @@ import {
   TenantInvite,
   TenantMember,
   TenantMembership,
+  UserPreferences,
   UserProfile,
   apiGet,
   apiPost,
@@ -48,6 +49,7 @@ import {
   NotificationsSection,
   QuerySection,
   SavedQueriesSection,
+  SettingsSection,
   SourceSection
 } from './components/ControlSections';
 import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, ThemeMode, VisualizationType } from './types';
@@ -65,6 +67,8 @@ function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWide, setSidebarWide] = useState(false);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [preferencesStatus, setPreferencesStatus] = useState('');
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [user, setUser] = useState<Principal | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -157,6 +161,11 @@ function App() {
 
   useEffect(() => {
     if (!config || !user) return;
+    setPreferencesLoaded(false);
+    loadUserPreferences().catch((err) => {
+      setPreferencesLoaded(true);
+      setError(err.message);
+    });
     loadAccessState().catch((err) => setError(err.message));
     loadDataSources().catch((err) => setError(err.message));
     loadQueryHistory().catch(() => undefined);
@@ -167,6 +176,18 @@ function App() {
     loadMembers().catch(() => setMembers([]));
     loadAuditEvents().catch(() => setAuditEvents([]));
   }, [config, user, activeTenant]);
+
+  useEffect(() => {
+    if (!user || !preferencesLoaded) return;
+    setPreferencesStatus('Saving preferences...');
+    const timeout = window.setTimeout(() => {
+      saveUserPreferences().catch((err) => {
+        setPreferencesStatus('Preferences not saved');
+        setError(err.message);
+      });
+    }, 800);
+    return () => window.clearTimeout(timeout);
+  }, [user, preferencesLoaded, themeMode, refreshSeconds, relativeRange.value, relativeRange.unit, query.dataset, query.sourceId, query.limit, panelVisualization]);
 
   useEffect(() => {
     if (!user || refreshSeconds <= 0) return;
@@ -316,6 +337,19 @@ function App() {
     ]);
     setMemberships(nextMemberships);
     setProfile(nextProfile);
+  }
+
+  async function loadUserPreferences() {
+    const preferences = await apiGet<UserPreferences>('/api/session/preferences');
+    applyUserPreferences(preferences);
+    setPreferencesLoaded(true);
+    setPreferencesStatus('Preferences loaded');
+  }
+
+  async function saveUserPreferences() {
+    const saved = await apiPost<UserPreferences>('/api/session/preferences', currentUserPreferences());
+    setPreferencesStatus('Preferences saved');
+    return saved;
   }
 
   async function loadMembers() {
@@ -908,6 +942,73 @@ function App() {
     writeThemePreference(nextTheme);
   }
 
+  function currentUserPreferences(): UserPreferences {
+    return {
+      themeMode,
+      refreshSeconds,
+      relativeRange,
+      eventLimit: query.limit,
+      dataset: query.dataset,
+      sourceId: query.sourceId || '',
+      visualization: panelVisualization
+    };
+  }
+
+  function applyUserPreferences(preferences: UserPreferences) {
+    if (preferences.themeMode === 'light' || preferences.themeMode === 'dark') {
+      changeTheme(preferences.themeMode);
+    }
+    if (isAllowedRefresh(preferences.refreshSeconds)) {
+      setRefreshSeconds(preferences.refreshSeconds);
+    }
+    if (preferences.relativeRange && isAllowedRangeUnit(preferences.relativeRange.unit)) {
+      const value = Math.max(1, Math.min(999, Math.trunc(preferences.relativeRange.value || 1)));
+      applyRelativeRange(value, preferences.relativeRange.unit);
+    }
+    if (isAllowedVisualization(preferences.visualization)) {
+      setPanelVisualization(preferences.visualization);
+    }
+    updateQuery((current) => {
+      const datasetID = preferences.dataset && config?.datasets.some((item) => item.id === preferences.dataset)
+        ? preferences.dataset
+        : current.dataset;
+      const sourceID = typeof preferences.sourceId === 'string' ? preferences.sourceId : current.sourceId;
+      return {
+        ...current,
+        dataset: datasetID,
+        sourceId: sourceID,
+        sql: current.mode === 'sql' && datasetID !== current.dataset ? defaultSQL(datasetID) : current.sql,
+        groupBy: datasetID !== current.dataset ? defaultGroupBy(config, datasetID) : current.groupBy,
+        measure: datasetID !== current.dataset ? defaultMeasure(config, datasetID) : current.measure,
+        aggregation: datasetID !== current.dataset ? defaultAggregation(config, datasetID) : current.aggregation,
+        filters: datasetID !== current.dataset ? {} : current.filters,
+        filterOps: datasetID !== current.dataset ? {} : current.filterOps,
+        limit: clampEventLimit(preferences.eventLimit ?? current.limit)
+      };
+    });
+  }
+
+  function changeDefaultDataset(datasetID: string) {
+    updateQuery((current) => ({
+      ...current,
+      dataset: datasetID,
+      sql: current.mode === 'sql' ? defaultSQL(datasetID) : current.sql,
+      groupBy: defaultGroupBy(config, datasetID),
+      measure: defaultMeasure(config, datasetID),
+      aggregation: defaultAggregation(config, datasetID),
+      filters: {},
+      filterOps: {}
+    }));
+  }
+
+  function changeDefaultSource(sourceID: string) {
+    setQuery((current) => ({ ...current, sourceId: sourceID }));
+  }
+
+  function changeDefaultEventLimit(limit: number) {
+    updateQuery((current) => ({ ...current, limit: clampEventLimit(limit) }));
+  }
+
   function applyRelativeRange(value: number, unit: RelativeRangeUnit) {
     const nextRange = { value: Math.max(1, Math.trunc(value || 1)), unit };
     setRelativeRange(nextRange);
@@ -958,6 +1059,7 @@ function App() {
 
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} jwtClaims={jwtClaims} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
+    { key: 'settings', label: 'Settings', children: <SettingsSection user={user} config={config} dataSources={dataSources} preferencesStatus={preferencesStatus} themeMode={themeMode} refreshSeconds={refreshSeconds} relativeRange={relativeRange} eventLimit={query.limit} dataset={query.dataset} sourceId={query.sourceId} visualization={panelVisualization} onTheme={changeTheme} onRefreshSeconds={setRefreshSeconds} onRelativeRange={applyRelativeRange} onEventLimit={changeDefaultEventLimit} onDataset={changeDefaultDataset} onSourceId={changeDefaultSource} onVisualization={setPanelVisualization} onSave={() => saveUserPreferences().catch((err) => setError(err.message))} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onNew={newDataSource} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} onDelete={(source) => deleteDataSource(source).catch((err) => setError(err.message))} /> },
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={updateQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
@@ -1593,6 +1695,34 @@ function compactFilters(filters: Record<string, string> | undefined): string {
   const active = Object.entries(filters || {}).filter(([, value]) => value.trim() !== '');
   if (active.length === 0) return '';
   return active.map(([key, value]) => `${key}=${value}`).join(', ');
+}
+
+function defaultGroupBy(config: PublicConfig | null, datasetID: string): string {
+  return config?.datasets.find((item) => item.id === datasetID)?.dimensions[0] || '';
+}
+
+function defaultMeasure(config: PublicConfig | null, datasetID: string): string {
+  return config?.datasets.find((item) => item.id === datasetID)?.defaultMeasure || '_rows';
+}
+
+function defaultAggregation(config: PublicConfig | null, datasetID: string): string {
+  return config?.datasets.find((item) => item.id === datasetID)?.defaultAggregation || 'count';
+}
+
+function clampEventLimit(value: number): number {
+  return Math.max(10, Math.min(1000, Math.trunc(value || 200)));
+}
+
+function isAllowedRefresh(value: unknown): value is number {
+  return value === 0 || value === 10 || value === 30 || value === 60 || value === 300;
+}
+
+function isAllowedRangeUnit(value: unknown): value is RelativeRangeUnit {
+  return value === 'minutes' || value === 'hours' || value === 'days' || value === 'weeks' || value === 'months' || value === 'years';
+}
+
+function isAllowedVisualization(value: unknown): value is VisualizationType {
+  return value === 'line' || value === 'area' || value === 'bar';
 }
 
 function activeFilters(filters: Record<string, string> | undefined): [string, string][] {

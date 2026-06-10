@@ -49,6 +49,19 @@ export type UserProfile = {
   role: 'owner' | 'admin' | 'editor' | 'viewer';
 };
 
+export type UserPreferences = {
+  themeMode?: 'light' | 'dark';
+  refreshSeconds?: number;
+  relativeRange?: {
+    value: number;
+    unit: 'minutes' | 'hours' | 'days' | 'weeks' | 'months' | 'years';
+  };
+  eventLimit?: number;
+  dataset?: string;
+  sourceId?: string;
+  visualization?: 'line' | 'area' | 'bar';
+};
+
 export type TenantMembership = {
   tenant_id: string;
   tenant_slug: string;

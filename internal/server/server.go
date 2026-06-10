@@ -43,6 +43,8 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/me", a.requireAuth(a.me))
 	a.mux.HandleFunc("POST /api/session/sync", a.requireAuth(a.syncSession))
 	a.mux.HandleFunc("GET /api/session/profile", a.requireAuth(a.sessionProfile))
+	a.mux.HandleFunc("GET /api/session/preferences", a.requireAuth(a.sessionPreferences))
+	a.mux.HandleFunc("POST /api/session/preferences", a.requireAuth(a.saveSessionPreferences))
 	a.mux.HandleFunc("GET /api/session/memberships", a.requireAuth(a.listMemberships))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
 	a.mux.HandleFunc("POST /api/events", a.requireAuth(a.events))
@@ -143,6 +145,93 @@ func (a *App) sessionProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, profile)
+}
+
+func (a *App) sessionPreferences(w http.ResponseWriter, r *http.Request) {
+	user := statePrincipal(r)
+	var preferences map[string]any
+	if err := a.state.RPC(r.Context(), "current_user_preferences", map[string]any{
+		"user_subject":  user.Subject,
+		"user_provider": user.Provider,
+	}, user, r.Header.Get("Authorization"), &preferences); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if preferences == nil {
+		preferences = map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, preferences)
+}
+
+func (a *App) saveSessionPreferences(w http.ResponseWriter, r *http.Request) {
+	var req map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	user := statePrincipal(r)
+	var preferences map[string]any
+	if err := a.state.RPC(r.Context(), "save_current_user_preferences", map[string]any{
+		"user_subject":     user.Subject,
+		"user_provider":    user.Provider,
+		"user_preferences": sanitizePreferences(req),
+	}, user, r.Header.Get("Authorization"), &preferences); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if preferences == nil {
+		preferences = map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, preferences)
+}
+
+func sanitizePreferences(input map[string]any) map[string]any {
+	out := map[string]any{}
+	if value, _ := input["themeMode"].(string); value == "light" || value == "dark" {
+		out["themeMode"] = value
+	}
+	if value, ok := numericValue(input["refreshSeconds"]); ok {
+		seconds := int(value)
+		switch seconds {
+		case 0, 10, 30, 60, 300:
+			out["refreshSeconds"] = seconds
+		}
+	}
+	if value, ok := numericValue(input["eventLimit"]); ok {
+		limit := int(value)
+		if limit >= 10 && limit <= 1000 {
+			out["eventLimit"] = limit
+		}
+	}
+	if value, _ := input["dataset"].(string); value != "" && len(value) <= 80 {
+		out["dataset"] = strings.TrimSpace(value)
+	}
+	if value, _ := input["sourceId"].(string); len(value) <= 80 {
+		out["sourceId"] = strings.TrimSpace(value)
+	}
+	if value, _ := input["visualization"].(string); value == "line" || value == "area" || value == "bar" {
+		out["visualization"] = value
+	}
+	if rawRange, ok := input["relativeRange"].(map[string]any); ok {
+		if value, valueOK := numericValue(rawRange["value"]); valueOK {
+			if unit, unitOK := rawRange["unit"].(string); unitOK && validPreferenceRangeUnit(unit) {
+				rangeValue := int(value)
+				if rangeValue >= 1 && rangeValue <= 999 {
+					out["relativeRange"] = map[string]any{"value": rangeValue, "unit": unit}
+				}
+			}
+		}
+	}
+	return out
+}
+
+func validPreferenceRangeUnit(unit string) bool {
+	switch unit {
+	case "minutes", "hours", "days", "weeks", "months", "years":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *App) listMemberships(w http.ResponseWriter, r *http.Request) {
