@@ -64,23 +64,25 @@ const pagerDutyEventsV2Endpoint = "https://events.pagerduty.com/v2/enqueue"
 const pagerDutyRESTAPIEndpoint = "https://api.pagerduty.com"
 
 type Worker struct {
-	datasets map[string]config.Dataset
-	maxRows  int
-	ch       *clickhouse.Client
-	http     *http.Client
-	logger   *slog.Logger
-	load     func(context.Context) ([]Rule, error)
-	record   func(context.Context, Rule, string, float64, map[string]any, string, int) (RecordResult, error)
-	delivery func(context.Context, Rule, string, ContactEndpoint, DeliveryResult, map[string]any) error
-	sync     func(context.Context, Rule, string, DeliveryResult) error
-	poll     time.Duration
-	dedupe   time.Duration
-	smtp     SMTPConfig
-	secrets  func(context.Context, string, string) (string, bool)
-	pending  map[string]time.Time
-	active   map[string]map[string]struct{}
-	stop     chan struct{}
-	wg       sync.WaitGroup
+	datasets        map[string]config.Dataset
+	maxRows         int
+	ch              *clickhouse.Client
+	http            *http.Client
+	logger          *slog.Logger
+	load            func(context.Context) ([]Rule, error)
+	record          func(context.Context, Rule, string, float64, map[string]any, string, int) (RecordResult, error)
+	delivery        func(context.Context, Rule, string, ContactEndpoint, DeliveryResult, map[string]any) error
+	sync            func(context.Context, Rule, string, DeliveryResult) error
+	reconcileLoad   func(context.Context) ([]state.PagerDutySyncedIncident, error)
+	reconcileRecord func(context.Context, state.PagerDutySyncedIncident, PagerDutyRemoteIncident, DeliveryResult) error
+	poll            time.Duration
+	dedupe          time.Duration
+	smtp            SMTPConfig
+	secrets         func(context.Context, string, string) (string, bool)
+	pending         map[string]time.Time
+	active          map[string]map[string]struct{}
+	stop            chan struct{}
+	wg              sync.WaitGroup
 }
 
 type SMTPConfig struct {
@@ -112,6 +114,12 @@ type DeliveryResult struct {
 	ExternalSyncStatus  string
 }
 
+type PagerDutyRemoteIncident struct {
+	ID      string
+	Status  string
+	HTMLURL string
+}
+
 func (w *Worker) SetIncidentRecorder(record func(context.Context, Rule, string, float64, map[string]any, string, int) (RecordResult, error)) {
 	w.record = record
 }
@@ -122,6 +130,11 @@ func (w *Worker) SetNotificationRecorder(record func(context.Context, Rule, stri
 
 func (w *Worker) SetIncidentSyncRecorder(record func(context.Context, Rule, string, DeliveryResult) error) {
 	w.sync = record
+}
+
+func (w *Worker) SetPagerDutyReconciler(load func(context.Context) ([]state.PagerDutySyncedIncident, error), record func(context.Context, state.PagerDutySyncedIncident, PagerDutyRemoteIncident, DeliveryResult) error) {
+	w.reconcileLoad = load
+	w.reconcileRecord = record
 }
 
 func (w *Worker) SetDedupeWindow(window time.Duration) {
@@ -284,6 +297,7 @@ func (w *Worker) Start(ctx context.Context) {
 		defer ticker.Stop()
 		lastEval := map[string]time.Time{}
 		w.evaluateDue(ctx, lastEval)
+		w.reconcilePagerDuty(ctx)
 		for {
 			select {
 			case <-ctx.Done():
@@ -292,6 +306,7 @@ func (w *Worker) Start(ctx context.Context) {
 				return
 			case <-ticker.C:
 				w.evaluateDue(ctx, lastEval)
+				w.reconcilePagerDuty(ctx)
 			}
 		}
 	}()
@@ -326,6 +341,30 @@ func (w *Worker) evaluateDue(ctx context.Context, lastEval map[string]time.Time)
 		}
 		lastEval[key] = now
 		w.evaluate(ctx, rule)
+	}
+}
+
+func (w *Worker) reconcilePagerDuty(ctx context.Context) {
+	if w.reconcileLoad == nil || w.reconcileRecord == nil {
+		return
+	}
+	incidents, err := w.reconcileLoad(ctx)
+	if err != nil {
+		w.logger.Warn("PagerDuty reconciliation load failed", "error", err)
+		return
+	}
+	for _, incident := range incidents {
+		if strings.TrimSpace(incident.ExternalIncidentID) == "" {
+			continue
+		}
+		remote, result := w.fetchPagerDutyRESTIncident(ctx, incident.TenantID, ContactEndpoint{
+			Kind:   "pagerduty",
+			Target: incident.ContactTarget,
+			Config: incident.ContactConfig,
+		}, incident.ExternalIncidentID)
+		if err := w.reconcileRecord(ctx, incident, remote, result); err != nil {
+			w.logger.Warn("PagerDuty reconciliation record failed", "incident", incident.ID, "remote", incident.ExternalIncidentID, "error", err)
+		}
 	}
 }
 
@@ -783,17 +822,48 @@ func (w *Worker) updatePagerDutyRESTIncident(ctx context.Context, contact Contac
 	}
 }
 
+func (w *Worker) fetchPagerDutyRESTIncident(ctx context.Context, tenantID string, contact ContactEndpoint, remoteID string) (PagerDutyRemoteIncident, DeliveryResult) {
+	apiKey, err := w.pagerDutyRESTAPIKey(ctx, tenantID, contact)
+	if err != nil {
+		return PagerDutyRemoteIncident{ID: remoteID}, DeliveryResult{Status: "failed", Error: err.Error(), ExternalProvider: "pagerduty", ExternalIncidentID: remoteID, ExternalSyncStatus: "reconcile_failed"}
+	}
+	respBody, statusCode, err := w.pagerDutyRESTRequest(ctx, contact, apiKey, strings.TrimSpace(contact.Config["fromEmail"]), http.MethodGet, "/incidents/"+url.PathEscape(remoteID), nil)
+	if err != nil {
+		return PagerDutyRemoteIncident{ID: remoteID}, DeliveryResult{Status: "failed", StatusCode: statusCode, Error: err.Error(), ExternalProvider: "pagerduty", ExternalIncidentID: remoteID, ExternalSyncStatus: "reconcile_failed"}
+	}
+	remote := pagerDutyIncidentResponse(respBody)
+	if remote.ID == "" {
+		remote.ID = remoteID
+	}
+	return remote, DeliveryResult{
+		Status:              "success",
+		StatusCode:          statusCode,
+		ExternalProvider:    "pagerduty",
+		ExternalIncidentID:  remote.ID,
+		ExternalIncidentURL: remote.HTMLURL,
+		ExternalSyncStatus:  "remote_" + firstNonEmptyString(remote.Status, "unknown"),
+	}
+}
+
 func (w *Worker) pagerDutyRESTRequest(ctx context.Context, contact ContactEndpoint, apiKey string, from string, method string, path string, payload map[string]any) ([]byte, int, error) {
 	baseURL := strings.TrimRight(firstNonEmptyString(contact.Config["apiBaseURL"], pagerDutyRESTAPIEndpoint), "/")
-	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, bytes.NewReader(body))
+	var reader io.Reader
+	if payload != nil {
+		body, _ := json.Marshal(payload)
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, baseURL+path, reader)
 	if err != nil {
 		return nil, 0, err
 	}
 	req.Header.Set("Authorization", "Token token="+apiKey)
 	req.Header.Set("Accept", "application/vnd.pagerduty+json;version=2")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("From", from)
+	if payload != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if from != "" {
+		req.Header.Set("From", from)
+	}
 	resp, err := w.http.Do(req)
 	if err != nil {
 		return nil, 0, err
@@ -811,16 +881,26 @@ func (w *Worker) pagerDutyRESTRequest(ctx context.Context, contact ContactEndpoi
 }
 
 func pagerDutyIncidentResponseFields(body []byte) (string, string) {
+	incident := pagerDutyIncidentResponse(body)
+	return incident.ID, incident.HTMLURL
+}
+
+func pagerDutyIncidentResponse(body []byte) PagerDutyRemoteIncident {
 	var parsed struct {
 		Incident struct {
 			ID      string `json:"id"`
+			Status  string `json:"status"`
 			HTMLURL string `json:"html_url"`
 		} `json:"incident"`
 	}
 	if err := json.Unmarshal(body, &parsed); err != nil {
-		return "", ""
+		return PagerDutyRemoteIncident{}
 	}
-	return strings.TrimSpace(parsed.Incident.ID), strings.TrimSpace(parsed.Incident.HTMLURL)
+	return PagerDutyRemoteIncident{
+		ID:      strings.TrimSpace(parsed.Incident.ID),
+		Status:  strings.TrimSpace(parsed.Incident.Status),
+		HTMLURL: strings.TrimSpace(parsed.Incident.HTMLURL),
+	}
 }
 
 func pagerDutyRESTSyncEnabled(contact ContactEndpoint) bool {

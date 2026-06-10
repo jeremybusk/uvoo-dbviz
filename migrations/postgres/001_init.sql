@@ -1573,6 +1573,148 @@ $$;
 
 GRANT EXECUTE ON FUNCTION update_alert_incident_sync_for_worker(text, text, uuid, text, text, text, text, text) TO dbviz_web;
 
+CREATE OR REPLACE FUNCTION list_pagerduty_synced_incidents_for_worker(worker_key text)
+RETURNS TABLE(
+    id uuid,
+    tenant_id text,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    external_incident_id text,
+    external_incident_url text,
+    contact_target text,
+    contact_config jsonb
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        i.id,
+        t.slug AS tenant_id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.external_incident_id,
+        i.external_incident_url,
+        c.target AS contact_target,
+        COALESCE(c.config, '{}'::jsonb) AS contact_config
+    FROM alert_incidents i
+    JOIN tenants t ON t.id = i.tenant_id
+    JOIN alert_rules a ON a.id = i.alert_rule_id
+    JOIN contact_endpoints c ON c.id = a.contact_endpoint_id
+    WHERE c.kind = 'pagerduty'
+      AND COALESCE(c.config->>'restSyncEnabled', '') IN ('true', '1', 'yes', 'on')
+      AND i.external_provider = 'pagerduty'
+      AND i.external_incident_id <> ''
+      AND i.status = 'firing'
+      AND i.resolved_at IS NULL
+    ORDER BY i.last_seen_at DESC
+    LIMIT 500;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents_for_worker(text) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION reconcile_pagerduty_incident_for_worker(
+    worker_key text,
+    tenant_slug text,
+    incident_id uuid,
+    remote_status text,
+    sync_external_incident_url text,
+    sync_status text,
+    sync_error text
+)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    value double precision,
+    payload jsonb,
+    occurrence_count integer,
+    first_seen_at timestamptz,
+    last_seen_at timestamptz,
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+    normalized_remote_status text;
+    normalized_sync_status text;
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    SELECT tenants.id INTO resolved_tenant_id
+    FROM tenants
+    WHERE tenants.slug = tenant_slug;
+
+    IF resolved_tenant_id IS NULL THEN
+        RAISE EXCEPTION 'tenant not found: %', tenant_slug;
+    END IF;
+
+    normalized_remote_status := lower(COALESCE(remote_status, ''));
+    normalized_sync_status := COALESCE(NULLIF(sync_status, ''), 'remote_' || COALESCE(NULLIF(normalized_remote_status, ''), 'unknown'));
+
+    UPDATE alert_incidents
+    SET status = CASE WHEN normalized_remote_status = 'resolved' THEN 'resolved' ELSE alert_incidents.status END,
+        resolved_at = CASE WHEN normalized_remote_status = 'resolved' THEN COALESCE(alert_incidents.resolved_at, now()) ELSE alert_incidents.resolved_at END,
+        last_seen_at = now(),
+        payload = alert_incidents.payload || jsonb_build_object('pagerDutyRemoteStatus', normalized_remote_status, 'pagerDutyReconciledAt', now()),
+        external_incident_url = LEFT(COALESCE(NULLIF(sync_external_incident_url, ''), alert_incidents.external_incident_url), 1000),
+        external_sync_status = LEFT(normalized_sync_status, 80),
+        external_sync_error = LEFT(COALESCE(sync_error, ''), 2000),
+        external_last_synced_at = now()
+    WHERE alert_incidents.id = incident_id
+      AND alert_incidents.tenant_id = resolved_tenant_id;
+
+    RETURN QUERY
+    SELECT
+        i.id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.value,
+        i.payload,
+        i.occurrence_count,
+        i.first_seen_at,
+        i.last_seen_at,
+        i.last_notified_at,
+        i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
+        i.created_at
+    FROM alert_incidents i
+    WHERE i.id = incident_id
+      AND i.tenant_id = resolved_tenant_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION reconcile_pagerduty_incident_for_worker(text, text, uuid, text, text, text, text) TO dbviz_web;
+
 CREATE OR REPLACE FUNCTION record_alert_notification_for_worker(
     worker_key text,
     rule_id uuid,

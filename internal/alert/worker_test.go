@@ -462,6 +462,37 @@ func TestNotifyPagerDutyRESTResolvesIncident(t *testing.T) {
 	}
 }
 
+func TestFetchPagerDutyRESTIncident(t *testing.T) {
+	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
+	worker.SetSecretResolver(func(context.Context, string, string) (string, bool) {
+		return "rest-token", true
+	})
+	worker.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodGet || r.URL.Path != "/incidents/Q123" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+		if got := r.Header.Get("Content-Type"); got != "" {
+			t.Fatalf("content-type = %q", got)
+		}
+		return textResponse(http.StatusOK, `{"incident":{"id":"Q123","status":"resolved","html_url":"https://example.pagerduty.com/incidents/Q123"}}`), nil
+	})}
+
+	remote, result := worker.fetchPagerDutyRESTIncident(context.Background(), "dev", ContactEndpoint{
+		Kind: "pagerduty",
+		Config: map[string]string{
+			"restSyncEnabled":     "true",
+			"restApiKeySecretRef": "pagerduty-rest-key",
+		},
+	}, "Q123")
+
+	if result.Status != "success" || result.ExternalSyncStatus != "remote_resolved" {
+		t.Fatalf("result = %#v", result)
+	}
+	if remote.ID != "Q123" || remote.Status != "resolved" || remote.HTMLURL == "" {
+		t.Fatalf("remote = %#v", remote)
+	}
+}
+
 func fakeClickHouse(t *testing.T, body string) *clickhouse.Client {
 	t.Helper()
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {

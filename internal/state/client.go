@@ -113,6 +113,18 @@ type AlertNotification struct {
 	CreatedAt       string         `json:"created_at"`
 }
 
+type PagerDutySyncedIncident struct {
+	ID                  string            `json:"id"`
+	TenantID            string            `json:"tenant_id"`
+	AlertRuleID         *string           `json:"alert_rule_id"`
+	Fingerprint         string            `json:"fingerprint"`
+	Status              string            `json:"status"`
+	ExternalIncidentID  string            `json:"external_incident_id"`
+	ExternalIncidentURL string            `json:"external_incident_url"`
+	ContactTarget       string            `json:"contact_target"`
+	ContactConfig       map[string]string `json:"contact_config"`
+}
+
 func NewClient(cfg config.PostgRESTConfig, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
@@ -350,6 +362,38 @@ func (c *Client) UpdateAlertIncidentSync(ctx context.Context, workerKey, tenantI
 		"incident_id":                normalizedIncidentID,
 		"sync_external_provider":     provider,
 		"sync_external_incident_id":  externalID,
+		"sync_external_incident_url": externalURL,
+		"sync_status":                syncStatus,
+		"sync_error":                 syncError,
+	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+	if err != nil {
+		return AlertIncident{}, err
+	}
+	if len(rows) == 0 {
+		return AlertIncident{}, nil
+	}
+	return rows[0], nil
+}
+
+func (c *Client) ListPagerDutySyncedIncidents(ctx context.Context, workerKey string) ([]PagerDutySyncedIncident, error) {
+	var rows []PagerDutySyncedIncident
+	err := c.RPC(ctx, "list_pagerduty_synced_incidents_for_worker", map[string]any{
+		"worker_key": workerKey,
+	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+	return rows, err
+}
+
+func (c *Client) ReconcilePagerDutyIncident(ctx context.Context, workerKey, tenantID, incidentID, remoteStatus, externalURL, syncStatus, syncError string) (AlertIncident, error) {
+	var normalizedIncidentID any
+	if uuidPattern.MatchString(incidentID) {
+		normalizedIncidentID = incidentID
+	}
+	var rows []AlertIncident
+	err := c.RPC(ctx, "reconcile_pagerduty_incident_for_worker", map[string]any{
+		"worker_key":                 workerKey,
+		"tenant_slug":                tenantID,
+		"incident_id":                normalizedIncidentID,
+		"remote_status":              remoteStatus,
 		"sync_external_incident_url": externalURL,
 		"sync_status":                syncStatus,
 		"sync_error":                 syncError,
