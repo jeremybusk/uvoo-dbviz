@@ -1,12 +1,12 @@
 import React, { useEffect } from 'react';
 import { BarChart, LineChart } from 'echarts/charts';
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components';
+import { DataZoomComponent, GridComponent, LegendComponent, ToolboxComponent, TooltipComponent } from 'echarts/components';
 import * as echarts from 'echarts/core';
 import { CanvasRenderer } from 'echarts/renderers';
 import { QueryRow } from '../api';
 import { ThemeMode, VisualizationType } from '../types';
 
-echarts.use([BarChart, CanvasRenderer, GridComponent, LegendComponent, LineChart, TooltipComponent]);
+echarts.use([BarChart, CanvasRenderer, DataZoomComponent, GridComponent, LegendComponent, LineChart, ToolboxComponent, TooltipComponent]);
 
 const primaryColor = '#2563eb';
 const secondaryColor = '#64748b';
@@ -28,8 +28,22 @@ export function Chart({ rows, themeMode, type }: { rows: QueryRow[]; themeMode: 
     chart.setOption({
       backgroundColor: surfaceColor,
       color: colors,
-      grid: { top: 28, right: 28, bottom: 42, left: 58 },
-      legend: { top: 0, type: 'scroll', textStyle: { color: mutedTextColor } },
+      grid: { top: 46, right: 28, bottom: 70, left: 58 },
+      legend: { top: 0, left: 0, right: 84, type: 'scroll', textStyle: { color: mutedTextColor } },
+      toolbox: {
+        top: 0,
+        right: 0,
+        itemSize: 14,
+        iconStyle: { borderColor: mutedTextColor },
+        emphasis: { iconStyle: { borderColor: primaryColor } },
+        feature: {
+          dataZoom: {
+            yAxisIndex: 'none',
+            title: { zoom: 'Zoom range', back: 'Reset zoom' }
+          },
+          restore: { title: 'Reset view' }
+        }
+      },
       tooltip: {
         trigger: 'axis',
         backgroundColor: tooltipBg,
@@ -49,6 +63,32 @@ export function Chart({ rows, themeMode, type }: { rows: QueryRow[]; themeMode: 
         axisLine: { lineStyle: { color: borderColor } },
         splitLine: { lineStyle: { color: borderColor, opacity: isDark ? 0.35 : 0.55 } }
       },
+      dataZoom: [
+        {
+          type: 'inside',
+          xAxisIndex: 0,
+          filterMode: 'filter',
+          zoomOnMouseWheel: 'ctrl',
+          moveOnMouseMove: true,
+          moveOnMouseWheel: true
+        },
+        {
+          type: 'slider',
+          xAxisIndex: 0,
+          filterMode: 'filter',
+          height: 18,
+          bottom: 18,
+          borderColor,
+          fillerColor: isDark ? 'rgba(37, 99, 235, 0.22)' : 'rgba(37, 99, 235, 0.14)',
+          handleStyle: { color: primaryColor },
+          moveHandleStyle: { color: primaryColor },
+          selectedDataBackground: {
+            lineStyle: { color: primaryColor },
+            areaStyle: { color: isDark ? 'rgba(37, 99, 235, 0.28)' : 'rgba(37, 99, 235, 0.18)' }
+          },
+          textStyle: { color: mutedTextColor }
+        }
+      ],
       series: seriesNames.map((name) => ({
         name,
         type: type === 'bar' ? 'bar' : 'line',
