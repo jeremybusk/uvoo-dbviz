@@ -2,12 +2,13 @@ import {
   Alert,
   Button,
   Collapse,
+  Dropdown,
   Empty,
   Flex,
   Input,
   InputNumber,
   List,
-  Popconfirm,
+  Modal,
   Select,
   Segmented,
   Space,
@@ -17,15 +18,12 @@ import {
 } from 'antd';
 import {
   CheckCircleOutlined,
-  CopyOutlined,
-  DeleteOutlined,
-  DownOutlined,
   EditOutlined,
   LoginOutlined,
+  MoreOutlined,
   PlayCircleOutlined,
   PlusOutlined,
-  SaveOutlined,
-  UpOutlined
+  SaveOutlined
 } from '@ant-design/icons';
 import React from 'react';
 import {
@@ -51,6 +49,18 @@ import {
 import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, VisualizationType } from '../types';
 
 type Role = 'owner' | 'admin' | 'editor' | 'viewer';
+type RowAction = {
+  key: string;
+  label: string;
+  danger?: boolean;
+  disabled?: boolean;
+  confirm?: {
+    title: string;
+    content: string;
+    okText?: string;
+  };
+  onClick: () => void;
+};
 
 export function AccessSection(props: {
   config: PublicConfig | null;
@@ -225,20 +235,25 @@ export function SourceSection(props: {
         <Input.Search allowClear value={sourceSearch} onChange={(event) => setSourceSearch(event.target.value)} />
       </Field>
       <ActionList items={filteredSources} empty="No sources" render={(source) => (
-        <Flex key={source.id} gap={6}>
+        <Flex key={source.id} gap={6} align="stretch" className="action-row">
+          <RowActions items={[
+            { key: 'edit', label: 'Edit', onClick: () => props.onOpen(source) },
+            {
+              key: 'delete',
+              label: 'Delete',
+              danger: true,
+              confirm: {
+                title: 'Delete source?',
+                content: 'Saved queries and dashboards that reference it may fall back to the server default.',
+                okText: 'Delete'
+              },
+              onClick: () => props.onDelete(source)
+            }
+          ]} />
           <Button block className="stack-button" type={source.id === props.editingSourceId ? 'primary' : 'default'} onClick={() => props.onOpen(source)}>
             <span>{source.name}</span>
             <small>{source.kind} - {String(source.config.url || 'server default')}</small>
           </Button>
-          <Popconfirm
-            title="Delete source?"
-            description="Saved queries and dashboards that reference it may fall back to the server default."
-            okText="Delete"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => props.onDelete(source)}
-          >
-            <Button icon={<DeleteOutlined />} danger />
-          </Popconfirm>
         </Flex>
       )} />
     </Section>
@@ -456,20 +471,25 @@ export function SavedQueriesSection(props: {
         <Input.Search allowClear value={querySearch} onChange={(event) => setQuerySearch(event.target.value)} />
       </Field>
       <ActionList items={filteredQueries} empty="No saved queries" render={(query) => (
-        <Flex key={query.id} gap={6}>
+        <Flex key={query.id} gap={6} align="stretch" className="action-row">
+          <RowActions items={[
+            { key: 'edit', label: 'Edit', onClick: () => props.onOpen(query) },
+            {
+              key: 'delete',
+              label: 'Delete',
+              danger: true,
+              confirm: {
+                title: 'Delete saved query?',
+                content: 'This does not change dashboards or alert rules already using copied query payloads.',
+                okText: 'Delete'
+              },
+              onClick: () => props.onDelete(query)
+            }
+          ]} />
           <Button block className="stack-button" type={query.id === props.editingSavedQueryId ? 'primary' : 'default'} onClick={() => props.onOpen(query)}>
             <span>{query.name}</span>
             <small>{query.description || describePanelQuery(query.query)}</small>
           </Button>
-          <Popconfirm
-            title="Delete saved query?"
-            description="This does not change dashboards or alert rules already using copied query payloads."
-            okText="Delete"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => props.onDelete(query)}
-          >
-            <Button icon={<DeleteOutlined />} danger />
-          </Popconfirm>
         </Flex>
       )} />
     </Section>
@@ -547,44 +567,54 @@ export function DashboardsSection(props: {
       </Field>
       <Button disabled={!props.dashboardImportText.trim()} onClick={props.onImport}>Import</Button>
       <ActionList items={props.dashboardPanels} empty="No staged panels" render={(panel, index) => (
-        <Flex key={panel.id || `${panel.title}-${index}`} gap={6}>
+        <Flex key={panel.id || `${panel.title}-${index}`} gap={6} align="stretch" className="action-row">
+          <RowActions items={[
+            { key: 'edit', label: 'Edit', onClick: () => props.onOpenPanel(panel) },
+            { key: 'move-up', label: 'Move up', disabled: index === 0, onClick: () => props.onMovePanel(index, -1) },
+            { key: 'move-down', label: 'Move down', disabled: index === props.dashboardPanels.length - 1, onClick: () => props.onMovePanel(index, 1) },
+            { key: 'copy', label: 'Copy', onClick: () => props.onDuplicatePanel(index) },
+            {
+              key: 'remove',
+              label: 'Remove',
+              danger: true,
+              confirm: {
+                title: 'Remove panel?',
+                content: 'This only removes the panel from the dashboard draft.',
+                okText: 'Remove'
+              },
+              onClick: () => props.onRemovePanel(index)
+            }
+          ]} />
           <Button className="grow stack-button" type={panel.id === props.activePanelId ? 'primary' : 'default'} onClick={() => props.onOpenPanel(panel)}>
             <span>{panel.title}</span>
             <small>{describePanelQuery(panel.query)}</small>
           </Button>
-          <Button icon={<UpOutlined />} disabled={index === 0} onClick={() => props.onMovePanel(index, -1)} />
-          <Button icon={<DownOutlined />} disabled={index === props.dashboardPanels.length - 1} onClick={() => props.onMovePanel(index, 1)} />
-          <Button icon={<CopyOutlined />} onClick={() => props.onDuplicatePanel(index)} />
-          <Popconfirm
-            title="Remove panel?"
-            description="This only removes the panel from the dashboard draft."
-            okText="Remove"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => props.onRemovePanel(index)}
-          >
-            <Button icon={<DeleteOutlined />} danger />
-          </Popconfirm>
         </Flex>
       )} />
       <Field label="Find dashboard">
         <Input.Search allowClear value={dashboardSearch} onChange={(event) => setDashboardSearch(event.target.value)} />
       </Field>
       <ActionList items={filteredDashboards} empty="No dashboards" render={(dashboard) => (
-        <Flex key={dashboard.id} gap={6}>
+        <Flex key={dashboard.id} gap={6} align="stretch" className="action-row">
+          <RowActions items={[
+            { key: 'open', label: 'Open', onClick: () => props.onOpen(dashboard) },
+            { key: 'duplicate', label: 'Duplicate', onClick: () => props.onDuplicateDashboard(dashboard) },
+            {
+              key: 'delete',
+              label: 'Delete',
+              danger: true,
+              confirm: {
+                title: 'Delete dashboard?',
+                content: 'This deletes the saved dashboard for this tenant.',
+                okText: 'Delete'
+              },
+              onClick: () => props.onDeleteDashboard(dashboard)
+            }
+          ]} />
           <Button block className="stack-button" type={dashboard.id === props.editingDashboardId ? 'primary' : 'default'} onClick={() => props.onOpen(dashboard)}>
             <span>{dashboard.name}</span>
             <small>{dashboard.layout?.charts?.length || 0} panels - updated {new Date(dashboard.updated_at).toLocaleString()}</small>
           </Button>
-          <Button icon={<CopyOutlined />} onClick={() => props.onDuplicateDashboard(dashboard)} />
-          <Popconfirm
-            title="Delete dashboard?"
-            description="This deletes the saved dashboard for this tenant."
-            okText="Delete"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => props.onDeleteDashboard(dashboard)}
-          >
-            <Button icon={<DeleteOutlined />} danger />
-          </Popconfirm>
         </Flex>
       )} />
     </Section>
@@ -681,28 +711,29 @@ export function AlertsSection(props: {
         <Input.Search allowClear value={alertSearch} onChange={(event) => setAlertSearch(event.target.value)} />
       </Field>
       <ActionList items={filteredRules} empty="No alert rules" list render={(rule) => (
-        <List.Item
-          key={rule.id}
-          actions={[
-            <Button key="edit" size="small" onClick={() => props.onOpen(rule)}>Edit</Button>,
-            <Button key="load" size="small" onClick={() => props.onLoadQuery(rule)}>Load query</Button>,
-            <Button key="toggle" size="small" onClick={() => props.onToggle(rule)}>{rule.enabled ? 'Disable' : 'Enable'}</Button>,
-            <Popconfirm
-              key="delete"
-              title="Delete alert rule?"
-              description="Existing incidents remain for audit history."
-              okText="Delete"
-              okButtonProps={{ danger: true }}
-              onConfirm={() => props.onDelete(rule)}
-            >
-              <Button size="small" danger>Delete</Button>
-            </Popconfirm>
-          ]}
-        >
-          <List.Item.Meta
-            title={<Flex gap={6} align="center" wrap="wrap"><span>{rule.name}</span><Tag color={rule.enabled ? 'green' : undefined}>{rule.enabled ? 'enabled' : 'disabled'}</Tag></Flex>}
-            description={`${describeAlertCondition(rule)} - every ${rule.interval_seconds || 60}s - ${describeQueryMode(rule.query)}`}
-          />
+        <List.Item key={rule.id}>
+          <Flex gap={8} align="start" className="action-row full">
+            <RowActions items={[
+              { key: 'edit', label: 'Edit', onClick: () => props.onOpen(rule) },
+              { key: 'load', label: 'Load query', onClick: () => props.onLoadQuery(rule) },
+              { key: 'toggle', label: rule.enabled ? 'Disable' : 'Enable', onClick: () => props.onToggle(rule) },
+              {
+                key: 'delete',
+                label: 'Delete',
+                danger: true,
+                confirm: {
+                  title: 'Delete alert rule?',
+                  content: 'Existing incidents remain for audit history.',
+                  okText: 'Delete'
+                },
+                onClick: () => props.onDelete(rule)
+              }
+            ]} />
+            <List.Item.Meta
+              title={<Flex gap={6} align="center" wrap="wrap"><span>{rule.name}</span><Tag color={rule.enabled ? 'green' : undefined}>{rule.enabled ? 'enabled' : 'disabled'}</Tag></Flex>}
+              description={`${describeAlertCondition(rule)} - every ${rule.interval_seconds || 60}s - ${describeQueryMode(rule.query)}`}
+            />
+          </Flex>
         </List.Item>
       )} />
     </Section>
@@ -781,27 +812,28 @@ export function ContactsSection(props: {
         <Input.Search allowClear value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} />
       </Field>
       <ActionList items={filteredContacts} empty="No contacts" list render={(contact) => (
-        <List.Item
-          key={contact.id}
-          actions={[
-            <Button key="edit" size="small" onClick={() => props.onOpen(contact)}>Edit</Button>,
-            <Button key="use" size="small" onClick={() => props.onUseForAlert(contact)}>Use in alert</Button>,
-            <Popconfirm
-              key="delete"
-              title="Delete contact?"
-              description="Alert rules using this contact will keep running without a contact."
-              okText="Delete"
-              okButtonProps={{ danger: true }}
-              onConfirm={() => props.onDelete(contact)}
-            >
-              <Button size="small" danger>Delete</Button>
-            </Popconfirm>
-          ]}
-        >
-          <List.Item.Meta
-            title={<Flex gap={6} align="center" wrap="wrap"><span>{contact.name}</span><Tag>{contact.kind}</Tag></Flex>}
-            description={contact.target}
-          />
+        <List.Item key={contact.id}>
+          <Flex gap={8} align="start" className="action-row full">
+            <RowActions items={[
+              { key: 'edit', label: 'Edit', onClick: () => props.onOpen(contact) },
+              { key: 'use', label: 'Use in alert', onClick: () => props.onUseForAlert(contact) },
+              {
+                key: 'delete',
+                label: 'Delete',
+                danger: true,
+                confirm: {
+                  title: 'Delete contact?',
+                  content: 'Alert rules using this contact will keep running without a contact.',
+                  okText: 'Delete'
+                },
+                onClick: () => props.onDelete(contact)
+              }
+            ]} />
+            <List.Item.Meta
+              title={<Flex gap={6} align="center" wrap="wrap"><span>{contact.name}</span><Tag>{contact.kind}</Tag></Flex>}
+              description={contact.target}
+            />
+          </Flex>
         </List.Item>
       )} />
     </Section>
@@ -891,20 +923,24 @@ export function InvitesSection(props: {
         <Input.Search allowClear value={inviteSearch} onChange={(event) => setInviteSearch(event.target.value)} />
       </Field>
       <ActionList items={filteredInvites} empty="No invites" render={(invite) => (
-        <Flex key={invite.id} gap={6}>
+        <Flex key={invite.id} gap={6} align="stretch" className="action-row">
+          <RowActions items={[
+            {
+              key: 'delete',
+              label: 'Delete',
+              danger: true,
+              confirm: {
+                title: 'Delete invite?',
+                content: 'The invite token will no longer be accepted.',
+                okText: 'Delete'
+              },
+              onClick: () => props.onDelete(invite)
+            }
+          ]} />
           <Button block className="stack-button">
             <span>{invite.email} - {invite.role}</span>
             <small>{invite.accepted_at ? `accepted ${new Date(invite.accepted_at).toLocaleString()}` : invite.token || `expires ${new Date(invite.expires_at).toLocaleString()}`}</small>
           </Button>
-          <Popconfirm
-            title="Delete invite?"
-            description="The invite token will no longer be accepted."
-            okText="Delete"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => props.onDelete(invite)}
-          >
-            <Button icon={<DeleteOutlined />} danger />
-          </Popconfirm>
         </Flex>
       )} />
     </Section>
@@ -935,33 +971,33 @@ export function MembersSection(props: {
         <Input.Search allowClear value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} />
       </Field>
       <ActionList items={filteredMembers} empty="No members" render={(member) => (
-        <List.Item
-          key={member.id}
-          actions={[
-            <Select key="role" size="small" disabled={Boolean(member.disabled_at)} value={member.role} onChange={(role) => props.onRole(member, role)} className="role-select">
+        <List.Item key={member.id}>
+          <Flex gap={8} align="start" className="action-row full">
+            <RowActions items={[
+              {
+                key: 'deactivate',
+                label: 'Deactivate',
+                danger: true,
+                disabled: Boolean(member.disabled_at),
+                confirm: {
+                  title: 'Deactivate member?',
+                  content: 'The member will lose access to this tenant.',
+                  okText: 'Deactivate'
+                },
+                onClick: () => props.onDeactivate(member)
+              }
+            ]} />
+            <List.Item.Meta
+              title={member.display_name || member.email}
+              description={`${member.provider}${member.disabled_at ? ' - disabled' : ''}`}
+            />
+            <Select size="small" disabled={Boolean(member.disabled_at)} value={member.role} onChange={(role) => props.onRole(member, role)} className="role-select">
               <Select.Option value="owner">Owner</Select.Option>
               <Select.Option value="admin">Admin</Select.Option>
               <Select.Option value="editor">Editor</Select.Option>
               <Select.Option value="viewer">Viewer</Select.Option>
-            </Select>,
-            !member.disabled_at && (
-              <Popconfirm
-                key="disable"
-                title="Deactivate member?"
-                description="The member will lose access to this tenant."
-                okText="Deactivate"
-                okButtonProps={{ danger: true }}
-                onConfirm={() => props.onDeactivate(member)}
-              >
-                <Button size="small" danger>Deactivate</Button>
-              </Popconfirm>
-            )
-          ]}
-        >
-          <List.Item.Meta
-            title={member.display_name || member.email}
-            description={`${member.provider}${member.disabled_at ? ' - disabled' : ''}`}
-          />
+            </Select>
+          </Flex>
         </List.Item>
       )} list />
     </Section>
@@ -1021,6 +1057,39 @@ function ActionList<T>({
   if (items.length === 0) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={empty} />;
   if (list) return <List size="small" dataSource={items} renderItem={(item, index) => render(item, index) as React.ReactElement} />;
   return <Space direction="vertical" size={6} className="full">{items.map(render)}</Space>;
+}
+
+function RowActions({ items }: { items: RowAction[] }) {
+  return (
+    <Dropdown
+      trigger={['click']}
+      menu={{
+        items: items.map((item) => ({
+          key: item.key,
+          label: item.label,
+          danger: item.danger,
+          disabled: item.disabled
+        })),
+        onClick: ({ key }) => {
+          const action = items.find((item) => item.key === key);
+          if (!action || action.disabled) return;
+          if (action.confirm) {
+            Modal.confirm({
+              title: action.confirm.title,
+              content: action.confirm.content,
+              okText: action.confirm.okText || 'Confirm',
+              okButtonProps: { danger: action.danger },
+              onOk: action.onClick
+            });
+            return;
+          }
+          action.onClick();
+        }
+      }}
+    >
+      <Button className="row-action-trigger" icon={<MoreOutlined />} />
+    </Dropdown>
+  );
 }
 
 function firstDimension(config: PublicConfig | null, datasetID: string): string {

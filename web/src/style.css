@@ -33,6 +33,19 @@ body {
   padding: 18px;
 }
 
+.app-sidebar-collapsed {
+  padding: 12px 7px;
+}
+
+.sidebar-title {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.sidebar-tools {
+  flex: 0 0 auto;
+}
+
 .workspace {
   display: grid;
   grid-template-rows: auto auto auto auto minmax(360px, 1fr);
@@ -52,6 +65,11 @@ body {
   background: var(--app-primary);
   color: #fff;
   font-weight: 800;
+}
+
+.mark-small {
+  width: 36px;
+  height: 36px;
 }
 
 .ant-typography h1,
@@ -105,8 +123,36 @@ h2.ant-typography {
   text-overflow: ellipsis;
 }
 
+.action-row {
+  min-width: 0;
+}
+
+.action-row > .stack-button,
+.action-row > .ant-btn-block {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.action-row .ant-list-item-meta {
+  min-width: 0;
+}
+
+.action-row .ant-list-item-meta-title,
+.action-row .ant-list-item-meta-description {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.row-action-trigger {
+  width: 34px;
+  min-width: 34px;
+  height: 44px;
+  padding: 0;
+}
+
 .role-select {
   width: 96px;
+  flex: 0 0 96px;
 }
 
 .operator-select {

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, ConfigProvider, Dropdown, Flex, Input, Layout, Popconfirm, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message, theme } from 'antd';
-import { BulbOutlined, DownOutlined, FilterOutlined, MoonOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
+import { Alert, Button, ConfigProvider, Dropdown, Flex, Input, Layout, Popconfirm, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, message, theme } from 'antd';
+import { BulbOutlined, ColumnWidthOutlined, DownOutlined, FilterOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import {
   AlertIncident,
   AlertNotification,
@@ -63,6 +63,8 @@ const themeStorageKey = 'uvoo-dbviz-theme';
 function App() {
   const [messageApi, messageContext] = message.useMessage();
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarWide, setSidebarWide] = useState(false);
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [user, setUser] = useState<Principal | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -1026,26 +1028,49 @@ function App() {
     >
       {messageContext}
       <Layout className={`app-shell theme-${themeMode}`}>
-        <Sider width={390} className="app-sidebar">
-          <Space direction="vertical" size={16} className="full">
-            <Flex align="center" gap={12}>
-              <div className="mark">U</div>
-              <div>
-                <Typography.Title level={1}>Uvoo DBViz</Typography.Title>
-                <Typography.Text type="secondary">Tenant-aware ClickHouse analytics</Typography.Text>
-              </div>
-            </Flex>
-            <Flex align="center" justify="space-between">
-              <Typography.Text type="secondary">Theme</Typography.Text>
-              <Switch
-                checkedChildren={<MoonOutlined />}
-                unCheckedChildren={<BulbOutlined />}
-                checked={themeMode === 'dark'}
-                onChange={(checked) => changeTheme(checked ? 'dark' : 'light')}
-              />
-            </Flex>
-            <ControlSections items={controlItems} />
-          </Space>
+        <Sider
+          width={sidebarWide ? 560 : 390}
+          collapsedWidth={56}
+          collapsed={sidebarCollapsed}
+          trigger={null}
+          className={`app-sidebar ${sidebarCollapsed ? 'app-sidebar-collapsed' : ''}`}
+        >
+          {sidebarCollapsed ? (
+            <Space direction="vertical" size={12} align="center" className="full">
+              <div className="mark mark-small">U</div>
+              <Tooltip title="Expand sidebar" placement="right">
+                <Button icon={<MenuUnfoldOutlined />} onClick={() => setSidebarCollapsed(false)} />
+              </Tooltip>
+            </Space>
+          ) : (
+            <Space direction="vertical" size={16} className="full">
+              <Flex align="center" gap={12}>
+                <div className="mark">U</div>
+                <div className="sidebar-title">
+                  <Typography.Title level={1}>Uvoo DBViz</Typography.Title>
+                  <Typography.Text type="secondary">Tenant-aware ClickHouse analytics</Typography.Text>
+                </div>
+                <Flex gap={6} className="sidebar-tools">
+                  <Tooltip title={sidebarWide ? 'Normal sidebar' : 'Wide sidebar'}>
+                    <Button icon={<ColumnWidthOutlined />} type={sidebarWide ? 'primary' : 'default'} onClick={() => setSidebarWide((current) => !current)} />
+                  </Tooltip>
+                  <Tooltip title="Collapse sidebar">
+                    <Button icon={<MenuFoldOutlined />} onClick={() => setSidebarCollapsed(true)} />
+                  </Tooltip>
+                </Flex>
+              </Flex>
+              <Flex align="center" justify="space-between">
+                <Typography.Text type="secondary">Theme</Typography.Text>
+                <Switch
+                  checkedChildren={<MoonOutlined />}
+                  unCheckedChildren={<BulbOutlined />}
+                  checked={themeMode === 'dark'}
+                  onChange={(checked) => changeTheme(checked ? 'dark' : 'light')}
+                />
+              </Flex>
+              <ControlSections items={controlItems} />
+            </Space>
+          )}
         </Sider>
         <Content className="workspace">
           <Flex align="center" justify="space-between" gap={16} wrap="wrap">
