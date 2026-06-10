@@ -168,6 +168,22 @@ function App() {
     devLogin();
   }, [config, user]);
 
+  useEffect(() => {
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      reportError(event.reason);
+      event.preventDefault();
+    };
+    const onWindowError = (event: ErrorEvent) => {
+      reportError(event.error || event.message);
+    };
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+    window.addEventListener('error', onWindowError);
+    return () => {
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
+      window.removeEventListener('error', onWindowError);
+    };
+  }, [messageApi]);
+
   const dataset = useMemo(() => config?.datasets.find((item) => item.id === query.dataset), [config, query.dataset]);
   const jwtClaims = useMemo(() => decodeJwtClaims(getToken()), [user]);
 
@@ -263,6 +279,12 @@ function App() {
     setUser(principal);
     if (!getActiveTenant()) selectTenant(principal.tenantId);
     apiPost('/api/session/sync', {}).then(() => loadAccessState()).catch(() => undefined);
+  }
+
+  function reportError(err: unknown) {
+    const text = errorText(err);
+    setError(text);
+    messageApi.error(text);
   }
 
   async function loadData(nextQuery: QueryState = query) {
@@ -1184,7 +1206,7 @@ function App() {
       />
     },
     { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertConditionType={alertConditionType} alertField={alertField} alertTextValue={alertTextValue} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onConditionType={changeAlertConditionType} onField={setAlertField} onTextValue={setAlertTextValue} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
-    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} pagerDutyRoutingKeySecretRef={contactRoutingKeySecretRef} pagerDutyRoutingKeyValue={contactRoutingKeyValue} pagerDutyRestApiKeySecretRef={contactRestApiKeySecretRef} pagerDutyRestApiKeyValue={contactRestApiKeyValue} pagerDutySeverity={contactPagerDutySeverity} pagerDutySourceField={contactPagerDutySourceField} pagerDutyComponent={contactPagerDutyComponent} pagerDutyGroup={contactPagerDutyGroup} pagerDutyClass={contactPagerDutyClass} onName={setContactName} onTarget={setContactTarget} onKind={changeContactKind} onPagerDutyRoutingKeySecretRef={setContactRoutingKeySecretRef} onPagerDutyRoutingKeyValue={setContactRoutingKeyValue} onPagerDutyRestApiKeySecretRef={setContactRestApiKeySecretRef} onPagerDutyRestApiKeyValue={setContactRestApiKeyValue} onPagerDutySeverity={setContactPagerDutySeverity} onPagerDutySourceField={setContactPagerDutySourceField} onPagerDutyComponent={setContactPagerDutyComponent} onPagerDutyGroup={setContactPagerDutyGroup} onPagerDutyClass={setContactPagerDutyClass} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} onDelete={(contact) => deleteContact(contact).catch((err) => setError(err.message))} /> },
+    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} pagerDutyRoutingKeySecretRef={contactRoutingKeySecretRef} pagerDutyRoutingKeyValue={contactRoutingKeyValue} pagerDutyRestApiKeySecretRef={contactRestApiKeySecretRef} pagerDutyRestApiKeyValue={contactRestApiKeyValue} pagerDutySeverity={contactPagerDutySeverity} pagerDutySourceField={contactPagerDutySourceField} pagerDutyComponent={contactPagerDutyComponent} pagerDutyGroup={contactPagerDutyGroup} pagerDutyClass={contactPagerDutyClass} onName={setContactName} onTarget={setContactTarget} onKind={changeContactKind} onPagerDutyRoutingKeySecretRef={setContactRoutingKeySecretRef} onPagerDutyRoutingKeyValue={setContactRoutingKeyValue} onPagerDutyRestApiKeySecretRef={setContactRestApiKeySecretRef} onPagerDutyRestApiKeyValue={setContactRestApiKeyValue} onPagerDutySeverity={setContactPagerDutySeverity} onPagerDutySourceField={setContactPagerDutySourceField} onPagerDutyComponent={setContactPagerDutyComponent} onPagerDutyGroup={setContactPagerDutyGroup} onPagerDutyClass={setContactPagerDutyClass} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={() => saveContact().catch(reportError)} onDelete={(contact) => deleteContact(contact).catch(reportError)} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },
     { key: 'invites', label: 'Invites', children: <InvitesSection user={user} invites={invites} inviteEmail={inviteEmail} inviteRole={inviteRole} inviteToken={inviteToken} onEmail={setInviteEmail} onRole={setInviteRole} onToken={setInviteToken} onAccept={acceptInvite} onCreate={createInvite} onDelete={(invite) => deleteInvite(invite).catch((err) => setError(err.message))} /> },
@@ -1741,6 +1763,16 @@ function formatRefresh(seconds: number): string {
 
 function formatNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(3);
+}
+
+function errorText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return 'Unexpected application error';
+  }
 }
 
 function operatorLabel(operator: string): string {

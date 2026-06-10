@@ -768,7 +768,7 @@ BEGIN
             secret_nonce,
             COALESCE(NULLIF(secret_key_version, ''), 'v1')
         )
-        ON CONFLICT (tenant_id, name) DO UPDATE
+        ON CONFLICT ON CONSTRAINT tenant_secrets_tenant_id_name_key DO UPDATE
         SET description = EXCLUDED.description,
             ciphertext = EXCLUDED.ciphertext,
             nonce = EXCLUDED.nonce,
