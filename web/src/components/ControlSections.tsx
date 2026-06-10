@@ -423,6 +423,7 @@ export function DashboardsSection(props: {
   onPanelVisualization: (value: VisualizationType) => void;
   onDashboardImportText: (value: string) => void;
   onNewDashboard: () => void;
+  onDiscardDashboard: () => void;
   onAddPanel: () => void;
   onUpdatePanel: () => void;
   onSave: () => void;
@@ -437,6 +438,13 @@ export function DashboardsSection(props: {
   onMovePanel: (index: number, direction: -1 | 1) => void;
   onRemovePanel: (index: number) => void;
 }) {
+  const [dashboardSearch, setDashboardSearch] = React.useState('');
+  const filteredDashboards = React.useMemo(() => {
+    const term = dashboardSearch.trim().toLowerCase();
+    if (!term) return props.dashboards;
+    return props.dashboards.filter((dashboard) => dashboard.name.toLowerCase().includes(term));
+  }, [dashboardSearch, props.dashboards]);
+
   return (
     <Section title="Dashboards">
       <Flex gap={6} wrap="wrap">
@@ -454,6 +462,7 @@ export function DashboardsSection(props: {
       </Field>
       <Flex gap={8} wrap="wrap">
         <Button onClick={props.onNewDashboard}>New</Button>
+        <Button disabled={!props.dashboardDirty} onClick={props.onDiscardDashboard}>Discard</Button>
         <Button icon={<PlusOutlined />} disabled={!props.user} onClick={props.onAddPanel}>Add</Button>
         <Button icon={<EditOutlined />} disabled={!props.user || !props.activePanelId} onClick={props.onUpdatePanel}>Update</Button>
         <Button icon={<SaveOutlined />} disabled={!props.user || !props.dashboardName || props.dashboardPanels.length === 0} onClick={props.onSave}>Save</Button>
@@ -480,9 +489,15 @@ export function DashboardsSection(props: {
           <Button icon={<DeleteOutlined />} danger onClick={() => props.onRemovePanel(index)} />
         </Flex>
       )} />
-      <ActionList items={props.dashboards} empty="No dashboards" render={(dashboard) => (
+      <Field label="Find dashboard">
+        <Input.Search allowClear value={dashboardSearch} onChange={(event) => setDashboardSearch(event.target.value)} />
+      </Field>
+      <ActionList items={filteredDashboards} empty="No dashboards" render={(dashboard) => (
         <Flex key={dashboard.id} gap={6}>
-          <Button block type={dashboard.id === props.editingDashboardId ? 'primary' : 'default'} onClick={() => props.onOpen(dashboard)}>{dashboard.name}</Button>
+          <Button block className="stack-button" type={dashboard.id === props.editingDashboardId ? 'primary' : 'default'} onClick={() => props.onOpen(dashboard)}>
+            <span>{dashboard.name}</span>
+            <small>{dashboard.layout?.charts?.length || 0} panels - updated {new Date(dashboard.updated_at).toLocaleString()}</small>
+          </Button>
           <Button icon={<CopyOutlined />} onClick={() => props.onDuplicateDashboard(dashboard)} />
           <Button icon={<DeleteOutlined />} danger onClick={() => props.onDeleteDashboard(dashboard)} />
         </Flex>

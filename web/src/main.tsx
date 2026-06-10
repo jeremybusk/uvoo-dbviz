@@ -588,6 +588,12 @@ function App() {
   }
 
   function newDashboard() {
+    if (!confirmDiscardDashboardChanges()) return;
+    resetDashboardDraft();
+    messageApi.success('New dashboard started');
+  }
+
+  function resetDashboardDraft() {
     setEditingDashboardId('');
     setDashboardName('Untitled Dashboard');
     setDashboardPanels([]);
@@ -596,10 +602,23 @@ function App() {
     setPanelTitle(defaultPanelTitle());
     setPanelVisualization('line');
     setActiveTab('dashboard');
-    messageApi.success('New dashboard started');
+  }
+
+  function discardDashboardChanges() {
+    if (editingDashboardId) {
+      const saved = dashboards.find((dashboard) => dashboard.id === editingDashboardId);
+      if (saved) {
+        applyDashboard(saved);
+        messageApi.success('Dashboard changes discarded');
+        return;
+      }
+    }
+    resetDashboardDraft();
+    messageApi.success('Dashboard draft cleared');
   }
 
   function duplicateDashboard(dashboard: Dashboard) {
+    if (!confirmDiscardDashboardChanges()) return;
     const charts = normalizeDashboardPanels(dashboard.layout?.charts || []).map((panel, index) => normalizeDashboardPanel({
       ...panel,
       id: newClientID(),
@@ -637,6 +656,7 @@ function App() {
   function importDashboard() {
     setError('');
     try {
+      if (!confirmDiscardDashboardChanges()) return;
       const parsed = JSON.parse(dashboardImportText) as { name?: unknown; layout?: { charts?: unknown }; charts?: unknown };
       const charts = Array.isArray(parsed.layout?.charts)
         ? parsed.layout.charts
@@ -676,6 +696,11 @@ function App() {
   }
 
   function openDashboard(dashboard: Dashboard) {
+    if (!confirmDiscardDashboardChanges()) return;
+    applyDashboard(dashboard);
+  }
+
+  function applyDashboard(dashboard: Dashboard) {
     setEditingDashboardId(dashboard.id);
     setDashboardName(dashboard.name);
     const charts = normalizeDashboardPanels(dashboard.layout?.charts || []);
@@ -852,10 +877,12 @@ function App() {
     }).catch((err) => setError(err.message));
   }
 
-  const currentDashboardSignature = dashboardSignature(dashboardName, dashboardPanels);
-  const dashboardDirty = dashboardSavedSignature
-    ? dashboardSavedSignature !== currentDashboardSignature
-    : dashboardPanels.length > 0 || Boolean(editingDashboardId);
+  function confirmDiscardDashboardChanges(): boolean {
+    if (!dashboardIsDirty(dashboardName, dashboardPanels, dashboardSavedSignature, editingDashboardId)) return true;
+    return window.confirm('Discard unsaved dashboard changes?');
+  }
+
+  const dashboardDirty = dashboardIsDirty(dashboardName, dashboardPanels, dashboardSavedSignature, editingDashboardId);
 
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} jwtClaims={jwtClaims} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
@@ -882,6 +909,7 @@ function App() {
         onPanelVisualization={setPanelVisualization}
         onDashboardImportText={setDashboardImportText}
         onNewDashboard={newDashboard}
+        onDiscardDashboard={discardDashboardChanges}
         onAddPanel={addPanelToDashboard}
         onUpdatePanel={updateSelectedPanel}
         onSave={saveDashboard}
@@ -1481,6 +1509,11 @@ function dashboardSignature(name: string, panels: DashboardChart[]): string {
       position: panel.position
     }))
   });
+}
+
+function dashboardIsDirty(name: string, panels: DashboardChart[], savedSignature: string, editingDashboardID: string): boolean {
+  if (savedSignature) return savedSignature !== dashboardSignature(name, panels);
+  return panels.length > 0 || Boolean(editingDashboardID);
 }
 
 function safeFileName(value: string): string {
