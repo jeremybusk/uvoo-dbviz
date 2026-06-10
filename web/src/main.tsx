@@ -1321,12 +1321,12 @@ function DashboardPanelCard({
       className={`dashboard-panel ${active ? 'dashboard-panel-active' : ''}`}
       style={{ gridColumn: `span ${width}` }}
     >
-      <Flex justify="space-between" gap={10} align="start" className="dashboard-panel-header">
+      <div className="dashboard-panel-header">
         <div className="dashboard-panel-title">
           <Typography.Title level={4}>{panel.title}</Typography.Title>
           <Typography.Text type="secondary">{displayPanelQuery ? compactQueryDescription(displayPanelQuery) : 'Incomplete query'}</Typography.Text>
         </div>
-        <Space size={6} className="dashboard-panel-tools">
+        <Space size={6} className="dashboard-panel-tools" wrap>
           <Tag>{panel.visualization?.type || 'line'}</Tag>
           <Segmented
             size="small"
@@ -1367,7 +1367,7 @@ function DashboardPanelCard({
             <Button size="small" className="dashboard-panel-menu" icon={<MoreOutlined />} />
           </Dropdown>
         </Space>
-      </Flex>
+      </div>
       {panelError ? (
         <Alert type="error" showIcon message={panelError} />
       ) : (

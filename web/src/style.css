@@ -275,11 +275,17 @@ h2.ant-typography {
 }
 
 .dashboard-panel-header {
+  display: grid;
+  gap: 8px;
   margin-bottom: 10px;
 }
 
 .dashboard-panel-title {
   min-width: 0;
+}
+
+.dashboard-panel-title .ant-typography {
+  display: block;
 }
 
 .dashboard-panel h4.ant-typography {
@@ -288,7 +294,8 @@ h2.ant-typography {
 }
 
 .dashboard-panel-tools {
-  flex: 0 0 auto;
+  display: flex;
+  min-height: 28px;
 }
 
 .dashboard-panel-menu {
