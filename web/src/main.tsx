@@ -83,6 +83,7 @@ function App() {
   const [editingDashboardId, setEditingDashboardId] = useState('');
   const [dashboardName, setDashboardName] = useState('Sample Observability');
   const [dashboardPanels, setDashboardPanels] = useState<DashboardChart[]>([]);
+  const [editingPanelId, setEditingPanelId] = useState('');
   const [panelTitle, setPanelTitle] = useState('Log volume');
   const [panelVisualization, setPanelVisualization] = useState<VisualizationType>('line');
   const [editingSavedQueryId, setEditingSavedQueryId] = useState('');
@@ -310,7 +311,12 @@ function App() {
   }
 
   async function saveDashboard() {
-    const panels = dashboardPanels.length > 0 ? dashboardPanels : [currentDashboardPanel()];
+    setError('');
+    const panels = normalizeDashboardPanels(dashboardPanels);
+    if (panels.length === 0) {
+      setError('Add at least one panel before saving the dashboard');
+      return;
+    }
     const saved = await apiPost<Dashboard[]>('/api/dashboards', {
       id: editingDashboardId || null,
       name: dashboardName,
@@ -320,7 +326,9 @@ function App() {
     loadAuditEvents().catch(() => undefined);
     if (saved[0]) {
       setEditingDashboardId(saved[0].id);
-      setDashboardPanels(saved[0].layout?.charts || panels);
+      const savedPanels = normalizeDashboardPanels(saved[0].layout?.charts || panels);
+      setDashboardPanels(savedPanels);
+      if (!editingPanelId && savedPanels[0]?.id) setEditingPanelId(savedPanels[0].id);
     }
   }
 
@@ -466,9 +474,55 @@ function App() {
   }
 
   function addPanelToDashboard() {
-    setDashboardPanels((current) => [...current, currentDashboardPanel()]);
+    const panel = currentDashboardPanel();
+    setDashboardPanels((current) => [...current, panel]);
+    setEditingPanelId(panel.id || '');
     setActiveTab('dashboard');
     setPanelTitle(defaultPanelTitle());
+  }
+
+  function updateSelectedPanel() {
+    if (!editingPanelId) {
+      addPanelToDashboard();
+      return;
+    }
+    if (!dashboardPanels.some((panel) => panel.id === editingPanelId)) {
+      addPanelToDashboard();
+      return;
+    }
+    setDashboardPanels((current) => current.map((panel) => panel.id === editingPanelId ? currentDashboardPanel(panel) : panel));
+    setActiveTab('dashboard');
+  }
+
+  function duplicatePanel(index: number) {
+    const source = dashboardPanels[index];
+    if (!source) return;
+    const copy = normalizeDashboardPanel({
+      ...source,
+      id: crypto.randomUUID(),
+      title: `${source.title || 'Panel'} copy`,
+      position: { ...(source.position || {}), x: 0, y: dashboardPanels.length }
+    }, dashboardPanels.length);
+    setDashboardPanels((current) => [...current.slice(0, index + 1), copy, ...current.slice(index + 1)]);
+    setEditingPanelId(copy.id || '');
+    setActiveTab('dashboard');
+  }
+
+  function resizePanel(panelID: string, width: number) {
+    setDashboardPanels((current) => current.map((panel) => panel.id === panelID ? {
+      ...panel,
+      position: { ...(panel.position || {}), w: Math.max(1, Math.min(2, width)) }
+    } : panel));
+  }
+
+  function newDashboard() {
+    setEditingDashboardId('');
+    setDashboardName('Untitled Dashboard');
+    setDashboardPanels([]);
+    setEditingPanelId('');
+    setPanelTitle(defaultPanelTitle());
+    setPanelVisualization('line');
+    setActiveTab('dashboard');
   }
 
   function selectTenant(tenant: string) {
@@ -487,9 +541,11 @@ function App() {
   function openDashboard(dashboard: Dashboard) {
     setEditingDashboardId(dashboard.id);
     setDashboardName(dashboard.name);
-    const charts = dashboard.layout?.charts || [];
+    const charts = normalizeDashboardPanels(dashboard.layout?.charts || []);
     setDashboardPanels(charts);
+    setActiveTab('dashboard');
     if (charts[0]) openPanel(charts[0]);
+    else setEditingPanelId('');
   }
 
   function openSavedQuery(savedQuery: SavedQuery) {
@@ -563,13 +619,21 @@ function App() {
   }
 
   function openPanel(panel: DashboardChart) {
+    setEditingPanelId(panel.id || '');
     setPanelTitle(panel.title || defaultPanelTitle());
     setPanelVisualization((panel.visualization?.type as VisualizationType) || 'line');
     applyQuery(panel.query);
   }
 
   function removePanel(index: number) {
-    setDashboardPanels((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    const removed = dashboardPanels[index];
+    const next = dashboardPanels.filter((_, itemIndex) => itemIndex !== index);
+    setDashboardPanels(next);
+    if (removed?.id === editingPanelId) {
+      const replacement = next[Math.min(index, next.length - 1)];
+      if (replacement) openPanel(replacement);
+      else setEditingPanelId('');
+    }
   }
 
   function fillDataSource(source: DataSource) {
@@ -601,7 +665,7 @@ function App() {
   }
 
   function queryPayload(nextQuery: QueryState = query): QueryState {
-    return { ...nextQuery, sourceId: nextQuery.sourceId || '', from: new Date(nextQuery.from).toISOString(), to: new Date(nextQuery.to).toISOString() };
+    return apiQueryPayload(nextQuery);
   }
 
   function changeTheme(nextTheme: ThemeMode) {
@@ -629,13 +693,13 @@ function App() {
     return `${dataset?.name || query.dataset} by ${query.groupBy || 'all'}`;
   }
 
-  function currentDashboardPanel(): DashboardChart {
+  function currentDashboardPanel(existing?: DashboardChart): DashboardChart {
     return {
-      id: crypto.randomUUID(),
+      id: existing?.id || crypto.randomUUID(),
       title: panelTitle.trim() || defaultPanelTitle(),
       query: queryPayload(),
       visualization: { type: panelVisualization },
-      position: { w: 1, h: 1 }
+      position: existing?.position || { x: 0, y: dashboardPanels.length, w: 1, h: 1 }
     };
   }
 
@@ -655,7 +719,7 @@ function App() {
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={updateQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
-    { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onAddPanel={addPanelToDashboard} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onRemovePanel={removePanel} /> },
+    { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} activePanelId={editingPanelId} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onNewDashboard={newDashboard} onAddPanel={addPanelToDashboard} onUpdatePanel={updateSelectedPanel} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onDuplicatePanel={duplicatePanel} onRemovePanel={removePanel} /> },
     { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
@@ -769,7 +833,7 @@ function App() {
               {
                 key: 'dashboard',
                 label: `Dashboard (${dashboardPanels.length})`,
-                children: <DashboardGrid panels={dashboardPanels} onOpen={openPanel} onRemove={removePanel} />
+                children: <DashboardGrid panels={dashboardPanels} activePanelId={editingPanelId} themeMode={themeMode} refreshSeconds={refreshSeconds} config={config} onOpen={openPanel} onDuplicate={duplicatePanel} onResize={resizePanel} onRemove={removePanel} />
               }
             ]}
           />
@@ -805,11 +869,23 @@ function QuerySummary(props: {
 
 function DashboardGrid({
   panels,
+  activePanelId,
+  themeMode,
+  refreshSeconds,
+  config,
   onOpen,
+  onDuplicate,
+  onResize,
   onRemove
 }: {
   panels: DashboardChart[];
+  activePanelId: string;
+  themeMode: ThemeMode;
+  refreshSeconds: number;
+  config: PublicConfig | null;
   onOpen: (panel: DashboardChart) => void;
+  onDuplicate: (index: number) => void;
+  onResize: (panelID: string, width: number) => void;
   onRemove: (index: number) => void;
 }) {
   if (panels.length === 0) {
@@ -817,28 +893,131 @@ function DashboardGrid({
   }
   return (
     <div className="dashboard-grid">
-      {panels.map((panel, index) => {
-        const panelQuery = editableQuery(panel.query as Partial<QueryState>) as QueryState;
-        return (
-          <div
-            key={panel.id || `${panel.title}-${index}`}
-            className="dashboard-panel"
-            style={{ gridColumn: `span ${Math.max(1, Math.min(2, Number(panel.position?.w || 1)))}` }}
-          >
-            <Flex justify="space-between" gap={10} align="start">
-              <div>
-                <Typography.Title level={4}>{panel.title}</Typography.Title>
-                <Typography.Text type="secondary">{compactQueryDescription(panelQuery)}</Typography.Text>
-              </div>
-              <Space>
-                <Tag>{panel.visualization?.type || 'line'}</Tag>
-                <Button size="small" onClick={() => onOpen(panel)}>Open</Button>
-                <Button size="small" danger onClick={() => onRemove(index)}>Remove</Button>
-              </Space>
-            </Flex>
+      {panels.map((panel, index) => (
+        <DashboardPanelCard
+          key={panel.id || `${panel.title}-${index}`}
+          panel={panel}
+          index={index}
+          active={panel.id === activePanelId}
+          themeMode={themeMode}
+          refreshSeconds={refreshSeconds}
+          config={config}
+          onOpen={onOpen}
+          onDuplicate={onDuplicate}
+          onResize={onResize}
+          onRemove={onRemove}
+        />
+      ))}
+    </div>
+  );
+}
+
+function DashboardPanelCard({
+  panel,
+  index,
+  active,
+  themeMode,
+  refreshSeconds,
+  config,
+  onOpen,
+  onDuplicate,
+  onResize,
+  onRemove
+}: {
+  panel: DashboardChart;
+  index: number;
+  active: boolean;
+  themeMode: ThemeMode;
+  refreshSeconds: number;
+  config: PublicConfig | null;
+  onOpen: (panel: DashboardChart) => void;
+  onDuplicate: (index: number) => void;
+  onResize: (panelID: string, width: number) => void;
+  onRemove: (index: number) => void;
+}) {
+  const [panelRows, setPanelRows] = useState<QueryRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [panelError, setPanelError] = useState('');
+  const panelQuery = useMemo(() => normalizePanelQuery(panel.query, config), [config, panel.query]);
+  const queryKey = useMemo(() => JSON.stringify(panelQuery), [panelQuery]);
+  const width = Math.max(1, Math.min(2, Number(panel.position?.w || 1)));
+
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      if (!panelQuery) {
+        setPanelError('Panel query is incomplete');
+        setPanelRows([]);
+        return;
+      }
+      setLoading(true);
+      setPanelError('');
+      try {
+        if ((panelQuery.mode || 'builder') === 'sql') {
+          const result = await apiPost<{ rows: Record<string, unknown>[] }>('/api/sql', apiQueryPayload(panelQuery));
+          if (!cancelled) setPanelRows(chartRowsFromCustomSQL(result.rows));
+        } else {
+          const result = await apiPost<{ rows: QueryRow[] }>('/api/query', apiQueryPayload(panelQuery));
+          if (!cancelled) setPanelRows(result.rows);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setPanelRows([]);
+          setPanelError(err instanceof Error ? err.message : String(err));
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    run();
+    if (refreshSeconds <= 0) {
+      return () => {
+        cancelled = true;
+      };
+    }
+    const interval = window.setInterval(run, refreshSeconds * 1000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [queryKey, refreshSeconds]);
+
+  return (
+    <div
+      className={`dashboard-panel ${active ? 'dashboard-panel-active' : ''}`}
+      style={{ gridColumn: `span ${width}` }}
+    >
+      <Flex justify="space-between" gap={10} align="start" className="dashboard-panel-header">
+        <div>
+          <Typography.Title level={4}>{panel.title}</Typography.Title>
+          <Typography.Text type="secondary">{panelQuery ? compactQueryDescription(panelQuery) : 'Incomplete query'}</Typography.Text>
+        </div>
+        <Space size={6} wrap>
+          <Tag>{panel.visualization?.type || 'line'}</Tag>
+          <Segmented
+            size="small"
+            value={width}
+            options={[
+              { label: '1x', value: 1 },
+              { label: '2x', value: 2 }
+            ]}
+            onChange={(value) => panel.id && onResize(panel.id, Number(value))}
+          />
+          <Button size="small" onClick={() => onOpen(panel)}>Edit</Button>
+          <Button size="small" onClick={() => onDuplicate(index)}>Copy</Button>
+          <Button size="small" danger onClick={() => onRemove(index)}>Remove</Button>
+        </Space>
+      </Flex>
+      {panelError ? (
+        <Alert type="error" showIcon message={panelError} />
+      ) : (
+        <React.Suspense fallback={<div className="chart dashboard-chart chart-loading"><Spin /></div>}>
+          <div className="dashboard-chart-wrap">
+            {loading && <Spin className="dashboard-panel-spinner" />}
+            <Chart rows={panelRows} themeMode={themeMode} type={(panel.visualization?.type as VisualizationType) || 'line'} />
           </div>
-        );
-      })}
+        </React.Suspense>
+      )}
     </div>
   );
 }
@@ -1072,6 +1251,58 @@ function defaultSQL(datasetID: string) {
     return 'SELECT service_name, count() AS value\nFROM otel_traces\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name\nORDER BY value DESC';
   }
   return 'SELECT service_name, severity, count() AS value\nFROM otel_logs\nWHERE tenant_id = {tenant:String}\n  AND timestamp >= {from:DateTime}\n  AND timestamp < {to:DateTime}\nGROUP BY service_name, severity\nORDER BY value DESC';
+}
+
+function normalizeDashboardPanels(panels: DashboardChart[]): DashboardChart[] {
+  return panels.map((panel, index) => normalizeDashboardPanel(panel, index));
+}
+
+function normalizeDashboardPanel(panel: DashboardChart, index: number): DashboardChart {
+  return {
+    ...panel,
+    id: panel.id || crypto.randomUUID(),
+    title: panel.title || `Panel ${index + 1}`,
+    visualization: { type: panel.visualization?.type || 'line', ...(panel.visualization || {}) },
+    position: {
+      ...(panel.position || {}),
+      x: Number(panel.position?.x || 0),
+      y: Number(panel.position?.y ?? index),
+      w: Math.max(1, Math.min(2, Number(panel.position?.w || 1))),
+      h: Math.max(1, Number(panel.position?.h || 1))
+    }
+  };
+}
+
+function normalizePanelQuery(payload: unknown, config: PublicConfig | null): QueryState | null {
+  const partial = editableQuery((payload || {}) as Partial<QueryState>);
+  if (!partial.dataset) return null;
+  const dataset = config?.datasets.find((item) => item.id === partial.dataset);
+  const to = new Date();
+  const from = new Date(to.getTime() - 60 * 60 * 1000);
+  return {
+    dataset: partial.dataset,
+    sourceId: partial.sourceId || '',
+    mode: partial.mode || 'builder',
+    sql: partial.sql || defaultSQL(partial.dataset),
+    groupBy: partial.groupBy ?? dataset?.dimensions[0] ?? '',
+    measure: partial.measure || dataset?.defaultMeasure || '_rows',
+    aggregation: partial.aggregation || dataset?.defaultAggregation || 'count',
+    from: partial.from || toInput(from),
+    to: partial.to || toInput(to),
+    search: partial.search || '',
+    filters: partial.filters || {},
+    filterOps: partial.filterOps || {},
+    limit: partial.limit || 200
+  };
+}
+
+function apiQueryPayload(nextQuery: QueryState): QueryState {
+  return {
+    ...nextQuery,
+    sourceId: nextQuery.sourceId || '',
+    from: new Date(nextQuery.from).toISOString(),
+    to: new Date(nextQuery.to).toISOString()
+  };
 }
 
 function editableQuery(payload: Partial<QueryState>): Partial<QueryState> {

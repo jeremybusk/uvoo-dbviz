@@ -216,16 +216,41 @@ h2.ant-typography {
 }
 
 .dashboard-panel {
-  min-height: 132px;
+  min-height: 360px;
   padding: 14px;
   border: 1px solid rgba(127, 127, 127, 0.22);
   border-radius: 8px;
   background: var(--app-chart-bg);
 }
 
+.dashboard-panel-active {
+  border-color: var(--app-primary);
+  box-shadow: 0 0 0 1px rgba(37, 99, 235, 0.18);
+}
+
+.dashboard-panel-header {
+  margin-bottom: 10px;
+}
+
 .dashboard-panel h4.ant-typography {
   margin: 0 0 6px;
   font-size: 16px;
+}
+
+.dashboard-chart-wrap {
+  position: relative;
+}
+
+.dashboard-chart-wrap .chart {
+  min-height: 260px;
+  border: 0;
+}
+
+.dashboard-panel-spinner {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 1;
 }
 
 .events-table .ant-table-cell {
@@ -291,5 +316,9 @@ h2.ant-typography {
 
   .dashboard-panel {
     grid-column: span 1 !important;
+  }
+
+  .dashboard-chart-wrap .chart {
+    min-height: 240px;
   }
 }

@@ -127,6 +127,8 @@ export type DashboardChart = {
     [key: string]: unknown;
   };
   position?: {
+    x?: number;
+    y?: number;
     w?: number;
     h?: number;
     [key: string]: unknown;

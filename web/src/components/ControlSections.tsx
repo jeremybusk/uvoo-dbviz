@@ -16,9 +16,12 @@ import {
 } from 'antd';
 import {
   CheckCircleOutlined,
+  CopyOutlined,
   DeleteOutlined,
+  EditOutlined,
   LoginOutlined,
   PlayCircleOutlined,
+  PlusOutlined,
   SaveOutlined
 } from '@ant-design/icons';
 import React from 'react';
@@ -406,16 +409,20 @@ export function DashboardsSection(props: {
   user: Principal | null;
   dashboards: Dashboard[];
   dashboardPanels: DashboardChart[];
+  activePanelId: string;
   dashboardName: string;
   panelTitle: string;
   panelVisualization: VisualizationType;
   onDashboardName: (value: string) => void;
   onPanelTitle: (value: string) => void;
   onPanelVisualization: (value: VisualizationType) => void;
+  onNewDashboard: () => void;
   onAddPanel: () => void;
+  onUpdatePanel: () => void;
   onSave: () => void;
   onOpen: (dashboard: Dashboard) => void;
   onOpenPanel: (panel: DashboardChart) => void;
+  onDuplicatePanel: (index: number) => void;
   onRemovePanel: (index: number) => void;
 }) {
   return (
@@ -429,13 +436,19 @@ export function DashboardsSection(props: {
           <Select.Option value="bar">Bar</Select.Option>
         </Select>
       </Field>
-      <Flex gap={8}>
-        <Button disabled={!props.user} onClick={props.onAddPanel}>Add panel</Button>
-        <Button icon={<SaveOutlined />} disabled={!props.user || !props.dashboardName} onClick={props.onSave}>Save</Button>
+      <Flex gap={8} wrap="wrap">
+        <Button onClick={props.onNewDashboard}>New</Button>
+        <Button icon={<PlusOutlined />} disabled={!props.user} onClick={props.onAddPanel}>Add</Button>
+        <Button icon={<EditOutlined />} disabled={!props.user || !props.activePanelId} onClick={props.onUpdatePanel}>Update</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user || !props.dashboardName || props.dashboardPanels.length === 0} onClick={props.onSave}>Save</Button>
       </Flex>
       <ActionList items={props.dashboardPanels} empty="No staged panels" render={(panel, index) => (
-        <Flex key={panel.id || `${panel.title}-${index}`} gap={8}>
-          <Button className="grow" onClick={() => props.onOpenPanel(panel)}>{panel.title}</Button>
+        <Flex key={panel.id || `${panel.title}-${index}`} gap={6}>
+          <Button className="grow stack-button" type={panel.id === props.activePanelId ? 'primary' : 'default'} onClick={() => props.onOpenPanel(panel)}>
+            <span>{panel.title}</span>
+            <small>{describePanelQuery(panel.query)}</small>
+          </Button>
+          <Button icon={<CopyOutlined />} onClick={() => props.onDuplicatePanel(index)} />
           <Button icon={<DeleteOutlined />} danger onClick={() => props.onRemovePanel(index)} />
         </Flex>
       )} />
@@ -444,6 +457,13 @@ export function DashboardsSection(props: {
       )} />
     </Section>
   );
+}
+
+function describePanelQuery(query: unknown): string {
+  if (!query || typeof query !== 'object') return 'No query';
+  const q = query as { dataset?: unknown; groupBy?: unknown; mode?: unknown };
+  if (q.mode === 'sql') return `${String(q.dataset || 'dataset')} SQL`;
+  return [q.dataset, q.groupBy ? `by ${q.groupBy}` : 'all'].filter(Boolean).join(' ');
 }
 
 export function AlertsSection(props: {
