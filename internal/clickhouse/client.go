@@ -34,6 +34,11 @@ func NewClient(cfg config.ClickHouseConfig, client *http.Client) *Client {
 	return &Client{cfg: cfg, http: client}
 }
 
+func (c *Client) Ping(ctx context.Context) error {
+	_, err := c.QueryJSONEachRow(ctx, "SELECT 1 AS ok FORMAT JSONEachRow")
+	return err
+}
+
 func (c *Client) QueryJSONEachRow(ctx context.Context, sql string) ([]map[string]any, error) {
 	return c.QueryJSONEachRowWithParams(ctx, sql, nil)
 }

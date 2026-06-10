@@ -49,6 +49,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/session/preferences", a.requireAuth(a.sessionPreferences))
 	a.mux.HandleFunc("POST /api/session/preferences", a.requireAuth(a.saveSessionPreferences))
 	a.mux.HandleFunc("GET /api/session/memberships", a.requireAuth(a.listMemberships))
+	a.mux.HandleFunc("GET /api/system/readiness", a.requireAuth(a.systemReadiness))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
 	a.mux.HandleFunc("POST /api/events", a.requireAuth(a.events))
 	a.mux.HandleFunc("POST /api/sql", a.requireAuth(a.customSQL))
@@ -94,6 +95,63 @@ func (a *App) health(w http.ResponseWriter, _ *http.Request) {
 
 func (a *App) publicConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, a.cfg.Public())
+}
+
+func (a *App) systemReadiness(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	components := []map[string]any{}
+	overall := "ok"
+	add := func(name string, status string, detail string) {
+		if status == "failed" {
+			overall = "failed"
+		} else if status == "warning" && overall == "ok" {
+			overall = "warning"
+		}
+		components = append(components, map[string]any{
+			"name":   name,
+			"status": status,
+			"detail": detail,
+		})
+	}
+	if err := a.ch.Ping(ctx); err != nil {
+		add("ClickHouse", "failed", err.Error())
+	} else {
+		add("ClickHouse", "ok", "query endpoint reachable")
+	}
+	if a.state.Enabled() {
+		add("PostgREST", "ok", "state API configured")
+	} else {
+		add("PostgREST", "warning", "state API is not configured")
+	}
+	if a.cfg.Alerts.Enabled {
+		detail := "alert worker enabled"
+		if a.cfg.Alerts.LoadPersisted {
+			detail += ", persisted rules enabled"
+		}
+		add("Alert worker", "ok", detail)
+	} else {
+		add("Alert worker", "warning", "DBVIZ_ALERTS_ENABLED is false")
+	}
+	if strings.TrimSpace(a.cfg.Alerts.SMTPHost) != "" && strings.TrimSpace(a.cfg.Alerts.SMTPFrom) != "" {
+		detail := "SMTP host and sender configured"
+		if strings.TrimSpace(a.cfg.Alerts.SMTPUser) != "" {
+			detail += ", auth configured"
+		}
+		add("SMTP", "ok", detail)
+	} else {
+		add("SMTP", "warning", "email contacts will be skipped until SMTP host and sender are set")
+	}
+	if strings.TrimSpace(a.cfg.Secrets.EncryptionKey) != "" {
+		add("Secrets", "ok", "tenant secret encryption key configured")
+	} else {
+		add("Secrets", "failed", "DBVIZ_SECRETS_ENCRYPTION_KEY is required for stored tenant secrets")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     overall,
+		"checkedAt":  time.Now().UTC().Format(time.RFC3339),
+		"components": components,
+	})
 }
 
 func (a *App) oidcDiscovery(w http.ResponseWriter, r *http.Request) {
@@ -1142,6 +1200,7 @@ func (a *App) testContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		Kind   string         `json:"kind"`
 		Target string         `json:"target"`
 		Config map[string]any `json:"config"`
+		Action string         `json:"action"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -1152,6 +1211,21 @@ func (a *App) testContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	action := strings.TrimSpace(req.Action)
+	if action == "" {
+		action = "trigger"
+	}
+	if action == "validate" {
+		result := a.validateContactForTest(r, contact)
+		a.recordAuditEvent(r, "contact_endpoint.validate", "contact_endpoint", strings.TrimSpace(req.ID), map[string]any{"kind": contact.Kind, "status": result.Status})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     result.Status,
+			"statusCode": result.StatusCode,
+			"error":      result.Error,
+			"payload":    map[string]any{"validated": true, "kind": contact.Kind, "target": contact.Target},
+		})
+		return
+	}
 	tester := alert.NewDeliveryTester(alert.SMTPConfig{
 		Host:     a.cfg.Alerts.SMTPHost,
 		Port:     a.cfg.Alerts.SMTPPort,
@@ -1159,7 +1233,7 @@ func (a *App) testContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		Password: a.cfg.Alerts.SMTPPassword,
 		From:     a.cfg.Alerts.SMTPFrom,
 	}, a.resolveTenantSecretForRequest(r), a.logger)
-	result, payload := tester.TestContact(r.Context(), statePrincipal(r).TenantID, contact)
+	result, payload := tester.TestContactAction(r.Context(), statePrincipal(r).TenantID, contact, action)
 	if _, err := a.state.RecordContactTestNotification(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), contact.Kind, contact.Target, result.Status, result.StatusCode, result.Error, payload); err != nil {
 		a.logger.Warn("contact test notification record failed", "kind", contact.Kind, "target", contact.Target, "error", err)
 	}
@@ -1170,6 +1244,69 @@ func (a *App) testContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		"error":      result.Error,
 		"payload":    payload,
 	})
+}
+
+func (a *App) validateContactForTest(r *http.Request, contact alert.ContactEndpoint) alert.DeliveryResult {
+	switch contact.Kind {
+	case "email":
+		if strings.TrimSpace(contact.Target) == "" || !strings.Contains(contact.Target, "@") {
+			return alert.DeliveryResult{Status: "failed", Error: "email target is required"}
+		}
+		if strings.TrimSpace(a.cfg.Alerts.SMTPHost) == "" || strings.TrimSpace(a.cfg.Alerts.SMTPFrom) == "" {
+			return alert.DeliveryResult{Status: "skipped", Error: "email delivery is not configured"}
+		}
+		return alert.DeliveryResult{Status: "success"}
+	case "webhook":
+		parsed, err := url.Parse(strings.TrimSpace(contact.Target))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return alert.DeliveryResult{Status: "failed", Error: "webhook target must be a valid URL"}
+		}
+		if parsed.Scheme != "https" && parsed.Scheme != "http" {
+			return alert.DeliveryResult{Status: "failed", Error: "webhook target must use http or https"}
+		}
+		if result := a.validateOptionalContactSecret(r, contact, "tokenSecretRef", "webhook bearer token"); result.Status != "success" {
+			return result
+		}
+		if strings.TrimSpace(contact.Config["headerName"]) != "" {
+			if !safeHTTPHeaderName(contact.Config["headerName"]) {
+				return alert.DeliveryResult{Status: "failed", Error: "webhook header name is invalid"}
+			}
+			if result := a.validateOptionalContactSecret(r, contact, "headerValueSecretRef", "webhook header value"); result.Status != "success" {
+				return result
+			}
+		}
+		return alert.DeliveryResult{Status: "success"}
+	case "pagerduty":
+		if err := validatePagerDutyEventsURL(contact.Target); err != nil {
+			return alert.DeliveryResult{Status: "failed", Error: err.Error()}
+		}
+		ref := strings.TrimSpace(contact.Config["routingKeySecretRef"])
+		if ref == "" {
+			return alert.DeliveryResult{Status: "failed", Error: "PagerDuty Events integration key secret is required"}
+		}
+		if _, ok := a.resolveTenantSecretForRequest(r)(r.Context(), statePrincipal(r).TenantID, ref); !ok {
+			return alert.DeliveryResult{Status: "failed", Error: "PagerDuty Events integration key secret is not available: " + ref}
+		}
+		if strings.TrimSpace(contact.Config["restApiKeySecretRef"]) != "" {
+			if result := a.validateOptionalContactSecret(r, contact, "restApiKeySecretRef", "PagerDuty REST API key"); result.Status != "success" {
+				return result
+			}
+		}
+		return alert.DeliveryResult{Status: "success"}
+	default:
+		return alert.DeliveryResult{Status: "failed", Error: fmt.Sprintf("unsupported contact kind: %s", contact.Kind)}
+	}
+}
+
+func (a *App) validateOptionalContactSecret(r *http.Request, contact alert.ContactEndpoint, key string, label string) alert.DeliveryResult {
+	ref := strings.TrimSpace(contact.Config[key])
+	if ref == "" {
+		return alert.DeliveryResult{Status: "success"}
+	}
+	if _, ok := a.resolveTenantSecretForRequest(r)(r.Context(), statePrincipal(r).TenantID, ref); !ok {
+		return alert.DeliveryResult{Status: "failed", Error: label + " secret is not available: " + ref}
+	}
+	return alert.DeliveryResult{Status: "success"}
 }
 
 func (a *App) contactFromTestRequest(r *http.Request, id string, kind string, target string, config map[string]any) (alert.ContactEndpoint, error) {

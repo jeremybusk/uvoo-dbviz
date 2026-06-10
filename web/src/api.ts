@@ -189,6 +189,24 @@ export type ContactTestResult = {
   payload: Record<string, unknown>;
 };
 
+export type AlertPreviewResult = {
+  value: number;
+  operator: string;
+  threshold: number;
+  firing: boolean;
+  match_count: number;
+  condition: AlertRule['condition'];
+  matches: Array<{
+    Fingerprint?: string;
+    fingerprint?: string;
+    Value?: number;
+    value?: number;
+    Payload?: Record<string, unknown>;
+    payload?: Record<string, unknown>;
+  }>;
+  rows: Record<string, unknown>[];
+};
+
 export type AlertRule = {
   id: string;
   name: string;
@@ -233,6 +251,16 @@ export type AlertNotification = {
   error: string;
   payload: Record<string, unknown>;
   created_at: string;
+};
+
+export type SystemReadiness = {
+  status: 'ok' | 'warning' | 'failed';
+  checkedAt: string;
+  components: Array<{
+    name: string;
+    status: 'ok' | 'warning' | 'failed';
+    detail: string;
+  }>;
 };
 
 export type TenantInvite = {

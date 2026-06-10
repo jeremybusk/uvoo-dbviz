@@ -33,6 +33,7 @@ import React from 'react';
 import {
   AlertIncident,
   AlertNotification,
+  AlertPreviewResult,
   AlertRule,
   AuditEvent,
   ContactEndpoint,
@@ -44,6 +45,7 @@ import {
   PublicConfig,
   QueryHistory,
   SavedQuery,
+  SystemReadiness,
   TenantSecret,
   TenantInvite,
   TenantMember,
@@ -269,6 +271,59 @@ export function SettingsSection(props: {
       </Flex>
     </Section>
   );
+}
+
+export function SystemSection(props: {
+  readiness: SystemReadiness | null;
+  config: PublicConfig | null;
+  onRefresh: () => void;
+}) {
+  const status = props.readiness?.status || 'warning';
+  return (
+    <Section title="Status">
+      <Flex gap={8} align="center" wrap="wrap">
+        <Tag color={readinessColor(status)}>{status}</Tag>
+        {props.readiness?.checkedAt && <Typography.Text type="secondary">{new Date(props.readiness.checkedAt).toLocaleString()}</Typography.Text>}
+        <Button size="small" onClick={props.onRefresh}>Refresh</Button>
+      </Flex>
+      {!props.readiness && <Alert type="warning" showIcon message="Readiness has not been loaded yet." />}
+      <ActionList items={props.readiness?.components || []} empty="No readiness components" list render={(component) => (
+        <List.Item key={component.name}>
+          <List.Item.Meta
+            title={<Flex gap={6} align="center" wrap="wrap"><span>{component.name}</span><Tag color={readinessColor(component.status)}>{component.status}</Tag></Flex>}
+            description={component.detail}
+          />
+        </List.Item>
+      )} />
+      <Collapse
+        size="small"
+        ghost
+        items={[{
+          key: 'delivery',
+          label: 'Alert delivery',
+          children: (
+            <Space direction="vertical" size={4} className="full">
+              <Typography.Text type="secondary">Alerts {props.config?.alertDelivery.alertsEnabled ? 'enabled' : 'disabled'}</Typography.Text>
+              <Typography.Text type="secondary">SMTP {props.config?.alertDelivery.smtpConfigured ? `configured${props.config.alertDelivery.smtpHasAuth ? ' with auth' : ''}` : 'not configured'}</Typography.Text>
+            </Space>
+          )
+        }]}
+      />
+    </Section>
+  );
+}
+
+function readinessColor(status: string): string {
+  switch (status) {
+    case 'ok':
+      return 'green';
+    case 'failed':
+      return 'red';
+    case 'warning':
+      return 'orange';
+    default:
+      return 'default';
+  }
 }
 
 function orderedClaimEntries(claims: JwtClaims): [string, unknown][] {
@@ -749,6 +804,7 @@ export function AlertsSection(props: {
   alertInterval: number;
   alertEnabled: boolean;
   alertPreview: string;
+  alertPreviewResult: AlertPreviewResult | null;
   selectedContact: string;
   queryMode: string;
   onName: (value: string) => void;
@@ -842,6 +898,26 @@ export function AlertsSection(props: {
         </Select>
       </Field>
       {props.alertPreview && <Alert type={props.alertPreview.startsWith('Firing') ? 'warning' : 'success'} showIcon message={props.alertPreview} />}
+      {props.alertPreviewResult && (
+        <Collapse
+          size="small"
+          ghost
+          items={[
+            {
+              key: 'matches',
+              label: `Preview details (${props.alertPreviewResult.match_count} matches, ${props.alertPreviewResult.rows.length} rows)`,
+              children: (
+                <Space direction="vertical" size={8} className="full">
+                  {props.alertPreviewResult.matches.length > 0 && (
+                    <pre className="json-preview">{JSON.stringify(props.alertPreviewResult.matches.slice(0, 5), null, 2)}</pre>
+                  )}
+                  <pre className="json-preview">{JSON.stringify(props.alertPreviewResult.rows.slice(0, 5), null, 2)}</pre>
+                </Space>
+              )
+            }
+          ]}
+        />
+      )}
       <Flex gap={8} wrap="wrap">
         <Button onClick={props.onNew}>New</Button>
         <Button disabled={!props.user} onClick={props.onTest}>Test</Button>
@@ -1008,6 +1084,7 @@ export function SecretsSection(props: {
 export function ContactsSection(props: {
   user: Principal | null;
   contacts: ContactEndpoint[];
+  notifications: AlertNotification[];
   secrets: TenantSecret[];
   editingContactId: string;
   contactName: string;
@@ -1021,6 +1098,7 @@ export function ContactsSection(props: {
   webhookHeaderName: string;
   webhookHeaderValueSecretRef: string;
   webhookHeaderValue: string;
+  webhookBodyTemplate: string;
   pagerDutyRoutingKeySecretRef: string;
   pagerDutyRoutingKeyValue: string;
   pagerDutyRestApiKeySecretRef: string;
@@ -1030,6 +1108,7 @@ export function ContactsSection(props: {
   pagerDutyComponent: string;
   pagerDutyGroup: string;
   pagerDutyClass: string;
+  pagerDutyServiceID: string;
   onName: (value: string) => void;
   onTarget: (value: string) => void;
   onKind: (value: ContactEndpoint['kind']) => void;
@@ -1038,6 +1117,7 @@ export function ContactsSection(props: {
   onWebhookHeaderName: (value: string) => void;
   onWebhookHeaderValueSecretRef: (value: string) => void;
   onWebhookHeaderValue: (value: string) => void;
+  onWebhookBodyTemplate: (value: string) => void;
   onPagerDutyRoutingKeySecretRef: (value: string) => void;
   onPagerDutyRoutingKeyValue: (value: string) => void;
   onPagerDutyRestApiKeySecretRef: (value: string) => void;
@@ -1047,12 +1127,15 @@ export function ContactsSection(props: {
   onPagerDutyComponent: (value: string) => void;
   onPagerDutyGroup: (value: string) => void;
   onPagerDutyClass: (value: string) => void;
+  onPagerDutyServiceID: (value: string) => void;
   onNew: () => void;
   onOpen: (contact: ContactEndpoint) => void;
   onUseForAlert: (contact: ContactEndpoint) => void;
   onSave: () => void;
   onTest: () => void;
   onTestSaved: (contact: ContactEndpoint) => void;
+  onValidateSaved: (contact: ContactEndpoint) => void;
+  onResolveTestSaved: (contact: ContactEndpoint) => void;
   onDelete: (contact: ContactEndpoint) => void;
 }) {
   const [contactSearch, setContactSearch] = React.useState('');
@@ -1069,6 +1152,7 @@ export function ContactsSection(props: {
     label: secret.name,
     value: secret.name
   }));
+  const historyByContact = React.useMemo(() => contactNotificationHistory(props.contacts, props.notifications), [props.contacts, props.notifications]);
 
   return (
     <Section title="Contacts">
@@ -1120,6 +1204,14 @@ export function ContactsSection(props: {
           <Field label="Paste custom header value">
             <Input.Password value={props.webhookHeaderValue} onChange={(event) => props.onWebhookHeaderValue(event.target.value)} placeholder="Paste to encrypt and store" />
           </Field>
+          <Field label="Body template">
+            <Input.TextArea
+              autoSize={{ minRows: 4, maxRows: 8 }}
+              value={props.webhookBodyTemplate}
+              onChange={(event) => props.onWebhookBodyTemplate(event.target.value)}
+              placeholder={'{"summary":"{{ruleName}}","value":"{{value}}","service":"{{row.service_name}}"}'}
+            />
+          </Field>
         </>
       )}
       {props.contactKind === 'pagerduty' && (
@@ -1162,6 +1254,12 @@ export function ContactsSection(props: {
           <Field label="Component"><Input value={props.pagerDutyComponent} onChange={(event) => props.onPagerDutyComponent(event.target.value)} /></Field>
           <Field label="Group"><Input value={props.pagerDutyGroup} onChange={(event) => props.onPagerDutyGroup(event.target.value)} /></Field>
           <Field label="Class"><Input value={props.pagerDutyClass} onChange={(event) => props.onPagerDutyClass(event.target.value)} /></Field>
+          <Field label="REST service ID"><Input value={props.pagerDutyServiceID} onChange={(event) => props.onPagerDutyServiceID(event.target.value)} placeholder="Optional, for incident sync" /></Field>
+          <Alert
+            type={props.pagerDutyRestApiKeySecretRef && props.pagerDutyServiceID ? 'success' : 'info'}
+            showIcon
+            message={props.pagerDutyRestApiKeySecretRef && props.pagerDutyServiceID ? 'PagerDuty REST sync credentials ready' : 'Events API delivery works with the integration key. REST incident sync also needs a REST API key secret and service ID.'}
+          />
         </>
       )}
       <Flex gap={8} wrap="wrap">
@@ -1179,7 +1277,9 @@ export function ContactsSection(props: {
             <RowActions items={[
               { key: 'edit', label: 'Edit', onClick: () => props.onOpen(contact) },
               { key: 'use', label: 'Use in alert', onClick: () => props.onUseForAlert(contact) },
+              { key: 'validate', label: 'Validate', onClick: () => props.onValidateSaved(contact) },
               { key: 'test', label: 'Test', onClick: () => props.onTestSaved(contact) },
+              { key: 'resolve', label: 'Test resolve', disabled: contact.kind !== 'pagerduty', onClick: () => props.onResolveTestSaved(contact) },
               {
                 key: 'delete',
                 label: 'Delete',
@@ -1193,8 +1293,8 @@ export function ContactsSection(props: {
               }
             ]} />
             <List.Item.Meta
-              title={<Flex gap={6} align="center" wrap="wrap"><span>{contact.name}</span><Tag>{contact.kind}</Tag></Flex>}
-              description={contact.target}
+              title={<ContactTitle contact={contact} history={historyByContact[contact.id]} />}
+              description={<ContactDescription contact={contact} history={historyByContact[contact.id]} />}
             />
           </Flex>
         </List.Item>
@@ -1212,6 +1312,64 @@ function contactTargetPlaceholder(kind: ContactEndpoint['kind']): string {
     default:
       return 'https://example.com/alerts';
   }
+}
+
+function ContactTitle({ contact, history }: { contact: ContactEndpoint; history?: AlertNotification[] }) {
+  const latest = history?.[0];
+  return (
+    <Flex gap={6} align="center" wrap="wrap">
+      <span>{contact.name}</span>
+      <Tag>{contact.kind}</Tag>
+      {latest && <Tag color={notificationStatusColor(latest.status)}>{latest.status}</Tag>}
+    </Flex>
+  );
+}
+
+function ContactDescription({ contact, history }: { contact: ContactEndpoint; history?: AlertNotification[] }) {
+  const latest = history?.[0];
+  return (
+    <Space direction="vertical" size={4} className="full">
+      <Typography.Text type="secondary">{contact.target}</Typography.Text>
+      {latest ? (
+        <Typography.Text type="secondary">
+          Last delivery {new Date(latest.created_at).toLocaleString()}{latest.status_code > 0 ? ` - HTTP ${latest.status_code}` : ''}{latest.error ? ` - ${latest.error}` : ''}
+        </Typography.Text>
+      ) : (
+        <Typography.Text type="secondary">No delivery history yet</Typography.Text>
+      )}
+      {history && history.length > 0 && (
+        <Collapse
+          size="small"
+          ghost
+          items={[{
+            key: 'history',
+            label: `Recent deliveries (${history.length})`,
+            children: (
+              <Space direction="vertical" size={6} className="full">
+                {history.slice(0, 5).map((item) => (
+                  <Flex key={item.id} gap={6} wrap="wrap">
+                    <Tag color={notificationStatusColor(item.status)}>{item.status}</Tag>
+                    {item.status_code > 0 && <Tag>HTTP {item.status_code}</Tag>}
+                    <Typography.Text type="secondary">{new Date(item.created_at).toLocaleString()}</Typography.Text>
+                  </Flex>
+                ))}
+              </Space>
+            )
+          }]}
+        />
+      )}
+    </Space>
+  );
+}
+
+function contactNotificationHistory(contacts: ContactEndpoint[], notifications: AlertNotification[]): Record<string, AlertNotification[]> {
+  const byContact: Record<string, AlertNotification[]> = {};
+  contacts.forEach((contact) => {
+    byContact[contact.id] = notifications.filter((notification) => (
+      notification.contact_kind === contact.kind && notification.contact_target === contact.target
+    )).slice(0, 10);
+  });
+  return byContact;
 }
 
 function contactCanSave(props: {

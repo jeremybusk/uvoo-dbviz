@@ -5,6 +5,7 @@ import { BulbOutlined, ColumnWidthOutlined, CopyOutlined, DeleteOutlined, DownOu
 import {
   AlertIncident,
   AlertNotification,
+  AlertPreviewResult,
   AlertRule,
   AuditEvent,
   ContactTestResult,
@@ -18,6 +19,7 @@ import {
   QueryHistory,
   QueryRow,
   SavedQuery,
+  SystemReadiness,
   TenantSecret,
   TenantInvite,
   TenantMember,
@@ -53,7 +55,8 @@ import {
   SavedQueriesSection,
   SecretsSection,
   SettingsSection,
-  SourceSection
+  SourceSection,
+  SystemSection
 } from './components/ControlSections';
 import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, ThemeMode, VisualizationType } from './types';
 import 'antd/dist/reset.css';
@@ -128,6 +131,8 @@ function App() {
   const [alertInterval, setAlertInterval] = useState(60);
   const [alertEnabled, setAlertEnabled] = useState(true);
   const [alertPreview, setAlertPreview] = useState('');
+  const [alertPreviewResult, setAlertPreviewResult] = useState<AlertPreviewResult | null>(null);
+  const [systemReadiness, setSystemReadiness] = useState<SystemReadiness | null>(null);
   const [secrets, setSecrets] = useState<TenantSecret[]>([]);
   const [editingSecretId, setEditingSecretId] = useState('');
   const [secretName, setSecretName] = useState('');
@@ -141,6 +146,7 @@ function App() {
   const [contactWebhookHeaderName, setContactWebhookHeaderName] = useState('');
   const [contactWebhookHeaderValueSecretRef, setContactWebhookHeaderValueSecretRef] = useState('');
   const [contactWebhookHeaderValue, setContactWebhookHeaderValue] = useState('');
+  const [contactWebhookBodyTemplate, setContactWebhookBodyTemplate] = useState('');
   const [contactRoutingKeySecretRef, setContactRoutingKeySecretRef] = useState('');
   const [contactRoutingKeyValue, setContactRoutingKeyValue] = useState('');
   const [contactRestApiKeySecretRef, setContactRestApiKeySecretRef] = useState('');
@@ -150,6 +156,7 @@ function App() {
   const [contactPagerDutyComponent, setContactPagerDutyComponent] = useState('uvoo-dbviz');
   const [contactPagerDutyGroup, setContactPagerDutyGroup] = useState('observability');
   const [contactPagerDutyClass, setContactPagerDutyClass] = useState('alert');
+  const [contactPagerDutyServiceID, setContactPagerDutyServiceID] = useState('');
   const [editingContactId, setEditingContactId] = useState('');
   const [contactStatus, setContactStatus] = useState('');
   const [selectedContact, setSelectedContact] = useState('');
@@ -214,6 +221,7 @@ function App() {
     loadSavedQueries().catch(() => undefined);
     loadDashboards().catch((err) => setError(err.message));
     loadAlertState().catch((err) => setError(err.message));
+    loadSystemReadiness().catch(() => setSystemReadiness(null));
     loadInvites().catch(() => undefined);
     loadMembers().catch(() => setMembers([]));
     loadAuditEvents().catch(() => setAuditEvents([]));
@@ -537,6 +545,10 @@ function App() {
     if (!selectedContact && endpoints[0]) setSelectedContact(endpoints[0].id);
   }
 
+  async function loadSystemReadiness() {
+    setSystemReadiness(await apiGet<SystemReadiness>('/api/system/readiness'));
+  }
+
   async function saveSecret() {
     const saved = await apiPost<TenantSecret[]>('/api/secrets', {
       id: editingSecretId || null,
@@ -581,6 +593,7 @@ function App() {
       setContactWebhookHeaderValue('');
       setContactWebhookTokenSecretRef(String(saved[0].config.tokenSecretRef || contactWebhookTokenSecretRef));
       setContactWebhookHeaderValueSecretRef(String(saved[0].config.headerValueSecretRef || contactWebhookHeaderValueSecretRef));
+      setContactWebhookBodyTemplate(String(saved[0].config.bodyTemplate || contactWebhookBodyTemplate));
       setContactRoutingKeyValue('');
       setContactRestApiKeyValue('');
       setContactRoutingKeySecretRef(String(saved[0].config.routingKeySecretRef || contactRoutingKeySecretRef));
@@ -598,11 +611,16 @@ function App() {
   }
 
   async function testContact(contact: ContactEndpoint) {
+    return testContactAction(contact, 'trigger');
+  }
+
+  async function testContactAction(contact: ContactEndpoint, action: 'trigger' | 'resolve' | 'validate') {
     setContactStatus('Testing contact...');
-    const result = await apiPost<ContactTestResult>('/api/alerts/contacts/test', { id: contact.id });
+    const result = await apiPost<ContactTestResult>('/api/alerts/contacts/test', { id: contact.id, action });
     const statusCode = result.statusCode ? ` HTTP ${result.statusCode}` : '';
     const detail = result.error ? `: ${result.error}` : statusCode;
-    const text = `${capitalize(result.status)} contact test${detail}`;
+    const label = action === 'validate' ? 'contact validation' : action === 'resolve' ? 'contact resolve test' : 'contact test';
+    const text = `${capitalize(result.status)} ${label}${detail}`;
     setContactStatus(text);
     if (result.status === 'success') messageApi.success(text);
     else if (result.status === 'skipped') messageApi.warning(text);
@@ -661,10 +679,12 @@ function App() {
 
   async function testAlert() {
     setAlertPreview('');
-    const result = await apiPost<{ value: number; operator: string; threshold: number; firing: boolean; match_count: number; condition: AlertRule['condition'] }>('/api/alerts/test', {
+    setAlertPreviewResult(null);
+    const result = await apiPost<AlertPreviewResult>('/api/alerts/test', {
       query: queryPayload(),
       condition: currentAlertCondition()
     });
+    setAlertPreviewResult(result);
     setAlertPreview(alertPreviewText(result));
   }
 
@@ -934,6 +954,7 @@ function App() {
     setAlertEnabled(true);
     setSelectedContact('');
     setAlertPreview('');
+    setAlertPreviewResult(null);
   }
 
   function newSavedQuery() {
@@ -962,6 +983,7 @@ function App() {
     setContactWebhookHeaderName('');
     setContactWebhookHeaderValueSecretRef('');
     setContactWebhookHeaderValue('');
+    setContactWebhookBodyTemplate('');
     setContactRoutingKeySecretRef('');
     setContactRoutingKeyValue('');
     setContactRestApiKeySecretRef('');
@@ -971,6 +993,7 @@ function App() {
     setContactPagerDutyComponent('uvoo-dbviz');
     setContactPagerDutyGroup('observability');
     setContactPagerDutyClass('alert');
+    setContactPagerDutyServiceID('');
     setContactStatus('');
   }
 
@@ -998,6 +1021,7 @@ function App() {
     setContactWebhookHeaderName(String(contact.config.headerName || ''));
     setContactWebhookHeaderValueSecretRef(String(contact.config.headerValueSecretRef || ''));
     setContactWebhookHeaderValue('');
+    setContactWebhookBodyTemplate(String(contact.config.bodyTemplate || ''));
     setContactRoutingKeySecretRef(String(contact.config.routingKeySecretRef || ''));
     setContactRoutingKeyValue('');
     setContactRestApiKeySecretRef(String(contact.config.restApiKeySecretRef || ''));
@@ -1007,6 +1031,7 @@ function App() {
     setContactPagerDutyComponent(String(contact.config.component || 'uvoo-dbviz'));
     setContactPagerDutyGroup(String(contact.config.group || 'observability'));
     setContactPagerDutyClass(String(contact.config.class || 'alert'));
+    setContactPagerDutyServiceID(String(contact.config.serviceId || ''));
     setContactStatus('');
   }
 
@@ -1113,7 +1138,8 @@ function App() {
         tokenValue: contactWebhookTokenValue,
         headerName: contactWebhookHeaderName.trim(),
         headerValueSecretRef: contactWebhookHeaderValueSecretRef.trim(),
-        headerValue: contactWebhookHeaderValue
+        headerValue: contactWebhookHeaderValue,
+        bodyTemplate: contactWebhookBodyTemplate.trim()
       };
     }
     if (contactKind !== 'pagerduty') return {};
@@ -1127,7 +1153,8 @@ function App() {
       sourceField: contactPagerDutySourceField.trim(),
       component: contactPagerDutyComponent.trim(),
       group: contactPagerDutyGroup.trim(),
-      class: contactPagerDutyClass.trim()
+      class: contactPagerDutyClass.trim(),
+      serviceId: contactPagerDutyServiceID.trim()
     };
   }
 
@@ -1272,6 +1299,7 @@ function App() {
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} jwtClaims={jwtClaims} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
     { key: 'settings', label: 'Settings', children: <SettingsSection user={user} config={config} dataSources={dataSources} preferencesStatus={preferencesStatus} themeMode={themeMode} refreshSeconds={refreshSeconds} relativeRange={relativeRange} eventLimit={query.limit} dataset={query.dataset} sourceId={query.sourceId} visualization={panelVisualization} onTheme={changeTheme} onRefreshSeconds={setRefreshSeconds} onRelativeRange={applyRelativeRange} onEventLimit={changeDefaultEventLimit} onDataset={changeDefaultDataset} onSourceId={changeDefaultSource} onVisualization={setPanelVisualization} onSave={() => saveUserPreferences().catch((err) => setError(err.message))} /> },
+    { key: 'status', label: 'Status', children: <SystemSection readiness={systemReadiness} config={config} onRefresh={() => loadSystemReadiness().catch(reportError)} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onNew={newDataSource} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} onDelete={(source) => deleteDataSource(source).catch((err) => setError(err.message))} /> },
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={updateQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
@@ -1311,9 +1339,9 @@ function App() {
         onRemovePanel={removePanel}
       />
     },
-    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertConditionType={alertConditionType} alertField={alertField} alertTextValue={alertTextValue} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onConditionType={changeAlertConditionType} onField={setAlertField} onTextValue={setAlertTextValue} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
+    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertConditionType={alertConditionType} alertField={alertField} alertTextValue={alertTextValue} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} alertPreviewResult={alertPreviewResult} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onConditionType={changeAlertConditionType} onField={setAlertField} onTextValue={setAlertTextValue} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'secrets', label: 'Secrets', children: <SecretsSection user={user} secrets={secrets} secretUsages={secretUsages} editingSecretId={editingSecretId} secretName={secretName} secretDescription={secretDescription} secretValue={secretValue} onName={setSecretName} onDescription={setSecretDescription} onValue={setSecretValue} onNew={newSecret} onSave={() => saveSecret().catch(reportError)} onOpen={openSecret} onDelete={(secret) => deleteSecret(secret).catch(reportError)} /> },
-    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} secrets={secrets} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} contactStatus={contactStatus} smtpConfigured={Boolean(config?.alertDelivery.smtpConfigured)} smtpHasAuth={Boolean(config?.alertDelivery.smtpHasAuth)} webhookTokenSecretRef={contactWebhookTokenSecretRef} webhookTokenValue={contactWebhookTokenValue} webhookHeaderName={contactWebhookHeaderName} webhookHeaderValueSecretRef={contactWebhookHeaderValueSecretRef} webhookHeaderValue={contactWebhookHeaderValue} pagerDutyRoutingKeySecretRef={contactRoutingKeySecretRef} pagerDutyRoutingKeyValue={contactRoutingKeyValue} pagerDutyRestApiKeySecretRef={contactRestApiKeySecretRef} pagerDutyRestApiKeyValue={contactRestApiKeyValue} pagerDutySeverity={contactPagerDutySeverity} pagerDutySourceField={contactPagerDutySourceField} pagerDutyComponent={contactPagerDutyComponent} pagerDutyGroup={contactPagerDutyGroup} pagerDutyClass={contactPagerDutyClass} onName={setContactName} onTarget={setContactTarget} onKind={changeContactKind} onWebhookTokenSecretRef={setContactWebhookTokenSecretRef} onWebhookTokenValue={setContactWebhookTokenValue} onWebhookHeaderName={setContactWebhookHeaderName} onWebhookHeaderValueSecretRef={setContactWebhookHeaderValueSecretRef} onWebhookHeaderValue={setContactWebhookHeaderValue} onPagerDutyRoutingKeySecretRef={setContactRoutingKeySecretRef} onPagerDutyRoutingKeyValue={setContactRoutingKeyValue} onPagerDutyRestApiKeySecretRef={setContactRestApiKeySecretRef} onPagerDutyRestApiKeyValue={setContactRestApiKeyValue} onPagerDutySeverity={setContactPagerDutySeverity} onPagerDutySourceField={setContactPagerDutySourceField} onPagerDutyComponent={setContactPagerDutyComponent} onPagerDutyGroup={setContactPagerDutyGroup} onPagerDutyClass={setContactPagerDutyClass} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={() => saveContact().catch(reportError)} onTest={() => testCurrentContact().catch(reportError)} onTestSaved={(contact) => testContact(contact).catch(reportError)} onDelete={(contact) => deleteContact(contact).catch(reportError)} /> },
+    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} notifications={notifications} secrets={secrets} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} contactStatus={contactStatus} smtpConfigured={Boolean(config?.alertDelivery.smtpConfigured)} smtpHasAuth={Boolean(config?.alertDelivery.smtpHasAuth)} webhookTokenSecretRef={contactWebhookTokenSecretRef} webhookTokenValue={contactWebhookTokenValue} webhookHeaderName={contactWebhookHeaderName} webhookHeaderValueSecretRef={contactWebhookHeaderValueSecretRef} webhookHeaderValue={contactWebhookHeaderValue} webhookBodyTemplate={contactWebhookBodyTemplate} pagerDutyRoutingKeySecretRef={contactRoutingKeySecretRef} pagerDutyRoutingKeyValue={contactRoutingKeyValue} pagerDutyRestApiKeySecretRef={contactRestApiKeySecretRef} pagerDutyRestApiKeyValue={contactRestApiKeyValue} pagerDutySeverity={contactPagerDutySeverity} pagerDutySourceField={contactPagerDutySourceField} pagerDutyComponent={contactPagerDutyComponent} pagerDutyGroup={contactPagerDutyGroup} pagerDutyClass={contactPagerDutyClass} pagerDutyServiceID={contactPagerDutyServiceID} onName={setContactName} onTarget={setContactTarget} onKind={changeContactKind} onWebhookTokenSecretRef={setContactWebhookTokenSecretRef} onWebhookTokenValue={setContactWebhookTokenValue} onWebhookHeaderName={setContactWebhookHeaderName} onWebhookHeaderValueSecretRef={setContactWebhookHeaderValueSecretRef} onWebhookHeaderValue={setContactWebhookHeaderValue} onWebhookBodyTemplate={setContactWebhookBodyTemplate} onPagerDutyRoutingKeySecretRef={setContactRoutingKeySecretRef} onPagerDutyRoutingKeyValue={setContactRoutingKeyValue} onPagerDutyRestApiKeySecretRef={setContactRestApiKeySecretRef} onPagerDutyRestApiKeyValue={setContactRestApiKeyValue} onPagerDutySeverity={setContactPagerDutySeverity} onPagerDutySourceField={setContactPagerDutySourceField} onPagerDutyComponent={setContactPagerDutyComponent} onPagerDutyGroup={setContactPagerDutyGroup} onPagerDutyClass={setContactPagerDutyClass} onPagerDutyServiceID={setContactPagerDutyServiceID} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={() => saveContact().catch(reportError)} onTest={() => testCurrentContact().catch(reportError)} onValidateSaved={(contact) => testContactAction(contact, 'validate').catch(reportError)} onResolveTestSaved={(contact) => testContactAction(contact, 'resolve').catch(reportError)} onTestSaved={(contact) => testContact(contact).catch(reportError)} onDelete={(contact) => deleteContact(contact).catch(reportError)} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: <span>Notifications {failedNotificationCount > 0 && <Tag color="red">{failedNotificationCount}</Tag>}</span>, children: <NotificationsSection notifications={notifications} /> },
     { key: 'invites', label: 'Invites', children: <InvitesSection user={user} invites={invites} inviteEmail={inviteEmail} inviteRole={inviteRole} inviteToken={inviteToken} onEmail={setInviteEmail} onRole={setInviteRole} onToken={setInviteToken} onAccept={acceptInvite} onCreate={createInvite} onDelete={(invite) => deleteInvite(invite).catch((err) => setError(err.message))} /> },

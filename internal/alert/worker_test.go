@@ -311,6 +311,40 @@ func TestWebhookUsesSecretBackedAuthorizationAndHeader(t *testing.T) {
 	}
 }
 
+func TestWebhookUsesBodyTemplate(t *testing.T) {
+	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
+	worker.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if got := r.Header.Get("Content-Type"); got != "application/json" {
+			t.Fatalf("content-type = %q", got)
+		}
+		body, _ := io.ReadAll(r.Body)
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("body is not json: %s: %v", string(body), err)
+		}
+		if payload["summary"] != "Template alert" || payload["service"] != "checkout" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		return textResponse(http.StatusOK, ""), nil
+	})}
+
+	result := worker.notify(context.Background(), ContactEndpoint{
+		Kind:   "webhook",
+		Target: "http://webhook.local/alerts",
+		Config: map[string]string{
+			"bodyTemplate": `{"summary":"{{ruleName}}","service":"{{row.service_name}}"}`,
+		},
+	}, map[string]any{
+		"tenantId": "dev",
+		"ruleName": "Template alert",
+		"row":      map[string]any{"service_name": "checkout"},
+	})
+
+	if result.Status != "success" || result.StatusCode != http.StatusOK {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func TestDeliveryTesterSendsPagerDutyTestPayload(t *testing.T) {
 	tester := NewDeliveryTester(SMTPConfig{}, func(_ context.Context, tenantID string, ref string) (string, bool) {
 		if tenantID != "dev" || ref != "pagerduty-test-key" {

@@ -170,7 +170,14 @@ func NewDeliveryTester(smtp SMTPConfig, resolve func(context.Context, string, st
 }
 
 func (w *Worker) TestContact(ctx context.Context, tenantID string, contact ContactEndpoint) (DeliveryResult, map[string]any) {
+	return w.TestContactAction(ctx, tenantID, contact, "trigger")
+}
+
+func (w *Worker) TestContactAction(ctx context.Context, tenantID string, contact ContactEndpoint, action string) (DeliveryResult, map[string]any) {
 	incident := TestIncidentPayload(tenantID)
+	if contact.Kind == "pagerduty" && strings.TrimSpace(action) == "resolve" {
+		return w.notifyPagerDuty(ctx, contact, incident, "resolve"), incident
+	}
 	return w.notify(ctx, contact, incident), incident
 }
 
@@ -504,12 +511,15 @@ func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident m
 	case "pagerduty":
 		return w.notifyPagerDuty(ctx, contact, incident, "trigger")
 	case "webhook":
-		body, _ := json.Marshal(incident)
+		body, contentType, err := w.webhookBody(contact, incident)
+		if err != nil {
+			return DeliveryResult{Status: "failed", Error: err.Error()}
+		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, contact.Target, bytes.NewReader(body))
 		if err != nil {
 			return DeliveryResult{Status: "failed", Error: err.Error()}
 		}
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 		tenantID := strings.TrimSpace(fmt.Sprint(incident["tenantId"]))
 		if token, err := w.webhookSecretValue(ctx, tenantID, contact, "tokenSecretRef", "token"); err != nil {
 			return DeliveryResult{Status: "failed", Error: err.Error()}
@@ -542,6 +552,19 @@ func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident m
 	default:
 		return DeliveryResult{Status: "failed", Error: fmt.Sprintf("unsupported contact kind: %s", contact.Kind)}
 	}
+}
+
+func (w *Worker) webhookBody(contact ContactEndpoint, incident map[string]any) ([]byte, string, error) {
+	template := strings.TrimSpace(contact.Config["bodyTemplate"])
+	if template == "" {
+		body, _ := json.Marshal(incident)
+		return body, "application/json", nil
+	}
+	rendered := renderTemplate(template, incident)
+	if json.Valid([]byte(rendered)) {
+		return []byte(rendered), "application/json", nil
+	}
+	return []byte(rendered), "text/plain; charset=utf-8", nil
 }
 
 func (w *Worker) webhookSecretValue(ctx context.Context, tenantID string, contact ContactEndpoint, refKey string, inlineKey string) (string, error) {
@@ -709,6 +732,40 @@ func valueFromField(row map[string]any, field string) string {
 		return ""
 	}
 	return fmt.Sprint(row[field])
+}
+
+var templateTokenPattern = regexp.MustCompile(`\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}`)
+
+func renderTemplate(template string, data map[string]any) string {
+	return templateTokenPattern.ReplaceAllStringFunc(template, func(token string) string {
+		matches := templateTokenPattern.FindStringSubmatch(token)
+		if len(matches) != 2 {
+			return ""
+		}
+		value, ok := nestedTemplateValue(data, strings.Split(matches[1], "."))
+		if !ok || value == nil {
+			return ""
+		}
+		return fmt.Sprint(value)
+	})
+}
+
+func nestedTemplateValue(data map[string]any, path []string) (any, bool) {
+	var current any = data
+	for _, part := range path {
+		if part == "" {
+			return nil, false
+		}
+		object, ok := current.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		current, ok = object[part]
+		if !ok {
+			return nil, false
+		}
+	}
+	return current, true
 }
 
 func ResolveSecretRefFromEnv(_ context.Context, _ string, ref string) (string, bool) {
