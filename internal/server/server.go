@@ -79,6 +79,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
 	a.mux.HandleFunc("GET /api/alerts/notifications", a.requireAuth(a.listAlertNotifications))
 	a.mux.HandleFunc("POST /api/alerts/incidents/resolve", a.requireAuth(a.resolveAlertIncident))
+	a.mux.HandleFunc("POST /api/alerts/pagerduty/sync", a.requireAuth(a.syncPagerDutyIncidents))
 	a.mux.HandleFunc("GET /api/members", a.requireAuth(a.listMembers))
 	a.mux.HandleFunc("POST /api/members/role", a.requireAuth(a.updateMemberRole))
 	a.mux.HandleFunc("POST /api/members/deactivate", a.requireAuth(a.deactivateMember))
@@ -119,10 +120,10 @@ func (a *App) systemReadiness(w http.ResponseWriter, r *http.Request) {
 	} else {
 		add("ClickHouse", "ok", "query endpoint reachable")
 	}
-	if a.state.Enabled() {
-		add("PostgREST", "ok", "state API configured")
+	if err := a.state.Ping(ctx); err != nil {
+		add("Postgres/PostgREST", "failed", err.Error())
 	} else {
-		add("PostgREST", "warning", "state API is not configured")
+		add("Postgres/PostgREST", "ok", "state API reachable")
 	}
 	if a.cfg.Alerts.Enabled {
 		detail := "alert worker enabled"
@@ -1758,6 +1759,37 @@ func (a *App) resolveAlertIncident(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordAuditEvent(r, "alert_incident.resolve", "alert_incident", req.ID, nil)
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) syncPagerDutyIncidents(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	user := statePrincipal(r)
+	incidents, err := a.state.ListTenantPagerDutySyncedIncidents(r.Context(), user, r.Header.Get("Authorization"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	tester := alert.NewDeliveryTester(alert.SMTPConfig{}, a.resolveTenantSecretForRequest(r), a.logger)
+	results := tester.ReconcilePagerDutyIncidents(r.Context(), incidents, func(ctx context.Context, incident state.PagerDutySyncedIncident, remote alert.PagerDutyRemoteIncident, result alert.DeliveryResult) error {
+		status := remote.Status
+		if result.Status == "failed" {
+			status = ""
+		}
+		_, err := a.state.ReconcilePagerDutyIncident(ctx, a.cfg.Alerts.WorkerKey, incident.TenantID, incident.ID, status, result.ExternalIncidentURL, result.ExternalSyncStatus, result.Error)
+		return err
+	})
+	a.recordAuditEvent(r, "pagerduty.sync", "alert_incident", "", map[string]any{"count": len(results)})
+	loadErr := ""
+	if len(incidents) == 0 {
+		loadErr = "no mapped PagerDuty incidents found"
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":   len(results),
+		"message": loadErr,
+		"results": results,
+	})
 }
 
 func (a *App) listInvites(w http.ResponseWriter, r *http.Request) {

@@ -136,6 +136,26 @@ func (c *Client) Enabled() bool {
 	return c.baseURL != ""
 }
 
+func (c *Client) Ping(ctx context.Context) error {
+	if !c.Enabled() {
+		return fmt.Errorf("postgrest is not configured")
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/", nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("postgrest returned %s", resp.Status)
+	}
+	return nil
+}
+
 func (c *Client) RPC(ctx context.Context, name string, body any, user auth.Principal, bearer string, out any) error {
 	if !c.Enabled() {
 		return fmt.Errorf("postgrest is not configured")
@@ -380,6 +400,12 @@ func (c *Client) ListPagerDutySyncedIncidents(ctx context.Context, workerKey str
 	err := c.RPC(ctx, "list_pagerduty_synced_incidents_for_worker", map[string]any{
 		"worker_key": workerKey,
 	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+	return rows, err
+}
+
+func (c *Client) ListTenantPagerDutySyncedIncidents(ctx context.Context, user auth.Principal, bearer string) ([]PagerDutySyncedIncident, error) {
+	var rows []PagerDutySyncedIncident
+	err := c.RPC(ctx, "list_pagerduty_synced_incidents", map[string]any{}, user, bearer, &rows)
 	return rows, err
 }
 

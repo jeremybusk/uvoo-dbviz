@@ -120,6 +120,16 @@ type PagerDutyRemoteIncident struct {
 	HTMLURL string
 }
 
+type PagerDutyReconcileResult struct {
+	IncidentID         string
+	ExternalIncidentID string
+	RemoteStatus       string
+	Status             string
+	StatusCode         int
+	Error              string
+	ExternalURL        string
+}
+
 func (w *Worker) SetIncidentRecorder(record func(context.Context, Rule, string, float64, map[string]any, string, int) (RecordResult, error)) {
 	w.record = record
 }
@@ -354,18 +364,45 @@ func (w *Worker) reconcilePagerDuty(ctx context.Context) {
 		return
 	}
 	for _, incident := range incidents {
-		if strings.TrimSpace(incident.ExternalIncidentID) == "" {
-			continue
-		}
-		remote, result := w.fetchPagerDutyRESTIncident(ctx, incident.TenantID, ContactEndpoint{
-			Kind:   "pagerduty",
-			Target: incident.ContactTarget,
-			Config: incident.ContactConfig,
-		}, incident.ExternalIncidentID)
+		remote, result := w.FetchPagerDutyRemoteIncident(ctx, incident)
 		if err := w.reconcileRecord(ctx, incident, remote, result); err != nil {
 			w.logger.Warn("PagerDuty reconciliation record failed", "incident", incident.ID, "remote", incident.ExternalIncidentID, "error", err)
 		}
 	}
+}
+
+func (w *Worker) FetchPagerDutyRemoteIncident(ctx context.Context, incident state.PagerDutySyncedIncident) (PagerDutyRemoteIncident, DeliveryResult) {
+	if strings.TrimSpace(incident.ExternalIncidentID) == "" {
+		return PagerDutyRemoteIncident{}, DeliveryResult{Status: "skipped", Error: "PagerDuty external incident id is empty", ExternalProvider: "pagerduty", ExternalSyncStatus: "reconcile_skipped"}
+	}
+	return w.fetchPagerDutyRESTIncident(ctx, incident.TenantID, ContactEndpoint{
+		Kind:   "pagerduty",
+		Target: incident.ContactTarget,
+		Config: incident.ContactConfig,
+	}, incident.ExternalIncidentID)
+}
+
+func (w *Worker) ReconcilePagerDutyIncidents(ctx context.Context, incidents []state.PagerDutySyncedIncident, record func(context.Context, state.PagerDutySyncedIncident, PagerDutyRemoteIncident, DeliveryResult) error) []PagerDutyReconcileResult {
+	results := make([]PagerDutyReconcileResult, 0, len(incidents))
+	for _, incident := range incidents {
+		remote, delivery := w.FetchPagerDutyRemoteIncident(ctx, incident)
+		if record != nil {
+			if err := record(ctx, incident, remote, delivery); err != nil && delivery.Error == "" {
+				delivery.Error = err.Error()
+				delivery.Status = "failed"
+			}
+		}
+		results = append(results, PagerDutyReconcileResult{
+			IncidentID:         incident.ID,
+			ExternalIncidentID: firstNonEmptyString(remote.ID, incident.ExternalIncidentID),
+			RemoteStatus:       remote.Status,
+			Status:             delivery.Status,
+			StatusCode:         delivery.StatusCode,
+			Error:              delivery.Error,
+			ExternalURL:        firstNonEmptyString(delivery.ExternalIncidentURL, remote.HTMLURL, incident.ExternalIncidentURL),
+		})
+	}
+	return results
 }
 
 func (w *Worker) evaluate(ctx context.Context, rule Rule) {

@@ -281,6 +281,11 @@ export function SystemSection(props: {
   const status = props.readiness?.status || 'warning';
   return (
     <Section title="Status">
+      <Alert
+        type={status === 'failed' ? 'error' : status === 'warning' ? 'warning' : 'success'}
+        showIcon
+        message={status === 'ok' ? 'System readiness OK' : status === 'failed' ? 'System readiness failed' : 'System readiness has warnings'}
+      />
       <Flex gap={8} align="center" wrap="wrap">
         <Tag color={readinessColor(status)}>{status}</Tag>
         {props.readiness?.checkedAt && <Typography.Text type="secondary">{new Date(props.readiness.checkedAt).toLocaleString()}</Typography.Text>}
@@ -1422,9 +1427,12 @@ function pagerDutyRestReady(props: {
   );
 }
 
-export function IncidentsSection({ incidents, onResolve }: { incidents: AlertIncident[]; onResolve: (incident: AlertIncident) => void }) {
+export function IncidentsSection({ incidents, onResolve, onSyncPagerDuty }: { incidents: AlertIncident[]; onResolve: (incident: AlertIncident) => void; onSyncPagerDuty: () => void }) {
   return (
     <Section title="Incidents">
+      <Flex gap={8} wrap="wrap">
+        <Button size="small" onClick={onSyncPagerDuty}>Sync PagerDuty</Button>
+      </Flex>
       <ActionList items={incidents.slice(0, 8)} empty="No incidents" render={(incident) => (
         <List.Item key={incident.id} actions={incident.status === 'firing' ? [<Button key="resolve" size="small" onClick={() => onResolve(incident)}>Resolve</Button>] : []}>
           <List.Item.Meta

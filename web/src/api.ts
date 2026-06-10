@@ -246,6 +246,20 @@ export type AlertIncident = {
   created_at: string;
 };
 
+export type PagerDutySyncResult = {
+  count: number;
+  message: string;
+  results: Array<{
+    IncidentID: string;
+    ExternalIncidentID: string;
+    RemoteStatus: string;
+    Status: string;
+    StatusCode: number;
+    Error: string;
+    ExternalURL: string;
+  }>;
+};
+
 export type AlertNotification = {
   id: string;
   alert_rule_id: string | null;

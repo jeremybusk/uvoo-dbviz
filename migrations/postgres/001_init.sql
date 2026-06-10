@@ -1622,6 +1622,47 @@ $$;
 
 GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents_for_worker(text) TO dbviz_web;
 
+CREATE OR REPLACE FUNCTION list_pagerduty_synced_incidents()
+RETURNS TABLE(
+    id uuid,
+    tenant_id text,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    external_incident_id text,
+    external_incident_url text,
+    contact_target text,
+    contact_config jsonb
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        i.id,
+        t.slug AS tenant_id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.external_incident_id,
+        i.external_incident_url,
+        c.target AS contact_target,
+        COALESCE(c.config, '{}'::jsonb) AS contact_config
+    FROM alert_incidents i
+    JOIN tenants t ON t.id = i.tenant_id
+    JOIN alert_rules a ON a.id = i.alert_rule_id
+    JOIN contact_endpoints c ON c.id = a.contact_endpoint_id
+    WHERE i.tenant_id = request_tenant_id()
+      AND c.kind = 'pagerduty'
+      AND COALESCE(c.config->>'restSyncEnabled', '') IN ('true', '1', 'yes', 'on')
+      AND i.external_provider = 'pagerduty'
+      AND i.external_incident_id <> ''
+      AND i.status = 'firing'
+      AND i.resolved_at IS NULL
+    ORDER BY i.last_seen_at DESC
+    LIMIT 100;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents() TO dbviz_web;
+
 CREATE OR REPLACE FUNCTION reconcile_pagerduty_incident_for_worker(
     worker_key text,
     tenant_slug text,
