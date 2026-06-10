@@ -67,6 +67,7 @@ secret:
   clickhouseDefaultSecret: "clickhouse"
   keycloakClientSecret: ""
   alertSmtpPassword: ""
+  secretsEncryptionKey: ""
   existingSecret: ""
 
 clickhouse:

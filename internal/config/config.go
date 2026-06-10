@@ -18,6 +18,7 @@ type Config struct {
 	PostgREST  PostgRESTConfig
 	Datasets   map[string]Dataset
 	Alerts     AlertConfig
+	Secrets    SecretConfig
 	Runtime    RuntimeConfig
 }
 
@@ -76,6 +77,10 @@ type AlertConfig struct {
 	SMTPUser      string
 	SMTPPassword  string
 	SMTPFrom      string
+}
+
+type SecretConfig struct {
+	EncryptionKey string
 }
 
 type Dataset struct {
@@ -177,6 +182,9 @@ func Load() Config {
 			SMTPUser:      os.Getenv("DBVIZ_ALERT_SMTP_USER"),
 			SMTPPassword:  os.Getenv("DBVIZ_ALERT_SMTP_PASSWORD"),
 			SMTPFrom:      os.Getenv("DBVIZ_ALERT_SMTP_FROM"),
+		},
+		Secrets: SecretConfig{
+			EncryptionKey: os.Getenv("DBVIZ_SECRETS_ENCRYPTION_KEY"),
 		},
 		Datasets: map[string]Dataset{
 			"logs": {
@@ -304,6 +312,9 @@ func (c Config) Validate() error {
 		if c.Alerts.WorkerKey == "" || c.Alerts.WorkerKey == "dev-alert-worker-key" {
 			problems = append(problems, "DBVIZ_ALERT_WORKER_KEY must be set to a non-default secret")
 		}
+	}
+	if strings.TrimSpace(c.Secrets.EncryptionKey) == "" {
+		problems = append(problems, "DBVIZ_SECRETS_ENCRYPTION_KEY must be set for encrypted tenant secrets")
 	}
 	if os.Getenv("PGRST_JWT_SECRET") == "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret" ||
 		os.Getenv("DBVIZ_POSTGREST_JWT_SECRET") == "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret" {

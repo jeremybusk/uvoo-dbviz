@@ -950,6 +950,9 @@ export function ContactsSection(props: {
   contactTarget: string;
   contactKind: ContactEndpoint['kind'];
   pagerDutyRoutingKeySecretRef: string;
+  pagerDutyRoutingKeyValue: string;
+  pagerDutyRestApiKeySecretRef: string;
+  pagerDutyRestApiKeyValue: string;
   pagerDutySeverity: string;
   pagerDutySourceField: string;
   pagerDutyComponent: string;
@@ -959,6 +962,9 @@ export function ContactsSection(props: {
   onTarget: (value: string) => void;
   onKind: (value: ContactEndpoint['kind']) => void;
   onPagerDutyRoutingKeySecretRef: (value: string) => void;
+  onPagerDutyRoutingKeyValue: (value: string) => void;
+  onPagerDutyRestApiKeySecretRef: (value: string) => void;
+  onPagerDutyRestApiKeyValue: (value: string) => void;
   onPagerDutySeverity: (value: string) => void;
   onPagerDutySourceField: (value: string) => void;
   onPagerDutyComponent: (value: string) => void;
@@ -997,6 +1003,15 @@ export function ContactsSection(props: {
         <>
           <Field label="Routing key secret">
             <Input value={props.pagerDutyRoutingKeySecretRef} onChange={(event) => props.onPagerDutyRoutingKeySecretRef(event.target.value)} placeholder="pagerduty-prod-events-key" />
+          </Field>
+          <Field label="Integration key">
+            <Input.Password value={props.pagerDutyRoutingKeyValue} onChange={(event) => props.onPagerDutyRoutingKeyValue(event.target.value)} placeholder="Paste to encrypt and store" />
+          </Field>
+          <Field label="REST API secret">
+            <Input value={props.pagerDutyRestApiKeySecretRef} onChange={(event) => props.onPagerDutyRestApiKeySecretRef(event.target.value)} placeholder="pagerduty-rest-api-key" />
+          </Field>
+          <Field label="REST API key">
+            <Input.Password value={props.pagerDutyRestApiKeyValue} onChange={(event) => props.onPagerDutyRestApiKeyValue(event.target.value)} placeholder="Optional for future incident sync" />
           </Field>
           <Field label="Severity">
             <Select value={props.pagerDutySeverity} onChange={props.onPagerDutySeverity}>
@@ -1063,8 +1078,9 @@ function contactCanSave(props: {
   contactKind: ContactEndpoint['kind'];
   contactTarget: string;
   pagerDutyRoutingKeySecretRef: string;
+  pagerDutyRoutingKeyValue: string;
 }): boolean {
-  if (props.contactKind === 'pagerduty') return Boolean(props.pagerDutyRoutingKeySecretRef.trim());
+  if (props.contactKind === 'pagerduty') return Boolean(props.pagerDutyRoutingKeySecretRef.trim() || props.pagerDutyRoutingKeyValue.trim());
   return Boolean(props.contactTarget.trim());
 }
 

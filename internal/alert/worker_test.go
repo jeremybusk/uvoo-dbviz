@@ -179,7 +179,10 @@ func TestEmailContactSkipsWhenSMTPIsNotConfigured(t *testing.T) {
 
 func TestNotifyPagerDutyEventsV2UsesRoutingKeySecretAndDedupKey(t *testing.T) {
 	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
-	worker.SetSecretResolver(func(ref string) (string, bool) {
+	worker.SetSecretResolver(func(_ context.Context, tenantID string, ref string) (string, bool) {
+		if tenantID != "dev" {
+			t.Fatalf("tenantID = %s", tenantID)
+		}
 		if ref != "pagerduty-prod-events-key" {
 			t.Fatalf("secret ref = %s", ref)
 		}

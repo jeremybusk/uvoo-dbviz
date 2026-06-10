@@ -34,6 +34,22 @@ type PersistedAlertRule struct {
 	ContactConfig   map[string]string `json:"contact_config"`
 }
 
+type TenantSecret struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	KeyVersion  string `json:"key_version"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type EncryptedTenantSecret struct {
+	Name       string `json:"name"`
+	Ciphertext string `json:"ciphertext"`
+	Nonce      string `json:"nonce"`
+	KeyVersion string `json:"key_version"`
+}
+
 type UserProfile struct {
 	ID          string `json:"id"`
 	TenantID    string `json:"tenant_id"`
@@ -138,6 +154,53 @@ func (c *Client) LoadEnabledAlertRules(ctx context.Context, workerKey string) ([
 	err := c.RPC(ctx, "list_enabled_alert_rules_for_worker", map[string]any{
 		"worker_key": workerKey,
 	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+	return rows, err
+}
+
+func (c *Client) GetTenantSecretForWorker(ctx context.Context, workerKey string, tenantSlug string, secretName string) (EncryptedTenantSecret, error) {
+	var rows []EncryptedTenantSecret
+	err := c.RPC(ctx, "get_tenant_secret_for_worker", map[string]any{
+		"worker_key":  workerKey,
+		"tenant_slug": tenantSlug,
+		"secret_name": secretName,
+	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+	if err != nil {
+		return EncryptedTenantSecret{}, err
+	}
+	if len(rows) == 0 {
+		return EncryptedTenantSecret{}, fmt.Errorf("tenant secret not found: %s", secretName)
+	}
+	return rows[0], nil
+}
+
+func (c *Client) ListTenantSecrets(ctx context.Context, user auth.Principal, bearer string) ([]TenantSecret, error) {
+	var rows []TenantSecret
+	err := c.RPC(ctx, "list_tenant_secrets", map[string]any{}, user, bearer, &rows)
+	return rows, err
+}
+
+func (c *Client) SaveTenantSecret(ctx context.Context, user auth.Principal, bearer string, id string, name string, description string, ciphertext string, nonce string, keyVersion string) ([]TenantSecret, error) {
+	var rows []TenantSecret
+	var secretID any
+	if strings.TrimSpace(id) != "" {
+		secretID = id
+	}
+	err := c.RPC(ctx, "save_tenant_secret", map[string]any{
+		"secret_id":          secretID,
+		"secret_name":        name,
+		"secret_description": description,
+		"secret_ciphertext":  ciphertext,
+		"secret_nonce":       nonce,
+		"secret_key_version": keyVersion,
+	}, user, bearer, &rows)
+	return rows, err
+}
+
+func (c *Client) DeleteTenantSecret(ctx context.Context, user auth.Principal, bearer string, id string) ([]TenantSecret, error) {
+	var rows []TenantSecret
+	err := c.RPC(ctx, "delete_tenant_secret", map[string]any{
+		"secret_id": id,
+	}, user, bearer, &rows)
 	return rows, err
 }
 

@@ -73,7 +73,7 @@ type Worker struct {
 	poll     time.Duration
 	dedupe   time.Duration
 	smtp     SMTPConfig
-	secrets  func(string) (string, bool)
+	secrets  func(context.Context, string, string) (string, bool)
 	pending  map[string]time.Time
 	active   map[string]map[string]struct{}
 	stop     chan struct{}
@@ -148,7 +148,7 @@ func NewPollingWorker(datasets map[string]config.Dataset, maxRows int, ch *click
 	}
 }
 
-func (w *Worker) SetSecretResolver(resolve func(string) (string, bool)) {
+func (w *Worker) SetSecretResolver(resolve func(context.Context, string, string) (string, bool)) {
 	if resolve == nil {
 		resolve = ResolveSecretRefFromEnv
 	}
@@ -533,7 +533,8 @@ func (w *Worker) notifyPagerDuty(ctx context.Context, contact ContactEndpoint, i
 	if mode != "events_v2" {
 		return DeliveryResult{Status: "failed", Error: fmt.Sprintf("unsupported PagerDuty mode: %s", mode)}
 	}
-	routingKey, err := w.pagerDutyRoutingKey(contact)
+	tenantID := strings.TrimSpace(fmt.Sprint(incident["tenantId"]))
+	routingKey, err := w.pagerDutyRoutingKey(ctx, tenantID, contact)
 	if err != nil {
 		return DeliveryResult{Status: "failed", Error: err.Error()}
 	}
@@ -564,7 +565,7 @@ func (w *Worker) notifyPagerDuty(ctx context.Context, contact ContactEndpoint, i
 	return DeliveryResult{Status: "success", StatusCode: resp.StatusCode}
 }
 
-func (w *Worker) pagerDutyRoutingKey(contact ContactEndpoint) (string, error) {
+func (w *Worker) pagerDutyRoutingKey(ctx context.Context, tenantID string, contact ContactEndpoint) (string, error) {
 	if value := strings.TrimSpace(contact.Config["routingKey"]); value != "" {
 		return value, nil
 	}
@@ -572,7 +573,7 @@ func (w *Worker) pagerDutyRoutingKey(contact ContactEndpoint) (string, error) {
 	if ref == "" {
 		return "", errors.New("PagerDuty routingKeySecretRef is required")
 	}
-	value, ok := w.secrets(ref)
+	value, ok := w.secrets(ctx, tenantID, ref)
 	if !ok || strings.TrimSpace(value) == "" {
 		return "", fmt.Errorf("PagerDuty routing key secret ref is not configured: %s", ref)
 	}
@@ -646,7 +647,7 @@ func valueFromField(row map[string]any, field string) string {
 	return fmt.Sprint(row[field])
 }
 
-func ResolveSecretRefFromEnv(ref string) (string, bool) {
+func ResolveSecretRefFromEnv(_ context.Context, _ string, ref string) (string, bool) {
 	name := SecretEnvName(ref)
 	value, ok := os.LookupEnv(name)
 	return value, ok

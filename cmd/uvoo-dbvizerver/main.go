@@ -11,6 +11,7 @@ import (
 	"uvoo-dbviz/internal/auth"
 	"uvoo-dbviz/internal/clickhouse"
 	"uvoo-dbviz/internal/config"
+	"uvoo-dbviz/internal/secrets"
 	"uvoo-dbviz/internal/server"
 	"uvoo-dbviz/internal/state"
 )
@@ -62,6 +63,19 @@ func main() {
 			User:     cfg.Alerts.SMTPUser,
 			Password: cfg.Alerts.SMTPPassword,
 			From:     cfg.Alerts.SMTPFrom,
+		})
+		worker.SetSecretResolver(func(ctx context.Context, tenantSlug string, secretName string) (string, bool) {
+			if cfg.Secrets.EncryptionKey != "" && stateClient.Enabled() {
+				row, err := stateClient.GetTenantSecretForWorker(ctx, cfg.Alerts.WorkerKey, tenantSlug, secretName)
+				if err == nil {
+					value, decryptErr := secrets.DecryptString(row.Ciphertext, row.Nonce, cfg.Secrets.EncryptionKey)
+					if decryptErr == nil {
+						return value, true
+					}
+					logger.Warn("tenant secret decrypt failed", "tenant", tenantSlug, "secret", secretName, "error", decryptErr)
+				}
+			}
+			return alert.ResolveSecretRefFromEnv(ctx, tenantSlug, secretName)
 		})
 		worker.SetIncidentRecorder(func(ctx context.Context, rule alert.Rule, status string, value float64, payload map[string]any, fingerprint string, cooldownSeconds int) (alert.RecordResult, error) {
 			incident, err := stateClient.RecordAlertIncident(ctx, cfg.Alerts.WorkerKey, rule.ID, rule.TenantID, status, value, payload, fingerprint, cooldownSeconds)

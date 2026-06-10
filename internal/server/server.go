@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +18,7 @@ import (
 	"uvoo-dbviz/internal/auth"
 	"uvoo-dbviz/internal/clickhouse"
 	"uvoo-dbviz/internal/config"
+	"uvoo-dbviz/internal/secrets"
 	"uvoo-dbviz/internal/state"
 )
 
@@ -68,6 +70,9 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
 	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
 	a.mux.HandleFunc("POST /api/alerts/contacts/delete", a.requireAuth(a.deleteContactEndpoint))
+	a.mux.HandleFunc("GET /api/secrets", a.requireAuth(a.listTenantSecrets))
+	a.mux.HandleFunc("POST /api/secrets", a.requireAuth(a.saveTenantSecret))
+	a.mux.HandleFunc("POST /api/secrets/delete", a.requireAuth(a.deleteTenantSecret))
 	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
 	a.mux.HandleFunc("GET /api/alerts/notifications", a.requireAuth(a.listAlertNotifications))
 	a.mux.HandleFunc("POST /api/alerts/incidents/resolve", a.requireAuth(a.resolveAlertIncident))
@@ -1093,7 +1098,7 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 	req.Name = strings.TrimSpace(req.Name)
 	req.Kind = strings.TrimSpace(req.Kind)
 	req.Target = strings.TrimSpace(req.Target)
-	config, err := normalizeContactConfig(req.Kind, req.Target, req.Config)
+	config, err := a.normalizeContactConfig(r, req.Kind, req.Name, req.Target, req.Config)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -1125,7 +1130,7 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
-func normalizeContactConfig(kind string, target string, input map[string]any) (map[string]any, error) {
+func (a *App) normalizeContactConfig(r *http.Request, kind string, name string, target string, input map[string]any) (map[string]any, error) {
 	switch kind {
 	case "email", "webhook", "pagerduty":
 	default:
@@ -1143,6 +1148,9 @@ func normalizeContactConfig(kind string, target string, input map[string]any) (m
 	if value, _ := output["routingKey"].(string); value != "" {
 		return nil, errors.New("PagerDuty routing key must be stored as a secret ref, not inline config")
 	}
+	if value, _ := output["apiKey"].(string); value != "" {
+		return nil, errors.New("PagerDuty API key must be stored as a secret ref, not inline config")
+	}
 	mode, _ := output["mode"].(string)
 	if mode == "" {
 		mode = "events_v2"
@@ -1156,6 +1164,28 @@ func normalizeContactConfig(kind string, target string, input map[string]any) (m
 			return nil, err
 		}
 	}
+	if value, _ := output["routingKeyValue"].(string); value != "" {
+		ref, _ := output["routingKeySecretRef"].(string)
+		if ref == "" {
+			ref = defaultSecretRef(name, "pagerduty-routing-key")
+		}
+		if err := a.saveEncryptedTenantSecret(r, "", ref, "PagerDuty Events API routing key", value); err != nil {
+			return nil, err
+		}
+		output["routingKeySecretRef"] = ref
+	}
+	delete(output, "routingKeyValue")
+	if value, _ := output["restApiKeyValue"].(string); value != "" {
+		ref, _ := output["restApiKeySecretRef"].(string)
+		if ref == "" {
+			ref = defaultSecretRef(name, "pagerduty-rest-api-key")
+		}
+		if err := a.saveEncryptedTenantSecret(r, "", ref, "PagerDuty REST API key", value); err != nil {
+			return nil, err
+		}
+		output["restApiKeySecretRef"] = ref
+	}
+	delete(output, "restApiKeyValue")
 	if value, _ := output["routingKeySecretRef"].(string); value == "" {
 		return nil, errors.New("PagerDuty routing key secret ref is required")
 	}
@@ -1177,6 +1207,95 @@ func validatePagerDutyEventsURL(raw string) error {
 		return errors.New("PagerDuty Events API URL must use events.pagerduty.com")
 	}
 	return nil
+}
+
+func (a *App) listTenantSecrets(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.state.ListTenantSecrets(r.Context(), statePrincipal(r), r.Header.Get("Authorization"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) saveTenantSecret(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Value       string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	rows, err := a.saveEncryptedTenantSecretRows(r, strings.TrimSpace(req.ID), strings.TrimSpace(req.Name), strings.TrimSpace(req.Description), req.Value)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	a.recordAuditEvent(r, "tenant_secret.save", "tenant_secret", targetIDFromSecretRows(rows), map[string]any{"name": strings.TrimSpace(req.Name)})
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) deleteTenantSecret(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	rows, err := a.state.DeleteTenantSecret(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), strings.TrimSpace(req.ID))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.recordAuditEvent(r, "tenant_secret.delete", "tenant_secret", strings.TrimSpace(req.ID), nil)
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) saveEncryptedTenantSecret(r *http.Request, id string, name string, description string, value string) error {
+	_, err := a.saveEncryptedTenantSecretRows(r, id, name, description, value)
+	return err
+}
+
+func (a *App) saveEncryptedTenantSecretRows(r *http.Request, id string, name string, description string, value string) ([]state.TenantSecret, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, errors.New("secret name is required")
+	}
+	if value == "" {
+		return nil, errors.New("secret value is required")
+	}
+	ciphertext, nonce, err := secrets.EncryptString(value, a.cfg.Secrets.EncryptionKey)
+	if err != nil {
+		return nil, err
+	}
+	return a.state.SaveTenantSecret(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), id, name, description, ciphertext, nonce, secrets.KeyVersion)
+}
+
+func defaultSecretRef(name string, suffix string) string {
+	base := strings.ToLower(strings.TrimSpace(name + "-" + suffix))
+	base = strings.Trim(secretNameCleaner.ReplaceAllString(base, "-"), "-")
+	if base == "" {
+		return suffix
+	}
+	return base
+}
+
+var secretNameCleaner = regexp.MustCompile(`[^a-z0-9]+`)
+
+func targetIDFromSecretRows(rows []state.TenantSecret) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	return rows[0].ID
 }
 
 func (a *App) deleteContactEndpoint(w http.ResponseWriter, r *http.Request) {

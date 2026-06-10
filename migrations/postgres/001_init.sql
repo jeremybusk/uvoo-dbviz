@@ -101,6 +101,19 @@ CREATE TABLE IF NOT EXISTS contact_endpoints (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS tenant_secrets (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name text NOT NULL,
+    description text NOT NULL DEFAULT '',
+    ciphertext text NOT NULL,
+    nonce text NOT NULL,
+    key_version text NOT NULL DEFAULT 'v1',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS alert_rules (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -190,6 +203,7 @@ CREATE INDEX IF NOT EXISTS data_sources_tenant_id_idx ON data_sources(tenant_id)
 CREATE INDEX IF NOT EXISTS dashboards_tenant_id_idx ON dashboards(tenant_id);
 CREATE INDEX IF NOT EXISTS saved_queries_tenant_updated_idx ON saved_queries(tenant_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS charts_dashboard_id_idx ON charts(dashboard_id);
+CREATE INDEX IF NOT EXISTS tenant_secrets_tenant_updated_idx ON tenant_secrets(tenant_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS alert_rules_enabled_idx ON alert_rules(tenant_id, enabled);
 CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents(tenant_id, created_at DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS alert_incidents_open_fingerprint_idx ON alert_incidents(tenant_id, fingerprint)
@@ -199,7 +213,7 @@ CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(ten
 CREATE INDEX IF NOT EXISTS audit_events_tenant_created_idx ON audit_events(tenant_id, created_at DESC);
 
 GRANT USAGE ON SCHEMA public TO dbviz_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, alert_rules, alert_incidents, alert_notifications, query_history, audit_events TO dbviz_web;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, tenant_secrets, alert_rules, alert_incidents, alert_notifications, query_history, audit_events TO dbviz_web;
 
 INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
@@ -237,6 +251,7 @@ ALTER TABLE dashboards ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saved_queries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE charts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contact_endpoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_secrets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_incidents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_notifications ENABLE ROW LEVEL SECURITY;
@@ -338,6 +353,11 @@ CREATE POLICY charts_tenant_isolation ON charts
 
 DROP POLICY IF EXISTS contact_endpoints_tenant_isolation ON contact_endpoints;
 CREATE POLICY contact_endpoints_tenant_isolation ON contact_endpoints
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
+DROP POLICY IF EXISTS tenant_secrets_tenant_isolation ON tenant_secrets;
+CREATE POLICY tenant_secrets_tenant_isolation ON tenant_secrets
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
@@ -709,6 +729,93 @@ GRANT EXECUTE ON FUNCTION list_saved_queries() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_saved_query(uuid, text, text, jsonb) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION delete_saved_query(uuid) TO dbviz_web;
 
+CREATE OR REPLACE FUNCTION list_tenant_secrets()
+RETURNS TABLE(id uuid, name text, description text, key_version text, created_at timestamptz, updated_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT s.id, s.name, s.description, s.key_version, s.created_at, s.updated_at
+    FROM tenant_secrets s
+    WHERE s.tenant_id = request_tenant_id()
+    ORDER BY s.updated_at DESC;
+$$;
+
+CREATE OR REPLACE FUNCTION save_tenant_secret(secret_id uuid, secret_name text, secret_description text, secret_ciphertext text, secret_nonce text, secret_key_version text)
+RETURNS TABLE(id uuid, name text, description text, key_version text, created_at timestamptz, updated_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_id uuid;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    IF NULLIF(trim(secret_name), '') IS NULL THEN
+        RAISE EXCEPTION 'secret name is required';
+    END IF;
+
+    IF NULLIF(secret_ciphertext, '') IS NULL OR NULLIF(secret_nonce, '') IS NULL THEN
+        RAISE EXCEPTION 'encrypted secret value is required';
+    END IF;
+
+    IF secret_id IS NULL THEN
+        INSERT INTO tenant_secrets (tenant_id, name, description, ciphertext, nonce, key_version)
+        VALUES (
+            request_tenant_id(),
+            trim(secret_name),
+            COALESCE(secret_description, ''),
+            secret_ciphertext,
+            secret_nonce,
+            COALESCE(NULLIF(secret_key_version, ''), 'v1')
+        )
+        ON CONFLICT (tenant_id, name) DO UPDATE
+        SET description = EXCLUDED.description,
+            ciphertext = EXCLUDED.ciphertext,
+            nonce = EXCLUDED.nonce,
+            key_version = EXCLUDED.key_version,
+            updated_at = now()
+        RETURNING tenant_secrets.id INTO saved_id;
+    ELSE
+        UPDATE tenant_secrets
+        SET name = trim(secret_name),
+            description = COALESCE(secret_description, ''),
+            ciphertext = secret_ciphertext,
+            nonce = secret_nonce,
+            key_version = COALESCE(NULLIF(secret_key_version, ''), 'v1'),
+            updated_at = now()
+        WHERE tenant_secrets.id = secret_id
+          AND tenant_secrets.tenant_id = request_tenant_id()
+        RETURNING tenant_secrets.id INTO saved_id;
+    END IF;
+
+    RETURN QUERY
+    SELECT s.id, s.name, s.description, s.key_version, s.created_at, s.updated_at
+    FROM tenant_secrets s
+    WHERE s.id = saved_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION delete_tenant_secret(secret_id uuid)
+RETURNS TABLE(id uuid, name text, description text, key_version text, created_at timestamptz, updated_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    RETURN QUERY
+    DELETE FROM tenant_secrets s
+    WHERE s.id = secret_id
+      AND s.tenant_id = request_tenant_id()
+    RETURNING s.id, s.name, s.description, s.key_version, s.created_at, s.updated_at;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_tenant_secrets() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION save_tenant_secret(uuid, text, text, text, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION delete_tenant_secret(uuid) TO dbviz_web;
+
 CREATE OR REPLACE FUNCTION list_contact_endpoints()
 RETURNS TABLE(id uuid, name text, kind text, target text, config jsonb, created_at timestamptz)
 LANGUAGE sql STABLE
@@ -1028,6 +1135,38 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION list_enabled_alert_rules_for_worker(text) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION get_tenant_secret_for_worker(worker_key text, tenant_slug text, secret_name text)
+RETURNS TABLE(name text, ciphertext text, nonce text, key_version text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    SELECT tenants.id INTO resolved_tenant_id
+    FROM tenants
+    WHERE tenants.slug = tenant_slug;
+
+    IF resolved_tenant_id IS NULL THEN
+        RAISE EXCEPTION 'tenant not found: %', tenant_slug;
+    END IF;
+
+    RETURN QUERY
+    SELECT s.name, s.ciphertext, s.nonce, s.key_version
+    FROM tenant_secrets s
+    WHERE s.tenant_id = resolved_tenant_id
+      AND s.name = secret_name
+    LIMIT 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_tenant_secret_for_worker(text, text, text) TO dbviz_web;
 
 DROP FUNCTION IF EXISTS record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb);
 DROP FUNCTION IF EXISTS record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer);

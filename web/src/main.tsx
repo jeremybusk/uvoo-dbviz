@@ -129,6 +129,9 @@ function App() {
   const [contactTarget, setContactTarget] = useState('');
   const [contactKind, setContactKind] = useState<ContactEndpoint['kind']>('webhook');
   const [contactRoutingKeySecretRef, setContactRoutingKeySecretRef] = useState('');
+  const [contactRoutingKeyValue, setContactRoutingKeyValue] = useState('');
+  const [contactRestApiKeySecretRef, setContactRestApiKeySecretRef] = useState('');
+  const [contactRestApiKeyValue, setContactRestApiKeyValue] = useState('');
   const [contactPagerDutySeverity, setContactPagerDutySeverity] = useState('error');
   const [contactPagerDutySourceField, setContactPagerDutySourceField] = useState('service_name');
   const [contactPagerDutyComponent, setContactPagerDutyComponent] = useState('uvoo-dbviz');
@@ -509,6 +512,10 @@ function App() {
     if (saved[0]) {
       setEditingContactId(saved[0].id);
       setSelectedContact(saved[0].id);
+      setContactRoutingKeyValue('');
+      setContactRestApiKeyValue('');
+      setContactRoutingKeySecretRef(String(saved[0].config.routingKeySecretRef || contactRoutingKeySecretRef));
+      setContactRestApiKeySecretRef(String(saved[0].config.restApiKeySecretRef || contactRestApiKeySecretRef));
     }
   }
 
@@ -860,6 +867,9 @@ function App() {
     setContactKind('webhook');
     setContactTarget('');
     setContactRoutingKeySecretRef('');
+    setContactRoutingKeyValue('');
+    setContactRestApiKeySecretRef('');
+    setContactRestApiKeyValue('');
     setContactPagerDutySeverity('error');
     setContactPagerDutySourceField('service_name');
     setContactPagerDutyComponent('uvoo-dbviz');
@@ -873,6 +883,9 @@ function App() {
     setContactKind(contact.kind);
     setContactTarget(contact.target);
     setContactRoutingKeySecretRef(String(contact.config.routingKeySecretRef || ''));
+    setContactRoutingKeyValue('');
+    setContactRestApiKeySecretRef(String(contact.config.restApiKeySecretRef || ''));
+    setContactRestApiKeyValue('');
     setContactPagerDutySeverity(String(contact.config.severity || 'error'));
     setContactPagerDutySourceField(String(contact.config.sourceField || 'service_name'));
     setContactPagerDutyComponent(String(contact.config.component || 'uvoo-dbviz'));
@@ -981,6 +994,9 @@ function App() {
     return {
       mode: 'events_v2',
       routingKeySecretRef: contactRoutingKeySecretRef.trim(),
+      routingKeyValue: contactRoutingKeyValue,
+      restApiKeySecretRef: contactRestApiKeySecretRef.trim(),
+      restApiKeyValue: contactRestApiKeyValue,
       severity: contactPagerDutySeverity,
       sourceField: contactPagerDutySourceField.trim(),
       component: contactPagerDutyComponent.trim(),
@@ -1168,7 +1184,7 @@ function App() {
       />
     },
     { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertConditionType={alertConditionType} alertField={alertField} alertTextValue={alertTextValue} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onConditionType={changeAlertConditionType} onField={setAlertField} onTextValue={setAlertTextValue} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
-    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} pagerDutyRoutingKeySecretRef={contactRoutingKeySecretRef} pagerDutySeverity={contactPagerDutySeverity} pagerDutySourceField={contactPagerDutySourceField} pagerDutyComponent={contactPagerDutyComponent} pagerDutyGroup={contactPagerDutyGroup} pagerDutyClass={contactPagerDutyClass} onName={setContactName} onTarget={setContactTarget} onKind={changeContactKind} onPagerDutyRoutingKeySecretRef={setContactRoutingKeySecretRef} onPagerDutySeverity={setContactPagerDutySeverity} onPagerDutySourceField={setContactPagerDutySourceField} onPagerDutyComponent={setContactPagerDutyComponent} onPagerDutyGroup={setContactPagerDutyGroup} onPagerDutyClass={setContactPagerDutyClass} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} onDelete={(contact) => deleteContact(contact).catch((err) => setError(err.message))} /> },
+    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} pagerDutyRoutingKeySecretRef={contactRoutingKeySecretRef} pagerDutyRoutingKeyValue={contactRoutingKeyValue} pagerDutyRestApiKeySecretRef={contactRestApiKeySecretRef} pagerDutyRestApiKeyValue={contactRestApiKeyValue} pagerDutySeverity={contactPagerDutySeverity} pagerDutySourceField={contactPagerDutySourceField} pagerDutyComponent={contactPagerDutyComponent} pagerDutyGroup={contactPagerDutyGroup} pagerDutyClass={contactPagerDutyClass} onName={setContactName} onTarget={setContactTarget} onKind={changeContactKind} onPagerDutyRoutingKeySecretRef={setContactRoutingKeySecretRef} onPagerDutyRoutingKeyValue={setContactRoutingKeyValue} onPagerDutyRestApiKeySecretRef={setContactRestApiKeySecretRef} onPagerDutyRestApiKeyValue={setContactRestApiKeyValue} onPagerDutySeverity={setContactPagerDutySeverity} onPagerDutySourceField={setContactPagerDutySourceField} onPagerDutyComponent={setContactPagerDutyComponent} onPagerDutyGroup={setContactPagerDutyGroup} onPagerDutyClass={setContactPagerDutyClass} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} onDelete={(contact) => deleteContact(contact).catch((err) => setError(err.message))} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },
     { key: 'invites', label: 'Invites', children: <InvitesSection user={user} invites={invites} inviteEmail={inviteEmail} inviteRole={inviteRole} inviteToken={inviteToken} onEmail={setInviteEmail} onRole={setInviteRole} onToken={setInviteToken} onAccept={acceptInvite} onCreate={createInvite} onDelete={(invite) => deleteInvite(invite).catch((err) => setError(err.message))} /> },
