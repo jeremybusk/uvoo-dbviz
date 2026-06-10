@@ -382,6 +382,20 @@ func (w *Worker) FetchPagerDutyRemoteIncident(ctx context.Context, incident stat
 	}, incident.ExternalIncidentID)
 }
 
+func (w *Worker) UpdatePagerDutyRemoteIncident(ctx context.Context, incident state.PagerDutySyncedIncident, action string) DeliveryResult {
+	payload := map[string]any{
+		"tenantId":            incident.TenantID,
+		"fingerprint":         incident.Fingerprint,
+		"externalIncidentId":  incident.ExternalIncidentID,
+		"externalIncidentUrl": incident.ExternalIncidentURL,
+	}
+	return w.notifyPagerDuty(ctx, ContactEndpoint{
+		Kind:   "pagerduty",
+		Target: incident.ContactTarget,
+		Config: incident.ContactConfig,
+	}, payload, action)
+}
+
 func (w *Worker) ReconcilePagerDutyIncidents(ctx context.Context, incidents []state.PagerDutySyncedIncident, record func(context.Context, state.PagerDutySyncedIncident, PagerDutyRemoteIncident, DeliveryResult) error) []PagerDutyReconcileResult {
 	results := make([]PagerDutyReconcileResult, 0, len(incidents))
 	for _, incident := range incidents {
@@ -444,6 +458,7 @@ func (w *Worker) recordAndNotify(ctx context.Context, rule Rule, evaluation Eval
 	incident["labels"] = rule.Labels
 	incident["fingerprint"] = evaluation.Fingerprint
 	incident["firedAt"] = time.Now().UTC().Format(time.RFC3339)
+	incident["summary"] = incidentSummary(rule, incident)
 	shouldNotify := true
 	incidentID := ""
 	if w.record != nil {
@@ -783,6 +798,13 @@ func (w *Worker) notifyPagerDutyREST(ctx context.Context, contact ContactEndpoin
 		}
 		return w.updatePagerDutyRESTIncident(ctx, contact, apiKey, from, remoteID, "resolved")
 	}
+	if action == "acknowledge" {
+		remoteID := firstNonEmptyString(fmt.Sprint(incident["externalIncidentId"]), fmt.Sprint(incident["pagerDutyIncidentId"]))
+		if remoteID == "" {
+			return DeliveryResult{Status: "skipped", Error: "PagerDuty REST incident id is not available", ExternalProvider: "pagerduty", ExternalSyncStatus: "skipped"}
+		}
+		return w.updatePagerDutyRESTIncident(ctx, contact, apiKey, from, remoteID, "acknowledged")
+	}
 	if remoteID := firstNonEmptyString(fmt.Sprint(incident["externalIncidentId"]), fmt.Sprint(incident["pagerDutyIncidentId"])); remoteID != "" {
 		return DeliveryResult{
 			Status:              "success",
@@ -1011,6 +1033,7 @@ func pagerDutyCEF(contact ContactEndpoint, incident map[string]any) map[string]a
 	row, _ := incident["row"].(map[string]any)
 	summary := firstNonEmptyString(
 		contact.Config["summary"],
+		fmt.Sprint(incident["summary"]),
 		fmt.Sprint(incident["message"]),
 		fmt.Sprint(row["message"]),
 		fmt.Sprintf("%v fired with value %v", incident["ruleName"], incident["value"]),
@@ -1033,6 +1056,22 @@ func pagerDutyCEF(contact ContactEndpoint, incident map[string]any) map[string]a
 		"group":     firstNonEmptyString(contact.Config["group"], fmt.Sprint(incident["tenantId"]), "observability"),
 		"class":     firstNonEmptyString(contact.Config["class"], fmt.Sprint(incident["ruleName"]), "alert"),
 	}
+}
+
+func incidentSummary(rule Rule, incident map[string]any) string {
+	for _, contact := range rule.Contacts {
+		if contact.Kind == "pagerduty" {
+			if summary := fmt.Sprint(pagerDutyCEF(contact, incident)["summary"]); strings.TrimSpace(summary) != "" && summary != "<nil>" {
+				return summary
+			}
+		}
+	}
+	row, _ := incident["row"].(map[string]any)
+	return firstNonEmptyString(
+		fmt.Sprint(incident["message"]),
+		fmt.Sprint(row["message"]),
+		fmt.Sprintf("%v fired with value %v", incident["ruleName"], incident["value"]),
+	)
 }
 
 func firstNonEmptyString(values ...string) string {

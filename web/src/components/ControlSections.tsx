@@ -1433,26 +1433,26 @@ function pagerDutyRestReady(props: {
   );
 }
 
-export function IncidentsSection({ incidents, onResolve, onSyncPagerDuty }: { incidents: AlertIncident[]; onResolve: (incident: AlertIncident) => void; onSyncPagerDuty: () => void }) {
+export function IncidentsSection({ incidents, onAcknowledge, onResolve, onSyncPagerDuty }: { incidents: AlertIncident[]; onAcknowledge: (incident: AlertIncident) => void; onResolve: (incident: AlertIncident) => void; onSyncPagerDuty: () => void }) {
   return (
     <Section title="Incidents">
       <Flex gap={8} wrap="wrap">
         <Button size="small" onClick={onSyncPagerDuty}>Sync PagerDuty</Button>
       </Flex>
       <ActionList items={incidents.slice(0, 8)} empty="No incidents" render={(incident) => (
-        <List.Item key={incident.id} actions={incident.status === 'firing' ? [<Button key="resolve" size="small" onClick={() => onResolve(incident)}>Resolve</Button>] : []}>
+        <List.Item key={incident.id} actions={incidentActions(incident, onAcknowledge, onResolve)}>
           <List.Item.Meta
             title={
               <Space wrap>
-                <Tag color={incident.status === 'firing' ? 'red' : 'green'}>{incident.status}</Tag>
-                <span>{incident.value} x{incident.occurrence_count || 1}</span>
+                <Tag color={incidentStatusColor(incident.status)}>{incidentStatusLabel(incident.status)}</Tag>
+                <Typography.Text strong>{incidentTitle(incident)}</Typography.Text>
                 {incident.external_provider && <Tag>{incident.external_provider}</Tag>}
                 {incident.external_sync_status && <Tag color={incident.external_sync_status === 'failed' ? 'red' : 'blue'}>{incident.external_sync_status}</Tag>}
               </Space>
             }
             description={
               <Space direction="vertical" size={4} className="full">
-                <Typography.Text type="secondary">{new Date(incident.last_seen_at || incident.created_at).toLocaleString()}</Typography.Text>
+                <Typography.Text type="secondary">value {incident.value} · {incident.occurrence_count || 1} occurrence{(incident.occurrence_count || 1) === 1 ? '' : 's'} · {new Date(incident.last_seen_at || incident.created_at).toLocaleString()}</Typography.Text>
                 {incident.external_incident_url && (
                   <Typography.Link href={incident.external_incident_url} target="_blank" rel="noreferrer">{incident.external_incident_id || incident.external_incident_url}</Typography.Link>
                 )}
@@ -1464,6 +1464,64 @@ export function IncidentsSection({ incidents, onResolve, onSyncPagerDuty }: { in
       )} list />
     </Section>
   );
+}
+
+function incidentActions(incident: AlertIncident, onAcknowledge: (incident: AlertIncident) => void, onResolve: (incident: AlertIncident) => void) {
+  if (incident.status === 'firing') {
+    return [
+      <Button key="ack" size="small" onClick={() => onAcknowledge(incident)}>Ack</Button>,
+      <Button key="resolve" size="small" onClick={() => onResolve(incident)}>Resolve</Button>
+    ];
+  }
+  if (incident.status === 'acknowledged') {
+    return [<Button key="resolve" size="small" onClick={() => onResolve(incident)}>Resolve</Button>];
+  }
+  return [];
+}
+
+function incidentStatusColor(status: string) {
+  switch (status) {
+    case 'resolved':
+      return 'green';
+    case 'acknowledged':
+      return 'orange';
+    case 'firing':
+    case 'notify_failed':
+      return 'red';
+    default:
+      return undefined;
+  }
+}
+
+function incidentStatusLabel(status: string) {
+  switch (status) {
+    case 'firing':
+      return 'open';
+    case 'acknowledged':
+      return 'ack';
+    case 'resolved':
+      return 'resolved';
+    default:
+      return status;
+  }
+}
+
+function incidentTitle(incident: AlertIncident) {
+  const row = typeof incident.payload.row === 'object' && incident.payload.row !== null ? incident.payload.row as Record<string, unknown> : {};
+  return firstText(
+    incident.payload.summary,
+    incident.payload.message,
+    row.message,
+    `${firstText(incident.payload.ruleName, 'Alert')} fired with value ${incident.value}`
+  );
+}
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text && text !== '<nil>') return text;
+  }
+  return '';
 }
 
 export function NotificationsSection({ notifications }: { notifications: AlertNotification[] }) {

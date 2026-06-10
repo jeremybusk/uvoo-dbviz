@@ -78,6 +78,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/secrets/delete", a.requireAuth(a.deleteTenantSecret))
 	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
 	a.mux.HandleFunc("GET /api/alerts/notifications", a.requireAuth(a.listAlertNotifications))
+	a.mux.HandleFunc("POST /api/alerts/incidents/acknowledge", a.requireAuth(a.acknowledgeAlertIncident))
 	a.mux.HandleFunc("POST /api/alerts/incidents/resolve", a.requireAuth(a.resolveAlertIncident))
 	a.mux.HandleFunc("POST /api/alerts/pagerduty/sync", a.requireAuth(a.syncPagerDutyIncidents))
 	a.mux.HandleFunc("GET /api/members", a.requireAuth(a.listMembers))
@@ -1738,6 +1739,14 @@ func (a *App) listAlertNotifications(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) resolveAlertIncident(w http.ResponseWriter, r *http.Request) {
+	a.updateAlertIncidentStatus(w, r, "resolve_alert_incident", "resolve", "alert_incident.resolve")
+}
+
+func (a *App) acknowledgeAlertIncident(w http.ResponseWriter, r *http.Request) {
+	a.updateAlertIncidentStatus(w, r, "acknowledge_alert_incident", "acknowledge", "alert_incident.acknowledge")
+}
+
+func (a *App) updateAlertIncidentStatus(w http.ResponseWriter, r *http.Request, rpcName string, pagerDutyAction string, auditAction string) {
 	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
 		return
 	}
@@ -1754,8 +1763,9 @@ func (a *App) resolveAlertIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := statePrincipal(r)
+	mappedPagerDutyIncident, hasPagerDutyMapping := a.findTenantPagerDutyIncident(r, req.ID)
 	var rows []map[string]any
-	if err := a.state.RPC(r.Context(), "resolve_alert_incident", map[string]any{
+	if err := a.state.RPC(r.Context(), rpcName, map[string]any{
 		"actor_subject":  user.Subject,
 		"actor_provider": user.Provider,
 		"incident_id":    req.ID,
@@ -1763,8 +1773,25 @@ func (a *App) resolveAlertIncident(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	a.recordAuditEvent(r, "alert_incident.resolve", "alert_incident", req.ID, nil)
+	if hasPagerDutyMapping {
+		tester := alert.NewDeliveryTester(alert.SMTPConfig{}, a.resolveTenantSecretForRequest(r), a.logger)
+		result := tester.UpdatePagerDutyRemoteIncident(r.Context(), mappedPagerDutyIncident, pagerDutyAction)
+		if _, err := a.state.UpdateAlertIncidentSync(r.Context(), a.cfg.Alerts.WorkerKey, mappedPagerDutyIncident.TenantID, mappedPagerDutyIncident.ID, result.ExternalProvider, result.ExternalIncidentID, result.ExternalIncidentURL, result.ExternalSyncStatus, result.Error); err != nil {
+			a.logger.Warn("PagerDuty incident status sync record failed", "incident", req.ID, "action", pagerDutyAction, "error", err)
+		}
+	}
+	a.recordAuditEvent(r, auditAction, "alert_incident", req.ID, nil)
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) findTenantPagerDutyIncident(r *http.Request, incidentID string) (state.PagerDutySyncedIncident, bool) {
+	user := statePrincipal(r)
+	incident, ok, err := a.state.GetTenantPagerDutyIncident(r.Context(), user, r.Header.Get("Authorization"), incidentID)
+	if err != nil {
+		a.logger.Warn("PagerDuty mapped incident lookup failed", "incident", incidentID, "error", err)
+		return state.PagerDutySyncedIncident{}, false
+	}
+	return incident, ok
 }
 
 func (a *App) syncPagerDutyIncidents(w http.ResponseWriter, r *http.Request) {

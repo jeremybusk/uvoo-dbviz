@@ -131,7 +131,7 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     alert_rule_id uuid REFERENCES alert_rules(id) ON DELETE SET NULL,
     fingerprint text NOT NULL DEFAULT '',
-    status text NOT NULL DEFAULT 'firing' CHECK (status IN ('firing', 'resolved', 'notify_failed')),
+    status text NOT NULL DEFAULT 'firing' CHECK (status IN ('firing', 'acknowledged', 'resolved', 'notify_failed')),
     value double precision NOT NULL DEFAULT 0,
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
     occurrence_count integer NOT NULL DEFAULT 1,
@@ -205,6 +205,8 @@ ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS first_seen_at timestamptz N
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS last_seen_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS last_notified_at timestamptz;
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
+ALTER TABLE alert_incidents DROP CONSTRAINT IF EXISTS alert_incidents_status_check;
+ALTER TABLE alert_incidents ADD CONSTRAINT alert_incidents_status_check CHECK (status IN ('firing', 'acknowledged', 'resolved', 'notify_failed'));
 
 UPDATE alert_incidents
 SET fingerprint = COALESCE(NULLIF(payload->>'fingerprint', ''), COALESCE(alert_rule_id::text, 'legacy') || ':' || id::text)
@@ -219,8 +221,9 @@ CREATE INDEX IF NOT EXISTS charts_dashboard_id_idx ON charts(dashboard_id);
 CREATE INDEX IF NOT EXISTS tenant_secrets_tenant_updated_idx ON tenant_secrets(tenant_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS alert_rules_enabled_idx ON alert_rules(tenant_id, enabled);
 CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents(tenant_id, created_at DESC);
+DROP INDEX IF EXISTS alert_incidents_open_fingerprint_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS alert_incidents_open_fingerprint_idx ON alert_incidents(tenant_id, fingerprint)
-    WHERE status = 'firing' AND resolved_at IS NULL;
+    WHERE status IN ('firing', 'acknowledged') AND resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS alert_notifications_tenant_created_idx ON alert_notifications(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS audit_events_tenant_created_idx ON audit_events(tenant_id, created_at DESC);
@@ -1101,6 +1104,72 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS acknowledge_alert_incident(text, text, uuid);
+
+CREATE OR REPLACE FUNCTION acknowledge_alert_incident(actor_subject text, actor_provider text, incident_id uuid)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    value double precision,
+    payload jsonb,
+    occurrence_count integer,
+    first_seen_at timestamptz,
+    last_seen_at timestamptz,
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT current_user_has_role(actor_subject, actor_provider, ARRAY['owner', 'admin', 'editor']) THEN
+        RAISE EXCEPTION 'insufficient role';
+    END IF;
+
+    UPDATE alert_incidents
+    SET status = 'acknowledged',
+        last_seen_at = now(),
+        resolved_at = NULL,
+        payload = alert_incidents.payload || jsonb_build_object('acknowledgedBy', actor_subject, 'acknowledgedManually', true, 'acknowledgedAt', now())
+    WHERE alert_incidents.id = incident_id
+      AND alert_incidents.tenant_id = request_tenant_id()
+      AND alert_incidents.status IN ('firing', 'acknowledged')
+      AND alert_incidents.resolved_at IS NULL
+    RETURNING alert_incidents.id INTO incident_id;
+
+    RETURN QUERY
+    SELECT
+        i.id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.value,
+        i.payload,
+        i.occurrence_count,
+        i.first_seen_at,
+        i.last_seen_at,
+        i.last_notified_at,
+        i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
+        i.created_at
+    FROM alert_incidents i
+    WHERE i.id = incident_id;
+END;
+$$;
+
 DROP FUNCTION IF EXISTS resolve_alert_incident(text, text, uuid);
 
 CREATE OR REPLACE FUNCTION resolve_alert_incident(actor_subject text, actor_provider text, incident_id uuid)
@@ -1246,6 +1315,7 @@ GRANT EXECUTE ON FUNCTION delete_alert_rule(uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_notifications(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION record_contact_test_notification(text, text, text, integer, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION acknowledge_alert_incident(text, text, uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION resolve_alert_incident(text, text, uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_enabled_alert_rules_for_worker(worker_key text)
@@ -1398,7 +1468,7 @@ BEGIN
             FROM alert_incidents i
             WHERE i.tenant_id = resolved_tenant_id
               AND i.fingerprint = normalized_fingerprint
-              AND i.status = 'firing'
+              AND i.status IN ('firing', 'acknowledged')
               AND i.resolved_at IS NULL
             ORDER BY i.last_seen_at DESC
             LIMIT 1
@@ -1426,7 +1496,7 @@ BEGIN
         FROM alert_incidents i
         WHERE i.tenant_id = resolved_tenant_id
           AND i.fingerprint = normalized_fingerprint
-          AND i.status = 'firing'
+          AND i.status IN ('firing', 'acknowledged')
           AND i.resolved_at IS NULL
         ORDER BY i.last_seen_at DESC
         LIMIT 1;
@@ -1613,7 +1683,7 @@ BEGIN
       AND COALESCE(c.config->>'restSyncEnabled', '') IN ('true', '1', 'yes', 'on')
       AND i.external_provider = 'pagerduty'
       AND i.external_incident_id <> ''
-      AND i.status = 'firing'
+      AND i.status IN ('firing', 'acknowledged')
       AND i.resolved_at IS NULL
     ORDER BY i.last_seen_at DESC
     LIMIT 500;
@@ -1655,13 +1725,51 @@ AS $$
       AND COALESCE(c.config->>'restSyncEnabled', '') IN ('true', '1', 'yes', 'on')
       AND i.external_provider = 'pagerduty'
       AND i.external_incident_id <> ''
-      AND i.status = 'firing'
+      AND i.status IN ('firing', 'acknowledged')
       AND i.resolved_at IS NULL
     ORDER BY i.last_seen_at DESC
     LIMIT 100;
 $$;
 
 GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents() TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION get_pagerduty_incident_contact(incident_id uuid)
+RETURNS TABLE(
+    id uuid,
+    tenant_id text,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    external_incident_id text,
+    external_incident_url text,
+    contact_target text,
+    contact_config jsonb
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        i.id,
+        t.slug AS tenant_id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.external_incident_id,
+        i.external_incident_url,
+        c.target AS contact_target,
+        COALESCE(c.config, '{}'::jsonb) AS contact_config
+    FROM alert_incidents i
+    JOIN tenants t ON t.id = i.tenant_id
+    JOIN alert_rules a ON a.id = i.alert_rule_id
+    JOIN contact_endpoints c ON c.id = a.contact_endpoint_id
+    WHERE i.tenant_id = request_tenant_id()
+      AND i.id = incident_id
+      AND c.kind = 'pagerduty'
+      AND i.status IN ('firing', 'acknowledged')
+      AND i.resolved_at IS NULL
+    LIMIT 1;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_pagerduty_incident_contact(uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION reconcile_pagerduty_incident_for_worker(
     worker_key text,
@@ -1717,7 +1825,12 @@ BEGIN
     normalized_sync_status := COALESCE(NULLIF(sync_status, ''), 'remote_' || COALESCE(NULLIF(normalized_remote_status, ''), 'unknown'));
 
     UPDATE alert_incidents
-    SET status = CASE WHEN normalized_remote_status = 'resolved' THEN 'resolved' ELSE alert_incidents.status END,
+    SET status = CASE
+            WHEN normalized_remote_status = 'resolved' THEN 'resolved'
+            WHEN normalized_remote_status = 'acknowledged' THEN 'acknowledged'
+            WHEN normalized_remote_status = 'triggered' THEN 'firing'
+            ELSE alert_incidents.status
+        END,
         resolved_at = CASE WHEN normalized_remote_status = 'resolved' THEN COALESCE(alert_incidents.resolved_at, now()) ELSE alert_incidents.resolved_at END,
         last_seen_at = now(),
         payload = alert_incidents.payload || jsonb_build_object('pagerDutyRemoteStatus', normalized_remote_status, 'pagerDutyReconciledAt', now()),

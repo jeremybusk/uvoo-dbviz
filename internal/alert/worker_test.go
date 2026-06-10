@@ -204,7 +204,7 @@ func TestNotifyPagerDutyEventsV2UsesRoutingKeySecretAndDedupKey(t *testing.T) {
 			t.Fatalf("payload = %#v", payload)
 		}
 		body, _ := payload["payload"].(map[string]any)
-		if body["source"] != "checkout" || body["severity"] != "critical" {
+		if body["source"] != "checkout" || body["severity"] != "critical" || body["summary"] != "timeout" {
 			t.Fatalf("event payload = %#v", body)
 		}
 		if body["custom_details"] == nil {
@@ -458,6 +458,41 @@ func TestNotifyPagerDutyRESTResolvesIncident(t *testing.T) {
 	}, map[string]any{"tenantId": "dev", "externalIncidentId": "Q123"}, "resolve")
 
 	if result.Status != "success" || result.ExternalIncidentID != "Q123" || result.ExternalSyncStatus != "resolved" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestNotifyPagerDutyRESTAcknowledgesIncident(t *testing.T) {
+	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
+	worker.SetSecretResolver(func(context.Context, string, string) (string, bool) {
+		return "rest-token", true
+	})
+	worker.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPut || r.URL.Path != "/incidents/Q123" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		incident, _ := payload["incident"].(map[string]any)
+		if incident["status"] != "acknowledged" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		return textResponse(http.StatusOK, `{"incident":{"id":"Q123","html_url":"https://example.pagerduty.com/incidents/Q123"}}`), nil
+	})}
+
+	result := worker.notifyPagerDuty(context.Background(), ContactEndpoint{
+		Kind: "pagerduty",
+		Config: map[string]string{
+			"restSyncEnabled":     "true",
+			"restApiKeySecretRef": "pagerduty-rest-key",
+			"serviceId":           "P12345",
+			"fromEmail":           "alerts@example.com",
+		},
+	}, map[string]any{"tenantId": "dev", "externalIncidentId": "Q123"}, "acknowledge")
+
+	if result.Status != "success" || result.ExternalIncidentID != "Q123" || result.ExternalSyncStatus != "acknowledged" {
 		t.Fatalf("result = %#v", result)
 	}
 }

@@ -229,7 +229,7 @@ export type AlertIncident = {
   id: string;
   alert_rule_id: string | null;
   fingerprint: string;
-  status: 'firing' | 'resolved' | 'notify_failed';
+  status: 'firing' | 'acknowledged' | 'resolved' | 'notify_failed';
   value: number;
   payload: Record<string, unknown>;
   occurrence_count: number;

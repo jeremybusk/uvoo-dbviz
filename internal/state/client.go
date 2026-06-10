@@ -409,6 +409,20 @@ func (c *Client) ListTenantPagerDutySyncedIncidents(ctx context.Context, user au
 	return rows, err
 }
 
+func (c *Client) GetTenantPagerDutyIncident(ctx context.Context, user auth.Principal, bearer string, incidentID string) (PagerDutySyncedIncident, bool, error) {
+	var rows []PagerDutySyncedIncident
+	err := c.RPC(ctx, "get_pagerduty_incident_contact", map[string]any{
+		"incident_id": incidentID,
+	}, user, bearer, &rows)
+	if err != nil {
+		return PagerDutySyncedIncident{}, false, err
+	}
+	if len(rows) == 0 {
+		return PagerDutySyncedIncident{}, false, nil
+	}
+	return rows[0], true, nil
+}
+
 func (c *Client) ReconcilePagerDutyIncident(ctx context.Context, workerKey, tenantID, incidentID, remoteStatus, externalURL, syncStatus, syncError string) (AlertIncident, error) {
 	var normalizedIncidentID any
 	if uuidPattern.MatchString(incidentID) {
