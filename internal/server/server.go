@@ -975,7 +975,13 @@ func (a *App) testAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	if rows == nil {
+		rows = []map[string]any{}
+	}
 	evaluations := alert.EvaluateRows(condition, rows, "preview")
+	if evaluations == nil {
+		evaluations = []alert.Evaluation{}
+	}
 	value := 0.0
 	if len(evaluations) > 0 {
 		value = evaluations[0].Value
@@ -1784,6 +1790,9 @@ func (a *App) syncPagerDutyIncidents(w http.ResponseWriter, r *http.Request) {
 	loadErr := ""
 	if len(incidents) == 0 {
 		loadErr = "no mapped PagerDuty incidents found"
+	}
+	if results == nil {
+		results = []alert.PagerDutyReconcileResult{}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"count":   len(results),

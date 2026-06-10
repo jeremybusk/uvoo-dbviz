@@ -692,8 +692,9 @@ function App() {
       query: queryPayload(),
       condition: currentAlertCondition()
     });
-    setAlertPreviewResult(result);
-    setAlertPreview(alertPreviewText(result));
+    const normalizedResult = normalizeAlertPreviewResult(result);
+    setAlertPreviewResult(normalizedResult);
+    setAlertPreview(alertPreviewText(normalizedResult));
   }
 
   async function resolveIncident(incident: AlertIncident) {
@@ -706,7 +707,8 @@ function App() {
     const result = await apiPost<PagerDutySyncResult>('/api/alerts/pagerduty/sync', {});
     await loadAlertState();
     loadAuditEvents().catch(() => undefined);
-    const failed = result.results.filter((item) => item.Status === 'failed').length;
+    const syncResults = Array.isArray(result.results) ? result.results : [];
+    const failed = syncResults.filter((item) => item.Status === 'failed').length;
     if (result.count === 0) {
       messageApi.info(result.message || 'No mapped PagerDuty incidents found');
     } else if (failed > 0) {
@@ -2014,6 +2016,15 @@ function normalizeAlertConditionPayload(condition?: AlertRule['condition']): Ale
     threshold: Number(condition?.threshold ?? 0),
     value: condition?.value || '',
     for: condition?.for || ''
+  };
+}
+
+function normalizeAlertPreviewResult(result: AlertPreviewResult): AlertPreviewResult {
+  return {
+    ...result,
+    match_count: Number(result.match_count ?? 0),
+    rows: Array.isArray(result.rows) ? result.rows : [],
+    matches: Array.isArray(result.matches) ? result.matches : []
   };
 }
 

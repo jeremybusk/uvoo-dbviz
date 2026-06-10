@@ -841,6 +841,9 @@ export function AlertsSection(props: {
       rule.enabled ? 'enabled' : 'disabled'
     ].some((value) => value.toLowerCase().includes(term)));
   }, [alertSearch, props.alertRules]);
+  const previewRows = Array.isArray(props.alertPreviewResult?.rows) ? props.alertPreviewResult.rows : [];
+  const previewMatches = Array.isArray(props.alertPreviewResult?.matches) ? props.alertPreviewResult.matches : [];
+  const previewMatchCount = Number(props.alertPreviewResult?.match_count ?? previewMatches.length);
 
   return (
     <Section title="Alerts">
@@ -910,13 +913,13 @@ export function AlertsSection(props: {
           items={[
             {
               key: 'matches',
-              label: `Preview details (${props.alertPreviewResult.match_count} matches, ${props.alertPreviewResult.rows.length} rows)`,
+              label: `Preview details (${previewMatchCount} matches, ${previewRows.length} rows)`,
               children: (
                 <Space direction="vertical" size={8} className="full">
-                  {props.alertPreviewResult.matches.length > 0 && (
-                    <pre className="json-preview">{JSON.stringify(props.alertPreviewResult.matches.slice(0, 5), null, 2)}</pre>
+                  {previewMatches.length > 0 && (
+                    <pre className="json-preview">{JSON.stringify(previewMatches.slice(0, 5), null, 2)}</pre>
                   )}
-                  <pre className="json-preview">{JSON.stringify(props.alertPreviewResult.rows.slice(0, 5), null, 2)}</pre>
+                  <pre className="json-preview">{JSON.stringify(previewRows.slice(0, 5), null, 2)}</pre>
                 </Space>
               )
             }
