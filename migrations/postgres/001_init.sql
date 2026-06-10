@@ -588,8 +588,27 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION delete_dashboard(dashboard_id uuid)
+RETURNS TABLE(id uuid, name text, layout jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    RETURN QUERY
+    DELETE FROM dashboards d
+    WHERE d.id = dashboard_id
+      AND d.tenant_id = request_tenant_id()
+    RETURNING d.id, d.name, d.layout, d.updated_at, d.created_at;
+END;
+$$;
+
 GRANT EXECUTE ON FUNCTION list_dashboards() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_dashboard(uuid, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION delete_dashboard(uuid) TO dbviz_web;
+NOTIFY pgrst, 'reload schema';
 
 CREATE OR REPLACE FUNCTION list_saved_queries()
 RETURNS TABLE(id uuid, name text, description text, query jsonb, updated_at timestamptz, created_at timestamptz)

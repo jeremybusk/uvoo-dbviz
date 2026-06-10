@@ -84,6 +84,7 @@ function App() {
   const [editingDashboardId, setEditingDashboardId] = useState('');
   const [dashboardName, setDashboardName] = useState('Sample Observability');
   const [dashboardPanels, setDashboardPanels] = useState<DashboardChart[]>([]);
+  const [dashboardSavedSignature, setDashboardSavedSignature] = useState('');
   const [editingPanelId, setEditingPanelId] = useState('');
   const [panelTitle, setPanelTitle] = useState('Log volume');
   const [panelVisualization, setPanelVisualization] = useState<VisualizationType>('line');
@@ -313,6 +314,11 @@ function App() {
 
   async function saveDashboard() {
     setError('');
+    const cleanName = dashboardName.trim();
+    if (!cleanName) {
+      setError('Dashboard name is required');
+      return;
+    }
     const panels = normalizeDashboardPanels(dashboardPanels);
     if (panels.length === 0) {
       setError('Add at least one panel before saving the dashboard');
@@ -320,16 +326,32 @@ function App() {
     }
     const saved = await apiPost<Dashboard[]>('/api/dashboards', {
       id: editingDashboardId || null,
-      name: dashboardName,
+      name: cleanName,
       layout: { version: 1, charts: panels }
     });
     setDashboards((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     loadAuditEvents().catch(() => undefined);
     if (saved[0]) {
       setEditingDashboardId(saved[0].id);
+      setDashboardName(saved[0].name);
       const savedPanels = normalizeDashboardPanels(saved[0].layout?.charts || panels);
       setDashboardPanels(savedPanels);
+      setDashboardSavedSignature(dashboardSignature(saved[0].name, savedPanels));
       if (!editingPanelId && savedPanels[0]?.id) setEditingPanelId(savedPanels[0].id);
+    }
+  }
+
+  async function deleteDashboard(dashboard: Dashboard) {
+    const ok = window.confirm(`Delete dashboard "${dashboard.name}"?`);
+    if (!ok) return;
+    const deleted = await apiPost<Dashboard[]>('/api/dashboards/delete', { id: dashboard.id });
+    setDashboards((current) => current.filter((item) => item.id !== dashboard.id));
+    if (editingDashboardId === dashboard.id) {
+      newDashboard();
+    }
+    loadAuditEvents().catch(() => undefined);
+    if (deleted.length === 0) {
+      setError('Dashboard was not deleted. It may already be gone or belong to another tenant.');
     }
   }
 
@@ -534,10 +556,26 @@ function App() {
     setEditingDashboardId('');
     setDashboardName('Untitled Dashboard');
     setDashboardPanels([]);
+    setDashboardSavedSignature('');
     setEditingPanelId('');
     setPanelTitle(defaultPanelTitle());
     setPanelVisualization('line');
     setActiveTab('dashboard');
+  }
+
+  function duplicateDashboard(dashboard: Dashboard) {
+    const charts = normalizeDashboardPanels(dashboard.layout?.charts || []).map((panel, index) => normalizeDashboardPanel({
+      ...panel,
+      id: newClientID(),
+      position: { ...(panel.position || {}), y: index }
+    }, index));
+    setEditingDashboardId('');
+    setDashboardName(`${dashboard.name} copy`);
+    setDashboardPanels(charts);
+    setDashboardSavedSignature('');
+    setActiveTab('dashboard');
+    if (charts[0]) openPanel(charts[0]);
+    else setEditingPanelId('');
   }
 
   function selectTenant(tenant: string) {
@@ -558,6 +596,7 @@ function App() {
     setDashboardName(dashboard.name);
     const charts = normalizeDashboardPanels(dashboard.layout?.charts || []);
     setDashboardPanels(charts);
+    setDashboardSavedSignature(dashboardSignature(dashboard.name, charts));
     setActiveTab('dashboard');
     if (charts[0]) openPanel(charts[0]);
     else setEditingPanelId('');
@@ -729,13 +768,18 @@ function App() {
     }).catch((err) => setError(err.message));
   }
 
+  const currentDashboardSignature = dashboardSignature(dashboardName, dashboardPanels);
+  const dashboardDirty = dashboardSavedSignature
+    ? dashboardSavedSignature !== currentDashboardSignature
+    : dashboardPanels.length > 0 || Boolean(editingDashboardId);
+
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} jwtClaims={jwtClaims} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} /> },
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={updateQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
     { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
-    { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} activePanelId={editingPanelId} dashboardName={dashboardName} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onNewDashboard={newDashboard} onAddPanel={addPanelToDashboard} onUpdatePanel={updateSelectedPanel} onSave={saveDashboard} onOpen={openDashboard} onOpenPanel={openPanel} onDuplicatePanel={duplicatePanel} onMovePanel={movePanel} onRemovePanel={removePanel} /> },
+    { key: 'dashboards', label: 'Dashboards', children: <DashboardsSection user={user} dashboards={dashboards} dashboardPanels={dashboardPanels} editingDashboardId={editingDashboardId} activePanelId={editingPanelId} dashboardName={dashboardName} dashboardDirty={dashboardDirty} panelTitle={panelTitle} panelVisualization={panelVisualization} onDashboardName={setDashboardName} onPanelTitle={setPanelTitle} onPanelVisualization={setPanelVisualization} onNewDashboard={newDashboard} onAddPanel={addPanelToDashboard} onUpdatePanel={updateSelectedPanel} onSave={saveDashboard} onOpen={openDashboard} onDuplicateDashboard={duplicateDashboard} onDeleteDashboard={(dashboard) => deleteDashboard(dashboard).catch((err) => setError(err.message))} onOpenPanel={openPanel} onDuplicatePanel={duplicatePanel} onMovePanel={movePanel} onRemovePanel={removePanel} /> },
     { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
@@ -1306,6 +1350,19 @@ function defaultSQL(datasetID: string) {
 
 function normalizeDashboardPanels(panels: DashboardChart[]): DashboardChart[] {
   return panels.map((panel, index) => normalizeDashboardPanel(panel, index));
+}
+
+function dashboardSignature(name: string, panels: DashboardChart[]): string {
+  return JSON.stringify({
+    name: name.trim(),
+    panels: normalizeDashboardPanels(panels).map((panel) => ({
+      id: panel.id,
+      title: panel.title,
+      query: panel.query,
+      visualization: panel.visualization,
+      position: panel.position
+    }))
+  });
 }
 
 function newClientID(): string {

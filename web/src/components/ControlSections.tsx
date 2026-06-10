@@ -411,8 +411,10 @@ export function DashboardsSection(props: {
   user: Principal | null;
   dashboards: Dashboard[];
   dashboardPanels: DashboardChart[];
+  editingDashboardId: string;
   activePanelId: string;
   dashboardName: string;
+  dashboardDirty: boolean;
   panelTitle: string;
   panelVisualization: VisualizationType;
   onDashboardName: (value: string) => void;
@@ -423,6 +425,8 @@ export function DashboardsSection(props: {
   onUpdatePanel: () => void;
   onSave: () => void;
   onOpen: (dashboard: Dashboard) => void;
+  onDuplicateDashboard: (dashboard: Dashboard) => void;
+  onDeleteDashboard: (dashboard: Dashboard) => void;
   onOpenPanel: (panel: DashboardChart) => void;
   onDuplicatePanel: (index: number) => void;
   onMovePanel: (index: number, direction: -1 | 1) => void;
@@ -430,6 +434,10 @@ export function DashboardsSection(props: {
 }) {
   return (
     <Section title="Dashboards">
+      <Flex gap={6} wrap="wrap">
+        {props.editingDashboardId && <Tag color="blue">Editing saved dashboard</Tag>}
+        {props.dashboardDirty && <Tag color="orange">Unsaved changes</Tag>}
+      </Flex>
       <Field label="Name"><Input value={props.dashboardName} onChange={(event) => props.onDashboardName(event.target.value)} /></Field>
       <Field label="Panel title"><Input value={props.panelTitle} onChange={(event) => props.onPanelTitle(event.target.value)} /></Field>
       <Field label="Visualization">
@@ -458,7 +466,11 @@ export function DashboardsSection(props: {
         </Flex>
       )} />
       <ActionList items={props.dashboards} empty="No dashboards" render={(dashboard) => (
-        <Button block key={dashboard.id} onClick={() => props.onOpen(dashboard)}>{dashboard.name}</Button>
+        <Flex key={dashboard.id} gap={6}>
+          <Button block type={dashboard.id === props.editingDashboardId ? 'primary' : 'default'} onClick={() => props.onOpen(dashboard)}>{dashboard.name}</Button>
+          <Button icon={<CopyOutlined />} onClick={() => props.onDuplicateDashboard(dashboard)} />
+          <Button icon={<DeleteOutlined />} danger onClick={() => props.onDeleteDashboard(dashboard)} />
+        </Flex>
       )} />
     </Section>
   );

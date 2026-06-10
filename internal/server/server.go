@@ -56,6 +56,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/data-sources/test", a.requireAuth(a.testDataSource))
 	a.mux.HandleFunc("GET /api/dashboards", a.requireAuth(a.listDashboards))
 	a.mux.HandleFunc("POST /api/dashboards", a.requireAuth(a.saveDashboard))
+	a.mux.HandleFunc("POST /api/dashboards/delete", a.requireAuth(a.deleteDashboard))
 	a.mux.HandleFunc("GET /api/alerts/rules", a.requireAuth(a.listAlertRules))
 	a.mux.HandleFunc("POST /api/alerts/rules", a.requireAuth(a.saveAlertRule))
 	a.mux.HandleFunc("POST /api/alerts/test", a.requireAuth(a.testAlertRule))
@@ -591,6 +592,7 @@ func (a *App) saveDashboard(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
 	if req.Name == "" {
 		writeError(w, http.StatusBadRequest, errors.New("dashboard name is required"))
 		return
@@ -610,6 +612,32 @@ func (a *App) saveDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.recordAuditEvent(r, "dashboard.save", "dashboard", targetIDFromRows(rows), map[string]any{"name": req.Name})
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) deleteDashboard(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.ID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("dashboard id is required"))
+		return
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "delete_dashboard", map[string]any{
+		"dashboard_id": req.ID,
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.recordAuditEvent(r, "dashboard.delete", "dashboard", req.ID, nil)
 	writeJSON(w, http.StatusOK, rows)
 }
 

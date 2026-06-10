@@ -153,8 +153,10 @@ without schema churn.
 
 - `GET /api/dashboards`
 - `POST /api/dashboards`
+- `POST /api/dashboards/delete`
 - `list_dashboards()`
 - `save_dashboard(dashboard_id uuid, dashboard_name text, dashboard_layout jsonb)`
+- `delete_dashboard(dashboard_id uuid)`
 
 Saved queries use the same tenant-scoped control-plane path and validate query
 payloads against configured datasets before persisting them:
