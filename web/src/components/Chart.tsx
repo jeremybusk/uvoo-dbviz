@@ -57,9 +57,20 @@ export function Chart({ rows, themeMode, type }: { rows: QueryRow[]; themeMode: 
         data: rows.filter((row) => (row.series || 'all') === name).map((row) => [row.ts * 1000, row.value])
       }))
     });
-    const resize = () => chart.resize();
+    let resizeFrame = 0;
+    const resize = () => {
+      if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
+      resizeFrame = window.requestAnimationFrame(() => chart.resize());
+    };
+    const resizeObserver = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(resize)
+      : null;
+    if (resizeObserver) resizeObserver.observe(ref.current);
     window.addEventListener('resize', resize);
+    resize();
     return () => {
+      if (resizeFrame) window.cancelAnimationFrame(resizeFrame);
+      resizeObserver?.disconnect();
       window.removeEventListener('resize', resize);
       chart.dispose();
     };
