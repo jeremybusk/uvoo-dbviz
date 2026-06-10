@@ -2,6 +2,7 @@ package alert
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -173,6 +174,61 @@ func TestEmailContactSkipsWhenSMTPIsNotConfigured(t *testing.T) {
 	result := worker.notify(context.Background(), ContactEndpoint{Kind: "email", Target: "alerts@example.com"}, map[string]any{"ruleName": "Email alert"})
 	if result.Status != "skipped" {
 		t.Fatalf("status = %q, want skipped", result.Status)
+	}
+}
+
+func TestNotifyPagerDutyEventsV2UsesRoutingKeySecretAndDedupKey(t *testing.T) {
+	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
+	worker.SetSecretResolver(func(ref string) (string, bool) {
+		if ref != "pagerduty-prod-events-key" {
+			t.Fatalf("secret ref = %s", ref)
+		}
+		return "routing-key", true
+	})
+	worker.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s", r.Method)
+		}
+		if r.URL.String() != pagerDutyEventsV2Endpoint {
+			t.Fatalf("url = %s", r.URL.String())
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["routing_key"] != "routing-key" || payload["event_action"] != "trigger" || payload["dedup_key"] != "dev:rule-1:svc-a" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		body, _ := payload["payload"].(map[string]any)
+		if body["source"] != "checkout" || body["severity"] != "critical" {
+			t.Fatalf("event payload = %#v", body)
+		}
+		if body["custom_details"] == nil {
+			t.Fatalf("custom details missing: %#v", body)
+		}
+		return textResponse(http.StatusAccepted, `{"status":"success"}`), nil
+	})}
+
+	result := worker.notify(context.Background(), ContactEndpoint{
+		Kind:   "pagerduty",
+		Target: "",
+		Config: map[string]string{
+			"mode":                "events_v2",
+			"routingKeySecretRef": "pagerduty-prod-events-key",
+			"severity":            "critical",
+			"sourceField":         "service_name",
+		},
+	}, map[string]any{
+		"ruleId":      "rule-1",
+		"ruleName":    "Timeouts",
+		"tenantId":    "dev",
+		"fingerprint": "dev:rule-1:svc-a",
+		"value":       float64(2),
+		"row":         map[string]any{"service_name": "checkout", "message": "timeout"},
+	})
+
+	if result.Status != "success" || result.StatusCode != http.StatusAccepted {
+		t.Fatalf("result = %#v", result)
 	}
 }
 

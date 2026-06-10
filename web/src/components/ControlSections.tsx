@@ -949,9 +949,21 @@ export function ContactsSection(props: {
   contactName: string;
   contactTarget: string;
   contactKind: ContactEndpoint['kind'];
+  pagerDutyRoutingKeySecretRef: string;
+  pagerDutySeverity: string;
+  pagerDutySourceField: string;
+  pagerDutyComponent: string;
+  pagerDutyGroup: string;
+  pagerDutyClass: string;
   onName: (value: string) => void;
   onTarget: (value: string) => void;
   onKind: (value: ContactEndpoint['kind']) => void;
+  onPagerDutyRoutingKeySecretRef: (value: string) => void;
+  onPagerDutySeverity: (value: string) => void;
+  onPagerDutySourceField: (value: string) => void;
+  onPagerDutyComponent: (value: string) => void;
+  onPagerDutyGroup: (value: string) => void;
+  onPagerDutyClass: (value: string) => void;
   onNew: () => void;
   onOpen: (contact: ContactEndpoint) => void;
   onUseForAlert: (contact: ContactEndpoint) => void;
@@ -981,9 +993,28 @@ export function ContactsSection(props: {
         </Select>
       </Field>
       <Field label="Target"><Input value={props.contactTarget} onChange={(event) => props.onTarget(event.target.value)} placeholder={contactTargetPlaceholder(props.contactKind)} /></Field>
+      {props.contactKind === 'pagerduty' && (
+        <>
+          <Field label="Routing key secret">
+            <Input value={props.pagerDutyRoutingKeySecretRef} onChange={(event) => props.onPagerDutyRoutingKeySecretRef(event.target.value)} placeholder="pagerduty-prod-events-key" />
+          </Field>
+          <Field label="Severity">
+            <Select value={props.pagerDutySeverity} onChange={props.onPagerDutySeverity}>
+              <Select.Option value="critical">critical</Select.Option>
+              <Select.Option value="error">error</Select.Option>
+              <Select.Option value="warning">warning</Select.Option>
+              <Select.Option value="info">info</Select.Option>
+            </Select>
+          </Field>
+          <Field label="Source field"><Input value={props.pagerDutySourceField} onChange={(event) => props.onPagerDutySourceField(event.target.value)} placeholder="service_name" /></Field>
+          <Field label="Component"><Input value={props.pagerDutyComponent} onChange={(event) => props.onPagerDutyComponent(event.target.value)} /></Field>
+          <Field label="Group"><Input value={props.pagerDutyGroup} onChange={(event) => props.onPagerDutyGroup(event.target.value)} /></Field>
+          <Field label="Class"><Input value={props.pagerDutyClass} onChange={(event) => props.onPagerDutyClass(event.target.value)} /></Field>
+        </>
+      )}
       <Flex gap={8} wrap="wrap">
         <Button onClick={props.onNew}>New</Button>
-        <Button icon={<SaveOutlined />} disabled={!props.user || !props.contactTarget} onClick={props.onSave}>{props.editingContactId ? 'Update contact' : 'Save contact'}</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user || !contactCanSave(props)} onClick={props.onSave}>{props.editingContactId ? 'Update contact' : 'Save contact'}</Button>
       </Flex>
       <Field label="Find contact">
         <Input.Search allowClear value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} />
@@ -1022,10 +1053,19 @@ function contactTargetPlaceholder(kind: ContactEndpoint['kind']): string {
     case 'email':
       return 'alerts@example.com';
     case 'pagerduty':
-      return 'PagerDuty integration URL';
+      return 'https://events.pagerduty.com/v2/enqueue';
     default:
       return 'https://example.com/alerts';
   }
+}
+
+function contactCanSave(props: {
+  contactKind: ContactEndpoint['kind'];
+  contactTarget: string;
+  pagerDutyRoutingKeySecretRef: string;
+}): boolean {
+  if (props.contactKind === 'pagerduty') return Boolean(props.pagerDutyRoutingKeySecretRef.trim());
+  return Boolean(props.contactTarget.trim());
 }
 
 export function IncidentsSection({ incidents, onResolve }: { incidents: AlertIncident[]; onResolve: (incident: AlertIncident) => void }) {

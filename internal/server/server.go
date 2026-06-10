@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -677,19 +676,12 @@ func validateDataSourceURL(raw string) error {
 }
 
 func resolveSecretRef(ref string) (string, bool) {
-	name := secretEnvName(ref)
+	name := alert.SecretEnvName(ref)
 	value, ok := os.LookupEnv(name)
 	if ok {
 		return value, true
 	}
 	return "", false
-}
-
-var secretRefCleaner = regexp.MustCompile(`[^A-Za-z0-9]+`)
-
-func secretEnvName(ref string) string {
-	clean := strings.Trim(secretRefCleaner.ReplaceAllString(strings.ToUpper(strings.TrimSpace(ref)), "_"), "_")
-	return "DBVIZ_SECRET_" + clean
 }
 
 func (a *App) listDashboards(w http.ResponseWriter, r *http.Request) {
@@ -1098,6 +1090,17 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Kind = strings.TrimSpace(req.Kind)
+	req.Target = strings.TrimSpace(req.Target)
+	config, err := normalizeContactConfig(req.Kind, req.Target, req.Config)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Kind == "pagerduty" && req.Target == "" {
+		req.Target = "https://events.pagerduty.com/v2/enqueue"
+	}
 	if req.Name == "" || req.Kind == "" || req.Target == "" {
 		writeError(w, http.StatusBadRequest, errors.New("contact name, kind, and target are required"))
 		return
@@ -1107,12 +1110,12 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		contactID = req.ID
 	}
 	var rows []map[string]any
-	err := a.state.RPC(r.Context(), "save_contact_endpoint", map[string]any{
+	err = a.state.RPC(r.Context(), "save_contact_endpoint", map[string]any{
 		"contact_id":     contactID,
 		"contact_name":   req.Name,
 		"contact_kind":   req.Kind,
 		"contact_target": req.Target,
-		"contact_config": req.Config,
+		"contact_config": config,
 	}, statePrincipal(r), r.Header.Get("Authorization"), &rows)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
@@ -1120,6 +1123,60 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordAuditEvent(r, "contact_endpoint.save", "contact_endpoint", targetIDFromRows(rows), map[string]any{"name": req.Name, "kind": req.Kind})
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func normalizeContactConfig(kind string, target string, input map[string]any) (map[string]any, error) {
+	switch kind {
+	case "email", "webhook", "pagerduty":
+	default:
+		return nil, errors.New("contact kind is not supported")
+	}
+	output := map[string]any{}
+	for key, value := range input {
+		if text, ok := value.(string); ok {
+			output[key] = strings.TrimSpace(text)
+		}
+	}
+	if kind != "pagerduty" {
+		return output, nil
+	}
+	if value, _ := output["routingKey"].(string); value != "" {
+		return nil, errors.New("PagerDuty routing key must be stored as a secret ref, not inline config")
+	}
+	mode, _ := output["mode"].(string)
+	if mode == "" {
+		mode = "events_v2"
+		output["mode"] = mode
+	}
+	if mode != "events_v2" {
+		return nil, errors.New("PagerDuty REST incident sync is not implemented yet; use events_v2")
+	}
+	if target != "" {
+		if err := validatePagerDutyEventsURL(target); err != nil {
+			return nil, err
+		}
+	}
+	if value, _ := output["routingKeySecretRef"].(string); value == "" {
+		return nil, errors.New("PagerDuty routing key secret ref is required")
+	}
+	if value, _ := output["severity"].(string); value == "" {
+		output["severity"] = "error"
+	}
+	return output, nil
+}
+
+func validatePagerDutyEventsURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "https" {
+		return errors.New("PagerDuty Events API URL must use https")
+	}
+	if parsed.Host != "events.pagerduty.com" {
+		return errors.New("PagerDuty Events API URL must use events.pagerduty.com")
+	}
+	return nil
 }
 
 func (a *App) deleteContactEndpoint(w http.ResponseWriter, r *http.Request) {

@@ -6,12 +6,14 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/smtp"
+	"os"
 	"regexp"
 	"sort"
 	"strconv"
@@ -57,6 +59,8 @@ type ContactEndpoint struct {
 	Config map[string]string `json:"config"`
 }
 
+const pagerDutyEventsV2Endpoint = "https://events.pagerduty.com/v2/enqueue"
+
 type Worker struct {
 	datasets map[string]config.Dataset
 	maxRows  int
@@ -69,6 +73,7 @@ type Worker struct {
 	poll     time.Duration
 	dedupe   time.Duration
 	smtp     SMTPConfig
+	secrets  func(string) (string, bool)
 	pending  map[string]time.Time
 	active   map[string]map[string]struct{}
 	stop     chan struct{}
@@ -138,8 +143,16 @@ func NewPollingWorker(datasets map[string]config.Dataset, maxRows int, ch *click
 		dedupe:   5 * time.Minute,
 		pending:  map[string]time.Time{},
 		active:   map[string]map[string]struct{}{},
+		secrets:  ResolveSecretRefFromEnv,
 		stop:     make(chan struct{}),
 	}
+}
+
+func (w *Worker) SetSecretResolver(resolve func(string) (string, bool)) {
+	if resolve == nil {
+		resolve = ResolveSecretRefFromEnv
+	}
+	w.secrets = resolve
 }
 
 func RulesFromJSON(raw string) ([]Rule, error) {
@@ -371,8 +384,25 @@ func (w *Worker) recordResolved(ctx context.Context, rule Rule, fingerprint stri
 	payload["tenantId"] = rule.TenantID
 	payload["value"] = value
 	payload["labels"] = rule.Labels
-	if _, err := w.record(ctx, rule, "resolved", value, payload, fingerprint, int(w.dedupe.Seconds())); err != nil {
+	result, err := w.record(ctx, rule, "resolved", value, payload, fingerprint, int(w.dedupe.Seconds()))
+	if err != nil {
 		w.logger.Warn("alert incident resolve failed", "rule", rule.Name, "error", err)
+		return
+	}
+	if result.IncidentID == "" {
+		return
+	}
+	payload["fingerprint"] = fingerprint
+	for _, contact := range rule.Contacts {
+		if contact.Kind != "pagerduty" {
+			continue
+		}
+		delivery := w.notifyPagerDuty(ctx, contact, payload, "resolve")
+		if w.delivery != nil {
+			if err := w.delivery(ctx, rule, result.IncidentID, contact, delivery, payload); err != nil {
+				w.logger.Warn("alert resolve notification delivery record failed", "rule", rule.Name, "kind", contact.Kind, "error", err)
+			}
+		}
 	}
 }
 
@@ -432,7 +462,9 @@ func ruleFingerprint(rule Rule) string {
 
 func (w *Worker) notify(ctx context.Context, contact ContactEndpoint, incident map[string]any) DeliveryResult {
 	switch contact.Kind {
-	case "webhook", "pagerduty":
+	case "pagerduty":
+		return w.notifyPagerDuty(ctx, contact, incident, "trigger")
+	case "webhook":
 		body, _ := json.Marshal(incident)
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, contact.Target, bytes.NewReader(body))
 		if err != nil {
@@ -491,6 +523,140 @@ func (w *Worker) notifyEmail(contact ContactEndpoint, incident map[string]any) D
 		return DeliveryResult{Status: "failed", Error: err.Error()}
 	}
 	return DeliveryResult{Status: "success"}
+}
+
+func (w *Worker) notifyPagerDuty(ctx context.Context, contact ContactEndpoint, incident map[string]any, action string) DeliveryResult {
+	mode := strings.TrimSpace(contact.Config["mode"])
+	if mode == "" {
+		mode = "events_v2"
+	}
+	if mode != "events_v2" {
+		return DeliveryResult{Status: "failed", Error: fmt.Sprintf("unsupported PagerDuty mode: %s", mode)}
+	}
+	routingKey, err := w.pagerDutyRoutingKey(contact)
+	if err != nil {
+		return DeliveryResult{Status: "failed", Error: err.Error()}
+	}
+	endpoint := strings.TrimSpace(contact.Target)
+	if endpoint == "" || endpoint == "events_v2" {
+		endpoint = pagerDutyEventsV2Endpoint
+	}
+	payload := pagerDutyEventPayload(contact, incident, routingKey, action)
+	body, _ := json.Marshal(payload)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return DeliveryResult{Status: "failed", Error: err.Error()}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := w.http.Do(req)
+	if err != nil {
+		return DeliveryResult{Status: "failed", Error: err.Error()}
+	}
+	defer resp.Body.Close()
+	responseBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if resp.StatusCode >= 300 {
+		errText := fmt.Sprintf("PagerDuty returned %s", resp.Status)
+		if len(responseBody) > 0 {
+			errText = errText + ": " + string(responseBody)
+		}
+		return DeliveryResult{Status: "failed", StatusCode: resp.StatusCode, Error: errText}
+	}
+	return DeliveryResult{Status: "success", StatusCode: resp.StatusCode}
+}
+
+func (w *Worker) pagerDutyRoutingKey(contact ContactEndpoint) (string, error) {
+	if value := strings.TrimSpace(contact.Config["routingKey"]); value != "" {
+		return value, nil
+	}
+	ref := strings.TrimSpace(contact.Config["routingKeySecretRef"])
+	if ref == "" {
+		return "", errors.New("PagerDuty routingKeySecretRef is required")
+	}
+	value, ok := w.secrets(ref)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("PagerDuty routing key secret ref is not configured: %s", ref)
+	}
+	return strings.TrimSpace(value), nil
+}
+
+func pagerDutyEventPayload(contact ContactEndpoint, incident map[string]any, routingKey string, action string) map[string]any {
+	if action != "resolve" && action != "acknowledge" {
+		action = "trigger"
+	}
+	dedupKey := strings.TrimSpace(fmt.Sprint(incident["fingerprint"]))
+	if dedupKey == "" || dedupKey == "<nil>" {
+		dedupKey = strings.TrimSpace(fmt.Sprint(incident["ruleId"]))
+	}
+	payload := map[string]any{
+		"routing_key":  routingKey,
+		"event_action": action,
+		"dedup_key":    dedupKey,
+	}
+	if action == "trigger" {
+		eventPayload := pagerDutyCEF(contact, incident)
+		eventPayload["custom_details"] = incident
+		payload["payload"] = eventPayload
+	}
+	return payload
+}
+
+func pagerDutyCEF(contact ContactEndpoint, incident map[string]any) map[string]any {
+	row, _ := incident["row"].(map[string]any)
+	summary := firstNonEmptyString(
+		contact.Config["summary"],
+		fmt.Sprint(incident["message"]),
+		fmt.Sprint(row["message"]),
+		fmt.Sprintf("%v fired with value %v", incident["ruleName"], incident["value"]),
+	)
+	source := firstNonEmptyString(
+		valueFromField(row, contact.Config["sourceField"]),
+		fmt.Sprint(row["service_name"]),
+		fmt.Sprint(incident["tenantId"]),
+		"uvoo-dbviz",
+	)
+	severity := strings.TrimSpace(contact.Config["severity"])
+	if severity == "" {
+		severity = "error"
+	}
+	return map[string]any{
+		"summary":   summary,
+		"source":    source,
+		"severity":  severity,
+		"component": firstNonEmptyString(contact.Config["component"], fmt.Sprint(row["service_name"]), "uvoo-dbviz"),
+		"group":     firstNonEmptyString(contact.Config["group"], fmt.Sprint(incident["tenantId"]), "observability"),
+		"class":     firstNonEmptyString(contact.Config["class"], fmt.Sprint(incident["ruleName"]), "alert"),
+	}
+}
+
+func firstNonEmptyString(values ...string) string {
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" && value != "<nil>" {
+			return value
+		}
+	}
+	return ""
+}
+
+func valueFromField(row map[string]any, field string) string {
+	field = strings.TrimSpace(field)
+	if field == "" || row == nil {
+		return ""
+	}
+	return fmt.Sprint(row[field])
+}
+
+func ResolveSecretRefFromEnv(ref string) (string, bool) {
+	name := SecretEnvName(ref)
+	value, ok := os.LookupEnv(name)
+	return value, ok
+}
+
+var secretRefCleaner = regexp.MustCompile(`[^A-Za-z0-9]+`)
+
+func SecretEnvName(ref string) string {
+	clean := strings.Trim(secretRefCleaner.ReplaceAllString(strings.ToUpper(strings.TrimSpace(ref)), "_"), "_")
+	return "DBVIZ_SECRET_" + clean
 }
 
 func NormalizeCondition(condition Condition) Condition {
