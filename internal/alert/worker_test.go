@@ -80,6 +80,36 @@ func TestEvaluateSuppressesNotificationWhenRecorderRequestsCooldown(t *testing.T
 	}
 }
 
+func TestEvaluateWaitsForSustainedCondition(t *testing.T) {
+	ch := fakeClickHouse(t, `{"value":12}`)
+	var webhookCalls int32
+	worker := testWorker(ch)
+	worker.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		atomic.AddInt32(&webhookCalls, 1)
+		return textResponse(http.StatusOK, ""), nil
+	})}
+	var records int32
+	worker.SetIncidentRecorder(func(context.Context, Rule, string, float64, map[string]any, string, int) (RecordResult, error) {
+		atomic.AddInt32(&records, 1)
+		return RecordResult{IncidentID: "incident-1", ShouldNotify: true}, nil
+	})
+	rule := testRule("http://webhook.local/alerts", 10)
+	rule.Condition.For = "5m"
+
+	worker.evaluate(context.Background(), rule)
+
+	if atomic.LoadInt32(&records) != 0 || atomic.LoadInt32(&webhookCalls) != 0 {
+		t.Fatalf("condition fired before hold window: records=%d webhooks=%d", records, webhookCalls)
+	}
+
+	worker.pending[ruleFingerprint(rule)] = time.Now().Add(-6 * time.Minute)
+	worker.evaluate(context.Background(), rule)
+
+	if atomic.LoadInt32(&records) != 1 || atomic.LoadInt32(&webhookCalls) != 1 {
+		t.Fatalf("condition did not fire after hold window: records=%d webhooks=%d", records, webhookCalls)
+	}
+}
+
 func TestEvaluateResolvedRuleRecordsClear(t *testing.T) {
 	ch := fakeClickHouse(t, `{"value":3}`)
 	worker := testWorker(ch)
@@ -96,6 +126,14 @@ func TestEvaluateResolvedRuleRecordsClear(t *testing.T) {
 
 	if recordedStatus != "resolved" {
 		t.Fatalf("recorded status = %q", recordedStatus)
+	}
+}
+
+func TestEmailContactSkipsWhenSMTPIsNotConfigured(t *testing.T) {
+	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
+	result := worker.notify(context.Background(), ContactEndpoint{Kind: "email", Target: "alerts@example.com"}, map[string]any{"ruleName": "Email alert"})
+	if result.Status != "skipped" {
+		t.Fatalf("status = %q, want skipped", result.Status)
 	}
 }
 

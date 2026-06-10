@@ -16,8 +16,9 @@ import (
 )
 
 type Client struct {
-	baseURL string
-	http    *http.Client
+	baseURL       string
+	forwardBearer bool
+	http          *http.Client
 }
 
 type PersistedAlertRule struct {
@@ -87,7 +88,7 @@ func NewClient(cfg config.PostgRESTConfig, httpClient *http.Client) *Client {
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 15 * time.Second}
 	}
-	return &Client{baseURL: strings.TrimRight(cfg.URL, "/"), http: httpClient}
+	return &Client{baseURL: strings.TrimRight(cfg.URL, "/"), forwardBearer: cfg.ForwardBearer, http: httpClient}
 }
 
 func (c *Client) Enabled() bool {
@@ -111,7 +112,7 @@ func (c *Client) RPC(ctx context.Context, name string, body any, user auth.Princ
 	req.Header.Set("X-DBViz-Subject", user.Subject)
 	req.Header.Set("X-DBViz-Provider", user.Provider)
 	req.Header.Set("X-DBViz-Email", user.Email)
-	if bearer != "" {
+	if bearer != "" && c.forwardBearer {
 		req.Header.Set("Authorization", bearer)
 	} else {
 		req.Header.Set("X-Dev-Tenant", user.TenantID)

@@ -126,6 +126,13 @@ export type DashboardChart = {
     type?: 'line' | 'bar' | 'area';
     [key: string]: unknown;
   };
+  position?: {
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    [key: string]: unknown;
+  };
 };
 
 export type Dashboard = {
@@ -155,6 +162,7 @@ export type AlertRule = {
   condition: {
     operator: string;
     threshold: number;
+    for?: string;
   };
   interval_seconds: number;
   enabled: boolean;
@@ -202,17 +210,34 @@ export type TenantInvite = {
 
 const tokenKey = 'uvoo-dbviz-token';
 const tenantKey = 'uvoo-dbviz-active-tenant';
+const devAuthPausedKey = 'uvoo-dbviz-dev-auth-paused';
 
 export function getToken(): string {
-  return localStorage.getItem(tokenKey) || '';
+  const legacy = localStorage.getItem(tokenKey);
+  if (legacy) localStorage.removeItem(tokenKey);
+  return sessionStorage.getItem(tokenKey) || '';
 }
 
 export function setToken(token: string) {
-  localStorage.setItem(tokenKey, token);
+  localStorage.removeItem(tokenKey);
+  sessionStorage.setItem(tokenKey, token);
 }
 
 export function clearToken() {
+  sessionStorage.removeItem(tokenKey);
   localStorage.removeItem(tokenKey);
+}
+
+export function isDevAuthPaused(): boolean {
+  return sessionStorage.getItem(devAuthPausedKey) === 'true';
+}
+
+export function pauseDevAuth() {
+  sessionStorage.setItem(devAuthPausedKey, 'true');
+}
+
+export function resumeDevAuth() {
+  sessionStorage.removeItem(devAuthPausedKey);
 }
 
 export function getActiveTenant(): string {

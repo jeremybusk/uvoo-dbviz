@@ -31,3 +31,12 @@ jobs:
       - name: License check
         run: make license-check
 
+  compose-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install smoke dependencies
+        run: sudo apt-get update && sudo apt-get install -y curl jq
+      - name: Compose smoke
+        run: make compose-smoke

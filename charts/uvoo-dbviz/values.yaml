@@ -34,10 +34,13 @@ service:
   targetPort: 8080
 
 config:
+  environment: development
+  requireProductionSafe: false
   allowInsecureDefaults: false
   authDevMode: false
   publicUrl: ""
   postgrestUrl: ""
+  postgrestForwardBearer: false
   clickhouseUrl: ""
   clickhouseDatabase: default
   clickhouseUser: default
@@ -53,12 +56,17 @@ config:
   alertWorkerKey: ""
   alertPollSeconds: "30"
   alertDedupeSeconds: "300"
+  alertSmtpHost: ""
+  alertSmtpPort: "587"
+  alertSmtpUser: ""
+  alertSmtpFrom: ""
   extraEnv: []
 
 secret:
   clickhousePassword: "clickhouse"
   clickhouseDefaultSecret: "clickhouse"
   keycloakClientSecret: ""
+  alertSmtpPassword: ""
   existingSecret: ""
 
 clickhouse:

@@ -27,6 +27,18 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
+For browser testing from another machine on an isolated LAN, set the host name or
+IP address clients will use before starting Compose:
+
+```sh
+DBVIZ_BIND_ADDR=0.0.0.0
+DBVIZ_PUBLIC_HOST=192.168.1.50
+```
+
+Then open `http://192.168.1.50:8080`. Keycloak will advertise the same public
+host in OIDC issuer and redirect metadata, while the Go backend still discovers
+Keycloak through the internal Docker service URL.
+
 Compose starts:
 
 - `uvoo-dbviz` on <http://localhost:8080>
@@ -40,7 +52,10 @@ The OpenTelemetry Collector exports received OTLP logs, traces, and metrics to
 ClickHouse using collector-managed raw tables named `otelcol_*`. The current UI
 datasets query the normalized demo tables `otel_logs`, `otel_traces`, and
 `otel_metrics`; those are created by the ClickHouse migration and populated by
-the sample telemetry script.
+the sample telemetry script. Compose also includes an `otel-normalizer` helper
+that creates ClickHouse materialized views from compatible collector raw tables
+into the normalized UI tables. If the collector has not created raw tables yet,
+rerun `docker compose run --rm otel-normalizer` after telemetry arrives.
 
 Development auth is enabled by default in Compose. The seeded Keycloak users are:
 
@@ -48,9 +63,15 @@ Development auth is enabled by default in Compose. The seeded Keycloak users are
 - `bob` / `password`, tenant `example.com`
 
 The UI can also use dev auth when `DBVIZ_AUTH_DEV_MODE=true`. Browser state
-operations go through the Go API, which forwards bearer tokens or local dev
-tenant headers to PostgREST. PostgREST still enforces RLS with JWT tenant claims
-or `X-Dev-Tenant: dev` in local development.
+operations go through the Go API, which validates bearer tokens and forwards the
+verified tenant/user context to PostgREST. PostgREST still enforces RLS with
+that request context or `X-Dev-Tenant: dev` in local development.
+
+In the default Compose profile, the Go API validates OIDC tokens and does not
+forward the browser bearer token to PostgREST
+(`DBVIZ_POSTGREST_FORWARD_BEARER=false`). This avoids PostgREST rejecting local
+Keycloak tokens when it is not configured with Keycloak's signing keys. Enable
+bearer forwarding only when PostgREST has a real JWT verifier configured.
 
 On successful sign-in, the UI calls `POST /api/session/sync`. The backend records
 or updates the current tenant/user in PostgreSQL, making later role and invite
@@ -80,7 +101,9 @@ docker compose run --rm otel-sample
 ```
 
 It sends OTLP JSON to the collector and inserts matching normalized sample rows
-into ClickHouse so the default UI datasets can chart the data immediately.
+into ClickHouse so the default UI datasets can chart the data immediately. It
+also attempts to create the raw-to-normalized materialized views for future OTLP
+traffic.
 
 ## Build And Verify
 
@@ -91,7 +114,14 @@ make build
 make license-check
 helm lint charts/uvoo-dbviz
 docker compose config
+make compose-smoke
 ```
+
+Production safety checks are enabled by setting `DBVIZ_ENV=production` or
+`DBVIZ_REQUIRE_PRODUCTION_SAFE=true`. The process then rejects development auth,
+localhost service URLs, default alert worker keys, demo PostgREST JWT secrets,
+and missing usable OIDC provider configuration unless
+`DBVIZ_ALLOW_INSECURE_DEFAULTS=true` is explicitly set.
 
 ## Data Model
 
@@ -123,8 +153,10 @@ without schema churn.
 
 - `GET /api/dashboards`
 - `POST /api/dashboards`
+- `POST /api/dashboards/delete`
 - `list_dashboards()`
 - `save_dashboard(dashboard_id uuid, dashboard_name text, dashboard_layout jsonb)`
+- `delete_dashboard(dashboard_id uuid)`
 
 Saved queries use the same tenant-scoped control-plane path and validate query
 payloads against configured datasets before persisting them:
@@ -137,14 +169,18 @@ payloads against configured datasets before persisting them:
 Those functions derive tenant context from JWT claims such as `tenant_id`,
 `tenant_slug`, Google `hd`, Microsoft `tid`, or the local `X-Dev-Tenant` header.
 
-Alert rule and contact management follows the same pattern:
+Alert rule and contact management follows the same pattern. Builder queries can
+use allow-listed structured filters, and dashboard panels carry layout metadata
+so saved dashboards can be opened as a responsive panel grid.
 
 - `GET /api/data-sources`
 - `POST /api/data-sources`
 - `POST /api/data-sources/test`
 - `GET /api/query/history`
+- `POST /api/sql`
 - `GET /api/alerts/rules`
 - `POST /api/alerts/rules`
+- `POST /api/alerts/test`
 - `GET /api/alerts/contacts`
 - `POST /api/alerts/contacts`
 - `GET /api/alerts/incidents`
@@ -159,6 +195,32 @@ Alert rule and contact management follows the same pattern:
 - `POST /api/invites`
 - `POST /api/invites/accept`
 
+## Custom SQL
+
+The UI supports a SQL mode for advanced ClickHouse exploration through
+`POST /api/sql`. SQL queries are still tenant- and time-bounded by required
+ClickHouse parameters:
+
+```sql
+SELECT service_name, severity, count() AS value
+FROM otel_logs
+WHERE tenant_id = {tenant:String}
+  AND timestamp >= {from:DateTime}
+  AND timestamp < {to:DateTime}
+GROUP BY service_name, severity
+ORDER BY value DESC
+```
+
+The server binds `tenant`, `from`, `to`, and `limit`, runs ClickHouse in
+read-only mode, appends a controlled limit, and rejects multi-statement SQL,
+comments, DDL/DML/admin statements, custom `FORMAT`/`SETTINGS`, and risky table
+functions such as `url()`, `file()`, `s3()`, and `remote()`.
+
+Custom SQL alert rules use the same safe execution path with stricter
+validation: the query must return a numeric column named `value`. The alert
+condition compares the maximum returned `value` against the configured
+operator/threshold. `POST /api/alerts/test` previews that value before saving.
+
 ## Alerts
 
 The alert worker is disabled by default. Enable it with:
@@ -169,8 +231,18 @@ DBVIZ_ALERT_RULES_JSON='[{"id":"log-volume","name":"High log volume","tenantId":
 ```
 
 The worker evaluates rules through the same constrained ClickHouse query builder
-used by the UI. Contact kinds are `webhook`, `pagerduty`, and `email`; email is
-currently logged until SMTP configuration is added.
+used by the UI. Alert conditions can include a Go duration string in
+`condition.for`, such as `5m`, to require the threshold to remain true before an
+incident is recorded. Contact kinds are `webhook`, `pagerduty`, and `email`.
+Email delivery is enabled when SMTP settings are configured:
+
+```sh
+DBVIZ_ALERT_SMTP_HOST=smtp.example.com
+DBVIZ_ALERT_SMTP_PORT=587
+DBVIZ_ALERT_SMTP_USER=alerts@example.com
+DBVIZ_ALERT_SMTP_PASSWORD=...
+DBVIZ_ALERT_SMTP_FROM=alerts@example.com
+```
 
 Persisted alert rules saved through `POST /api/alerts/rules` are loaded by the
 worker when `DBVIZ_ALERT_LOAD_PERSISTED=true`. The worker uses

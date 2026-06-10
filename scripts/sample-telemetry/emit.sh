@@ -46,6 +46,15 @@ wget -qO- \
   }" \
   "$OTEL_ENDPOINT/v1/traces" >/dev/null
 
+if [ -x /create-otel-normalizers.sh ] || [ -f /create-otel-normalizers.sh ]; then
+  CLICKHOUSE_HOST="$CLICKHOUSE_HOST" \
+  CLICKHOUSE_PORT="$CLICKHOUSE_PORT" \
+  CLICKHOUSE_PASSWORD="$CLICKHOUSE_PASSWORD" \
+  DBVIZ_OTEL_DEFAULT_TENANT="$TENANT_ID" \
+  DBVIZ_OTEL_NORMALIZER_WAIT_SECONDS="${DBVIZ_OTEL_NORMALIZER_WAIT_SECONDS:-15}" \
+    sh /create-otel-normalizers.sh || true
+fi
+
 clickhouse-client --host "$CLICKHOUSE_HOST" --port "$CLICKHOUSE_PORT" --password "$CLICKHOUSE_PASSWORD" --multiquery <<SQL
 INSERT INTO otel_logs (tenant_id, timestamp, service_name, severity, host_name, trace_id, body, attributes) VALUES
 ('$TENANT_ID', now64(3), 'otel-sample', 'info', 'otel-sample', '11111111111111111111111111111111', 'sample otlp log from local emitter', '{}');

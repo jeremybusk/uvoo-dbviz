@@ -429,6 +429,23 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION delete_data_source(source_id uuid)
+RETURNS TABLE(id uuid, name text, kind text, config jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    RETURN QUERY
+    DELETE FROM data_sources ds
+    WHERE ds.id = source_id
+      AND ds.tenant_id = request_tenant_id()
+    RETURNING ds.id, ds.name, ds.kind, ds.config - 'password', ds.updated_at, ds.created_at;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION list_query_history(history_limit integer DEFAULT 50)
 RETURNS TABLE(id uuid, user_email text, dataset text, query jsonb, rows_count integer, duration_ms integer, status text, error text, created_at timestamptz)
 LANGUAGE sql STABLE
@@ -485,6 +502,7 @@ $$;
 GRANT EXECUTE ON FUNCTION list_data_sources() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION get_data_source(uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_data_source(uuid, text, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION delete_data_source(uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_query_history(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION record_query_history(text, text, text, jsonb, integer, integer, text, text) TO dbviz_web;
 
@@ -588,8 +606,27 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION delete_dashboard(dashboard_id uuid)
+RETURNS TABLE(id uuid, name text, layout jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    RETURN QUERY
+    DELETE FROM dashboards d
+    WHERE d.id = dashboard_id
+      AND d.tenant_id = request_tenant_id()
+    RETURNING d.id, d.name, d.layout, d.updated_at, d.created_at;
+END;
+$$;
+
 GRANT EXECUTE ON FUNCTION list_dashboards() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_dashboard(uuid, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION delete_dashboard(uuid) TO dbviz_web;
+NOTIFY pgrst, 'reload schema';
 
 CREATE OR REPLACE FUNCTION list_saved_queries()
 RETURNS TABLE(id uuid, name text, description text, query jsonb, updated_at timestamptz, created_at timestamptz)
@@ -649,8 +686,26 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION delete_saved_query(saved_query_id uuid)
+RETURNS TABLE(id uuid, name text, description text, query jsonb, updated_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    RETURN QUERY
+    DELETE FROM saved_queries sq
+    WHERE sq.id = saved_query_id
+      AND sq.tenant_id = request_tenant_id()
+    RETURNING sq.id, sq.name, sq.description, sq.query, sq.updated_at, sq.created_at;
+END;
+$$;
+
 GRANT EXECUTE ON FUNCTION list_saved_queries() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_saved_query(uuid, text, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION delete_saved_query(uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_contact_endpoints()
 RETURNS TABLE(id uuid, name text, kind text, target text, config jsonb, created_at timestamptz)
@@ -696,6 +751,23 @@ BEGIN
     SELECT c.id, c.name, c.kind, c.target, c.config, c.created_at
     FROM contact_endpoints c
     WHERE c.id = saved_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION delete_contact_endpoint(contact_id uuid)
+RETURNS TABLE(id uuid, name text, kind text, target text, config jsonb, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    RETURN QUERY
+    DELETE FROM contact_endpoints c
+    WHERE c.id = contact_id
+      AND c.tenant_id = request_tenant_id()
+    RETURNING c.id, c.name, c.kind, c.target, c.config, c.created_at;
 END;
 $$;
 
@@ -884,10 +956,29 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION delete_alert_rule(alert_id uuid)
+RETURNS TABLE(id uuid, name text, query jsonb, condition jsonb, interval_seconds integer, enabled boolean, contact_endpoint_id uuid, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    RETURN QUERY
+    DELETE FROM alert_rules a
+    WHERE a.id = alert_id
+      AND a.tenant_id = request_tenant_id()
+    RETURNING a.id, a.name, a.query, a.condition, a.interval_seconds, a.enabled, a.contact_endpoint_id, a.created_at;
+END;
+$$;
+
 GRANT EXECUTE ON FUNCTION list_contact_endpoints() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_contact_endpoint(uuid, text, text, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION delete_contact_endpoint(uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_rules() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boolean, uuid) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION delete_alert_rule(uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_notifications(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION resolve_alert_incident(text, text, uuid) TO dbviz_web;
@@ -1460,6 +1551,23 @@ BEGIN
 END;
 $$;
 
+CREATE OR REPLACE FUNCTION delete_tenant_invite(actor_subject text, actor_provider text, invite_id uuid)
+RETURNS TABLE(id uuid, email text, role text, accepted_at timestamptz, expires_at timestamptz, created_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT current_user_has_role(actor_subject, actor_provider, ARRAY['owner', 'admin']) THEN
+        RAISE EXCEPTION 'insufficient role';
+    END IF;
+
+    RETURN QUERY
+    DELETE FROM tenant_invites i
+    WHERE i.id = invite_id
+      AND i.tenant_id = request_tenant_id()
+    RETURNING i.id, i.email, i.role, i.accepted_at, i.expires_at, i.created_at;
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION accept_tenant_invite(invite_token text, user_subject text, user_email text, user_name text, user_provider text)
 RETURNS TABLE(id uuid, tenant_id uuid, tenant_slug text, subject text, email text, display_name text, provider text, role text)
 LANGUAGE plpgsql
@@ -1522,4 +1630,6 @@ $$;
 
 GRANT EXECUTE ON FUNCTION list_tenant_invites() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION create_tenant_invite(text, text, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION delete_tenant_invite(text, text, uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION accept_tenant_invite(text, text, text, text, text) TO dbviz_web;
+NOTIFY pgrst, 'reload schema';
