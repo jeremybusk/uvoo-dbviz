@@ -18,12 +18,16 @@ import {
 } from 'antd';
 import {
   CheckCircleOutlined,
+  CopyOutlined,
+  DeleteOutlined,
+  DownOutlined,
   EditOutlined,
   LoginOutlined,
   MoreOutlined,
   PlayCircleOutlined,
   PlusOutlined,
-  SaveOutlined
+  SaveOutlined,
+  UpOutlined
 } from '@ant-design/icons';
 import React from 'react';
 import {
@@ -52,6 +56,7 @@ type Role = 'owner' | 'admin' | 'editor' | 'viewer';
 type RowAction = {
   key: string;
   label: string;
+  icon?: React.ReactNode;
   danger?: boolean;
   disabled?: boolean;
   confirm?: {
@@ -1067,6 +1072,7 @@ function RowActions({ items }: { items: RowAction[] }) {
         items: items.map((item) => ({
           key: item.key,
           label: item.label,
+          icon: item.icon || defaultRowActionIcon(item.key),
           danger: item.danger,
           disabled: item.disabled
         })),
@@ -1090,6 +1096,17 @@ function RowActions({ items }: { items: RowAction[] }) {
       <Button className="row-action-trigger" icon={<MoreOutlined />} />
     </Dropdown>
   );
+}
+
+function defaultRowActionIcon(key: string): React.ReactNode {
+  if (key.includes('delete') || key.includes('remove') || key.includes('deactivate')) return <DeleteOutlined />;
+  if (key.includes('copy') || key.includes('duplicate')) return <CopyOutlined />;
+  if (key.includes('edit') || key.includes('open')) return <EditOutlined />;
+  if (key.includes('move-up')) return <UpOutlined />;
+  if (key.includes('move-down')) return <DownOutlined />;
+  if (key.includes('load') || key.includes('use')) return <PlayCircleOutlined />;
+  if (key.includes('toggle')) return <CheckCircleOutlined />;
+  return undefined;
 }
 
 function firstDimension(config: PublicConfig | null, datasetID: string): string {

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, ConfigProvider, Dropdown, Flex, Input, Layout, Popconfirm, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, message, theme } from 'antd';
-import { BulbOutlined, ColumnWidthOutlined, DownOutlined, FilterOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
+import { Alert, Button, ConfigProvider, Dropdown, Flex, Input, Layout, Modal, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Tooltip, Typography, message, theme } from 'antd';
+import { BulbOutlined, ColumnWidthOutlined, CopyOutlined, DeleteOutlined, DownOutlined, EditOutlined, FilterOutlined, MenuFoldOutlined, MenuUnfoldOutlined, MoonOutlined, MoreOutlined, ReloadOutlined, SaveOutlined, UpOutlined } from '@ant-design/icons';
 import {
   AlertIncident,
   AlertNotification,
@@ -1322,11 +1322,11 @@ function DashboardPanelCard({
       style={{ gridColumn: `span ${width}` }}
     >
       <Flex justify="space-between" gap={10} align="start" className="dashboard-panel-header">
-        <div>
+        <div className="dashboard-panel-title">
           <Typography.Title level={4}>{panel.title}</Typography.Title>
           <Typography.Text type="secondary">{displayPanelQuery ? compactQueryDescription(displayPanelQuery) : 'Incomplete query'}</Typography.Text>
         </div>
-        <Space size={6} wrap>
+        <Space size={6} className="dashboard-panel-tools">
           <Tag>{panel.visualization?.type || 'line'}</Tag>
           <Segmented
             size="small"
@@ -1337,19 +1337,35 @@ function DashboardPanelCard({
             ]}
             onChange={(value) => panel.id && onResize(panel.id, Number(value))}
           />
-          <Button size="small" onClick={() => onOpen(panel)}>Edit</Button>
-          <Button size="small" disabled={index === 0} onClick={() => onMove(index, -1)}>Up</Button>
-          <Button size="small" disabled={index === panelCount - 1} onClick={() => onMove(index, 1)}>Down</Button>
-          <Button size="small" onClick={() => onDuplicate(index)}>Copy</Button>
-          <Popconfirm
-            title="Remove panel?"
-            description="This only removes the panel from the dashboard draft."
-            okText="Remove"
-            okButtonProps={{ danger: true }}
-            onConfirm={() => onRemove(index)}
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: [
+                { key: 'edit', label: 'Edit', icon: <EditOutlined /> },
+                { key: 'move-up', label: 'Move up', icon: <UpOutlined />, disabled: index === 0 },
+                { key: 'move-down', label: 'Move down', icon: <DownOutlined />, disabled: index === panelCount - 1 },
+                { key: 'copy', label: 'Copy', icon: <CopyOutlined /> },
+                { key: 'remove', label: 'Remove', icon: <DeleteOutlined />, danger: true }
+              ],
+              onClick: ({ key }) => {
+                if (key === 'edit') onOpen(panel);
+                if (key === 'move-up') onMove(index, -1);
+                if (key === 'move-down') onMove(index, 1);
+                if (key === 'copy') onDuplicate(index);
+                if (key === 'remove') {
+                  Modal.confirm({
+                    title: 'Remove panel?',
+                    content: 'This only removes the panel from the dashboard draft.',
+                    okText: 'Remove',
+                    okButtonProps: { danger: true },
+                    onOk: () => onRemove(index)
+                  });
+                }
+              }
+            }}
           >
-            <Button size="small" danger>Remove</Button>
-          </Popconfirm>
+            <Button size="small" className="dashboard-panel-menu" icon={<MoreOutlined />} />
+          </Dropdown>
         </Space>
       </Flex>
       {panelError ? (
