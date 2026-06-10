@@ -1440,12 +1440,16 @@ export function IncidentsSection({ incidents, onAcknowledge, onResolve, onSyncPa
         <Button size="small" onClick={onSyncPagerDuty}>Sync PagerDuty</Button>
       </Flex>
       <ActionList items={incidents.slice(0, 8)} empty="No incidents" render={(incident) => (
-        <List.Item key={incident.id} actions={incidentActions(incident, onAcknowledge, onResolve)}>
+        <List.Item key={incident.id}>
+          <Flex gap={8} align="start" className="action-row full">
+            <RowActions items={incidentActions(incident, onAcknowledge, onResolve)} />
           <List.Item.Meta
             title={
               <Space wrap>
                 <Tag color={incidentStatusColor(incident.status)}>{incidentStatusLabel(incident.status)}</Tag>
+                {incident.rule_name && <Typography.Text strong>{incident.rule_name}</Typography.Text>}
                 <Typography.Text strong>{incidentTitle(incident)}</Typography.Text>
+                {incident.contact_name && <Tag>{incident.contact_name}</Tag>}
                 {incident.external_provider && <Tag>{incident.external_provider}</Tag>}
                 {incident.external_sync_status && <Tag color={incident.external_sync_status === 'failed' ? 'red' : 'blue'}>{incident.external_sync_status}</Tag>}
               </Space>
@@ -1460,6 +1464,7 @@ export function IncidentsSection({ incidents, onAcknowledge, onResolve, onSyncPa
               </Space>
             }
           />
+          </Flex>
         </List.Item>
       )} list />
     </Section>
@@ -1469,12 +1474,30 @@ export function IncidentsSection({ incidents, onAcknowledge, onResolve, onSyncPa
 function incidentActions(incident: AlertIncident, onAcknowledge: (incident: AlertIncident) => void, onResolve: (incident: AlertIncident) => void) {
   if (incident.status === 'firing') {
     return [
-      <Button key="ack" size="small" onClick={() => onAcknowledge(incident)}>Ack</Button>,
-      <Button key="resolve" size="small" onClick={() => onResolve(incident)}>Resolve</Button>
+      { key: 'ack', label: 'Acknowledge', onClick: () => onAcknowledge(incident) },
+      {
+        key: 'resolve',
+        label: 'Resolve',
+        confirm: {
+          title: 'Resolve incident?',
+          content: 'This also sends a resolve update to PagerDuty when the incident has a PagerDuty REST mapping.',
+          okText: 'Resolve'
+        },
+        onClick: () => onResolve(incident)
+      }
     ];
   }
   if (incident.status === 'acknowledged') {
-    return [<Button key="resolve" size="small" onClick={() => onResolve(incident)}>Resolve</Button>];
+    return [{
+      key: 'resolve',
+      label: 'Resolve',
+      confirm: {
+        title: 'Resolve incident?',
+        content: 'This also sends a resolve update to PagerDuty when the incident has a PagerDuty REST mapping.',
+        okText: 'Resolve'
+      },
+      onClick: () => onResolve(incident)
+    }];
   }
   return [];
 }
@@ -1512,6 +1535,7 @@ function incidentTitle(incident: AlertIncident) {
     incident.payload.summary,
     incident.payload.message,
     row.message,
+    incident.rule_name,
     `${firstText(incident.payload.ruleName, 'Alert')} fired with value ${incident.value}`
   );
 }

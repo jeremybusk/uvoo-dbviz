@@ -956,6 +956,8 @@ CREATE OR REPLACE FUNCTION list_alert_incidents(incident_limit integer DEFAULT 1
 RETURNS TABLE(
     id uuid,
     alert_rule_id uuid,
+    rule_name text,
+    contact_name text,
     fingerprint text,
     status text,
     value double precision,
@@ -978,6 +980,8 @@ AS $$
     SELECT
         i.id,
         i.alert_rule_id,
+        COALESCE(a.name, '') AS rule_name,
+        COALESCE(c.name, '') AS contact_name,
         i.fingerprint,
         i.status,
         i.value,
@@ -995,6 +999,8 @@ AS $$
         i.external_last_synced_at,
         i.created_at
     FROM alert_incidents i
+    LEFT JOIN alert_rules a ON a.id = i.alert_rule_id AND a.tenant_id = i.tenant_id
+    LEFT JOIN contact_endpoints c ON c.id = a.contact_endpoint_id AND c.tenant_id = i.tenant_id
     WHERE i.tenant_id = request_tenant_id()
     ORDER BY i.last_seen_at DESC
     LIMIT LEAST(GREATEST(COALESCE(incident_limit, 100), 1), 500);

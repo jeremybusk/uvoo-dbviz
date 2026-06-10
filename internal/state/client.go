@@ -80,6 +80,8 @@ type DataSource struct {
 type AlertIncident struct {
 	ID                   string         `json:"id"`
 	AlertRuleID          *string        `json:"alert_rule_id"`
+	RuleName             string         `json:"rule_name"`
+	ContactName          string         `json:"contact_name"`
 	Fingerprint          string         `json:"fingerprint"`
 	Status               string         `json:"status"`
 	Value                float64        `json:"value"`

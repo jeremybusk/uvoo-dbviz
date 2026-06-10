@@ -228,6 +228,8 @@ export type AlertRule = {
 export type AlertIncident = {
   id: string;
   alert_rule_id: string | null;
+  rule_name: string;
+  contact_name: string;
   fingerprint: string;
   status: 'firing' | 'acknowledged' | 'resolved' | 'notify_failed';
   value: number;
