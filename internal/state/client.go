@@ -78,20 +78,26 @@ type DataSource struct {
 }
 
 type AlertIncident struct {
-	ID              string         `json:"id"`
-	AlertRuleID     *string        `json:"alert_rule_id"`
-	Fingerprint     string         `json:"fingerprint"`
-	Status          string         `json:"status"`
-	Value           float64        `json:"value"`
-	Payload         map[string]any `json:"payload"`
-	OccurrenceCount int            `json:"occurrence_count"`
-	FirstSeenAt     string         `json:"first_seen_at"`
-	LastSeenAt      string         `json:"last_seen_at"`
-	LastNotifiedAt  *string        `json:"last_notified_at"`
-	ResolvedAt      *string        `json:"resolved_at"`
-	CreatedAt       string         `json:"created_at"`
-	Deduped         bool           `json:"deduped,omitempty"`
-	ShouldNotify    bool           `json:"should_notify,omitempty"`
+	ID                   string         `json:"id"`
+	AlertRuleID          *string        `json:"alert_rule_id"`
+	Fingerprint          string         `json:"fingerprint"`
+	Status               string         `json:"status"`
+	Value                float64        `json:"value"`
+	Payload              map[string]any `json:"payload"`
+	OccurrenceCount      int            `json:"occurrence_count"`
+	FirstSeenAt          string         `json:"first_seen_at"`
+	LastSeenAt           string         `json:"last_seen_at"`
+	LastNotifiedAt       *string        `json:"last_notified_at"`
+	ResolvedAt           *string        `json:"resolved_at"`
+	ExternalProvider     string         `json:"external_provider"`
+	ExternalIncidentID   string         `json:"external_incident_id"`
+	ExternalIncidentURL  string         `json:"external_incident_url"`
+	ExternalSyncStatus   string         `json:"external_sync_status"`
+	ExternalSyncError    string         `json:"external_sync_error"`
+	ExternalLastSyncedAt *string        `json:"external_last_synced_at"`
+	CreatedAt            string         `json:"created_at"`
+	Deduped              bool           `json:"deduped,omitempty"`
+	ShouldNotify         bool           `json:"should_notify,omitempty"`
 }
 
 type AlertNotification struct {
@@ -322,6 +328,31 @@ func (c *Client) RecordAlertIncident(ctx context.Context, workerKey, ruleID, ten
 		"incident_payload":     payload,
 		"incident_fingerprint": fingerprint,
 		"cooldown_seconds":     cooldownSeconds,
+	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
+	if err != nil {
+		return AlertIncident{}, err
+	}
+	if len(rows) == 0 {
+		return AlertIncident{}, nil
+	}
+	return rows[0], nil
+}
+
+func (c *Client) UpdateAlertIncidentSync(ctx context.Context, workerKey, tenantID, incidentID, provider, externalID, externalURL, syncStatus, syncError string) (AlertIncident, error) {
+	var normalizedIncidentID any
+	if uuidPattern.MatchString(incidentID) {
+		normalizedIncidentID = incidentID
+	}
+	var rows []AlertIncident
+	err := c.RPC(ctx, "update_alert_incident_sync_for_worker", map[string]any{
+		"worker_key":                 workerKey,
+		"tenant_slug":                tenantID,
+		"incident_id":                normalizedIncidentID,
+		"sync_external_provider":     provider,
+		"sync_external_incident_id":  externalID,
+		"sync_external_incident_url": externalURL,
+		"sync_status":                syncStatus,
+		"sync_error":                 syncError,
 	}, auth.Principal{TenantID: "dev", Email: "worker@localhost"}, "", &rows)
 	if err != nil {
 		return AlertIncident{}, err

@@ -1109,6 +1109,9 @@ export function ContactsSection(props: {
   pagerDutyGroup: string;
   pagerDutyClass: string;
   pagerDutyServiceID: string;
+  pagerDutyRestSyncEnabled: boolean;
+  pagerDutyFromEmail: string;
+  pagerDutyApiBaseURL: string;
   onName: (value: string) => void;
   onTarget: (value: string) => void;
   onKind: (value: ContactEndpoint['kind']) => void;
@@ -1128,6 +1131,9 @@ export function ContactsSection(props: {
   onPagerDutyGroup: (value: string) => void;
   onPagerDutyClass: (value: string) => void;
   onPagerDutyServiceID: (value: string) => void;
+  onPagerDutyRestSyncEnabled: (value: boolean) => void;
+  onPagerDutyFromEmail: (value: string) => void;
+  onPagerDutyApiBaseURL: (value: string) => void;
   onNew: () => void;
   onOpen: (contact: ContactEndpoint) => void;
   onUseForAlert: (contact: ContactEndpoint) => void;
@@ -1254,11 +1260,16 @@ export function ContactsSection(props: {
           <Field label="Component"><Input value={props.pagerDutyComponent} onChange={(event) => props.onPagerDutyComponent(event.target.value)} /></Field>
           <Field label="Group"><Input value={props.pagerDutyGroup} onChange={(event) => props.onPagerDutyGroup(event.target.value)} /></Field>
           <Field label="Class"><Input value={props.pagerDutyClass} onChange={(event) => props.onPagerDutyClass(event.target.value)} /></Field>
+          <Field label="REST sync">
+            <Switch checked={props.pagerDutyRestSyncEnabled} onChange={props.onPagerDutyRestSyncEnabled} />
+          </Field>
           <Field label="REST service ID"><Input value={props.pagerDutyServiceID} onChange={(event) => props.onPagerDutyServiceID(event.target.value)} placeholder="Optional, for incident sync" /></Field>
+          <Field label="REST From email"><Input value={props.pagerDutyFromEmail} onChange={(event) => props.onPagerDutyFromEmail(event.target.value)} placeholder="your-email@domain.com" /></Field>
+          <Field label="REST API URL"><Input value={props.pagerDutyApiBaseURL} onChange={(event) => props.onPagerDutyApiBaseURL(event.target.value)} placeholder="https://api.pagerduty.com" /></Field>
           <Alert
-            type={props.pagerDutyRestApiKeySecretRef && props.pagerDutyServiceID ? 'success' : 'info'}
+            type={pagerDutyRestReady(props) ? 'success' : props.pagerDutyRestSyncEnabled ? 'warning' : 'info'}
             showIcon
-            message={props.pagerDutyRestApiKeySecretRef && props.pagerDutyServiceID ? 'PagerDuty REST sync credentials ready' : 'Events API delivery works with the integration key. REST incident sync also needs a REST API key secret and service ID.'}
+            message={pagerDutyRestReady(props) ? 'PagerDuty REST incident sync ready' : props.pagerDutyRestSyncEnabled ? 'REST sync needs a REST API key secret, service ID, and From email.' : 'Events API delivery works with the integration key. Turn on REST sync to create and resolve incidents through the REST API.'}
           />
         </>
       )}
@@ -1377,9 +1388,38 @@ function contactCanSave(props: {
   contactTarget: string;
   pagerDutyRoutingKeySecretRef: string;
   pagerDutyRoutingKeyValue: string;
+  pagerDutyRestSyncEnabled?: boolean;
+  pagerDutyRestApiKeySecretRef?: string;
+  pagerDutyRestApiKeyValue?: string;
+  pagerDutyServiceID?: string;
+  pagerDutyFromEmail?: string;
 }): boolean {
-  if (props.contactKind === 'pagerduty') return Boolean(props.pagerDutyRoutingKeySecretRef.trim() || props.pagerDutyRoutingKeyValue.trim());
+  if (props.contactKind === 'pagerduty') {
+    if (props.pagerDutyRestSyncEnabled) {
+      return Boolean(
+        (props.pagerDutyRestApiKeySecretRef?.trim() || props.pagerDutyRestApiKeyValue?.trim()) &&
+        props.pagerDutyServiceID?.trim() &&
+        props.pagerDutyFromEmail?.trim()
+      );
+    }
+    return Boolean(props.pagerDutyRoutingKeySecretRef.trim() || props.pagerDutyRoutingKeyValue.trim());
+  }
   return Boolean(props.contactTarget.trim());
+}
+
+function pagerDutyRestReady(props: {
+  pagerDutyRestSyncEnabled: boolean;
+  pagerDutyRestApiKeySecretRef: string;
+  pagerDutyRestApiKeyValue: string;
+  pagerDutyServiceID: string;
+  pagerDutyFromEmail: string;
+}): boolean {
+  return Boolean(
+    props.pagerDutyRestSyncEnabled &&
+    (props.pagerDutyRestApiKeySecretRef.trim() || props.pagerDutyRestApiKeyValue.trim()) &&
+    props.pagerDutyServiceID.trim() &&
+    props.pagerDutyFromEmail.trim()
+  );
 }
 
 export function IncidentsSection({ incidents, onResolve }: { incidents: AlertIncident[]; onResolve: (incident: AlertIncident) => void }) {
@@ -1388,8 +1428,23 @@ export function IncidentsSection({ incidents, onResolve }: { incidents: AlertInc
       <ActionList items={incidents.slice(0, 8)} empty="No incidents" render={(incident) => (
         <List.Item key={incident.id} actions={incident.status === 'firing' ? [<Button key="resolve" size="small" onClick={() => onResolve(incident)}>Resolve</Button>] : []}>
           <List.Item.Meta
-            title={<Space><Tag color={incident.status === 'firing' ? 'red' : 'green'}>{incident.status}</Tag><span>{incident.value} x{incident.occurrence_count || 1}</span></Space>}
-            description={new Date(incident.last_seen_at || incident.created_at).toLocaleString()}
+            title={
+              <Space wrap>
+                <Tag color={incident.status === 'firing' ? 'red' : 'green'}>{incident.status}</Tag>
+                <span>{incident.value} x{incident.occurrence_count || 1}</span>
+                {incident.external_provider && <Tag>{incident.external_provider}</Tag>}
+                {incident.external_sync_status && <Tag color={incident.external_sync_status === 'failed' ? 'red' : 'blue'}>{incident.external_sync_status}</Tag>}
+              </Space>
+            }
+            description={
+              <Space direction="vertical" size={4} className="full">
+                <Typography.Text type="secondary">{new Date(incident.last_seen_at || incident.created_at).toLocaleString()}</Typography.Text>
+                {incident.external_incident_url && (
+                  <Typography.Link href={incident.external_incident_url} target="_blank" rel="noreferrer">{incident.external_incident_id || incident.external_incident_url}</Typography.Link>
+                )}
+                {incident.external_sync_error && <Typography.Text type="danger">{incident.external_sync_error}</Typography.Text>}
+              </Space>
+            }
           />
         </List.Item>
       )} list />

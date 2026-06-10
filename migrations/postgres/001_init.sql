@@ -139,8 +139,21 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
     last_seen_at timestamptz NOT NULL DEFAULT now(),
     last_notified_at timestamptz,
     resolved_at timestamptz,
+    external_provider text NOT NULL DEFAULT '',
+    external_incident_id text NOT NULL DEFAULT '',
+    external_incident_url text NOT NULL DEFAULT '',
+    external_sync_status text NOT NULL DEFAULT '',
+    external_sync_error text NOT NULL DEFAULT '',
+    external_last_synced_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_provider text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_incident_id text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_incident_url text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_sync_status text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_sync_error text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_last_synced_at timestamptz;
 
 CREATE TABLE IF NOT EXISTS alert_notifications (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -949,6 +962,12 @@ RETURNS TABLE(
     last_seen_at timestamptz,
     last_notified_at timestamptz,
     resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
     created_at timestamptz
 )
 LANGUAGE sql STABLE
@@ -965,6 +984,12 @@ AS $$
         i.last_seen_at,
         i.last_notified_at,
         i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
         i.created_at
     FROM alert_incidents i
     WHERE i.tenant_id = request_tenant_id()
@@ -1076,6 +1101,8 @@ BEGIN
 END;
 $$;
 
+DROP FUNCTION IF EXISTS resolve_alert_incident(text, text, uuid);
+
 CREATE OR REPLACE FUNCTION resolve_alert_incident(actor_subject text, actor_provider text, incident_id uuid)
 RETURNS TABLE(
     id uuid,
@@ -1089,6 +1116,12 @@ RETURNS TABLE(
     last_seen_at timestamptz,
     last_notified_at timestamptz,
     resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
     created_at timestamptz
 )
 LANGUAGE plpgsql
@@ -1120,6 +1153,12 @@ BEGIN
         i.last_seen_at,
         i.last_notified_at,
         i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
         i.created_at
     FROM alert_incidents i
     WHERE i.id = incident_id;
@@ -1310,6 +1349,12 @@ RETURNS TABLE(
     last_seen_at timestamptz,
     last_notified_at timestamptz,
     resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
     created_at timestamptz,
     deduped boolean,
     should_notify boolean
@@ -1368,7 +1413,9 @@ BEGIN
         SELECT
             i.id, i.alert_rule_id, i.fingerprint, i.status, i.value, i.payload,
             i.occurrence_count, i.first_seen_at, i.last_seen_at, i.last_notified_at,
-            i.resolved_at, i.created_at, true, false
+            i.resolved_at, i.external_provider, i.external_incident_id, i.external_incident_url,
+            i.external_sync_status, i.external_sync_error, i.external_last_synced_at,
+            i.created_at, true, false
         FROM alert_incidents i
         WHERE i.id = saved_id;
         RETURN;
@@ -1404,7 +1451,9 @@ BEGIN
             SELECT
                 i.id, i.alert_rule_id, i.fingerprint, i.status, i.value, i.payload,
                 i.occurrence_count, i.first_seen_at, i.last_seen_at, i.last_notified_at,
-                i.resolved_at, i.created_at, true, notify_now
+                i.resolved_at, i.external_provider, i.external_incident_id, i.external_incident_url,
+                i.external_sync_status, i.external_sync_error, i.external_last_synced_at,
+                i.created_at, true, notify_now
             FROM alert_incidents i
             WHERE i.id = saved_id;
             RETURN;
@@ -1427,13 +1476,102 @@ BEGIN
     SELECT
         i.id, i.alert_rule_id, i.fingerprint, i.status, i.value, i.payload,
         i.occurrence_count, i.first_seen_at, i.last_seen_at, i.last_notified_at,
-        i.resolved_at, i.created_at, false, normalized_status = 'firing'
+        i.resolved_at, i.external_provider, i.external_incident_id, i.external_incident_url,
+        i.external_sync_status, i.external_sync_error, i.external_last_synced_at,
+        i.created_at, false, normalized_status = 'firing'
     FROM alert_incidents i
     WHERE i.id = saved_id;
 END;
 $$;
 
 GRANT EXECUTE ON FUNCTION record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION update_alert_incident_sync_for_worker(
+    worker_key text,
+    tenant_slug text,
+    incident_id uuid,
+    sync_external_provider text,
+    sync_external_incident_id text,
+    sync_external_incident_url text,
+    sync_status text,
+    sync_error text
+)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    value double precision,
+    payload jsonb,
+    occurrence_count integer,
+    first_seen_at timestamptz,
+    last_seen_at timestamptz,
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    SELECT tenants.id INTO resolved_tenant_id
+    FROM tenants
+    WHERE tenants.slug = tenant_slug;
+
+    IF resolved_tenant_id IS NULL THEN
+        RAISE EXCEPTION 'tenant not found: %', tenant_slug;
+    END IF;
+
+    UPDATE alert_incidents
+    SET external_provider = LEFT(COALESCE(NULLIF(sync_external_provider, ''), alert_incidents.external_provider), 80),
+        external_incident_id = LEFT(COALESCE(NULLIF(sync_external_incident_id, ''), alert_incidents.external_incident_id), 200),
+        external_incident_url = LEFT(COALESCE(NULLIF(sync_external_incident_url, ''), alert_incidents.external_incident_url), 1000),
+        external_sync_status = LEFT(COALESCE(NULLIF(sync_status, ''), 'unknown'), 80),
+        external_sync_error = LEFT(COALESCE(sync_error, ''), 2000),
+        external_last_synced_at = now()
+    WHERE alert_incidents.id = incident_id
+      AND alert_incidents.tenant_id = resolved_tenant_id;
+
+    RETURN QUERY
+    SELECT
+        i.id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.value,
+        i.payload,
+        i.occurrence_count,
+        i.first_seen_at,
+        i.last_seen_at,
+        i.last_notified_at,
+        i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
+        i.created_at
+    FROM alert_incidents i
+    WHERE i.id = incident_id
+      AND i.tenant_id = resolved_tenant_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION update_alert_incident_sync_for_worker(text, text, uuid, text, text, text, text, text) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION record_alert_notification_for_worker(
     worker_key text,

@@ -237,6 +237,12 @@ export type AlertIncident = {
   last_seen_at: string;
   last_notified_at: string | null;
   resolved_at: string | null;
+  external_provider: string;
+  external_incident_id: string;
+  external_incident_url: string;
+  external_sync_status: string;
+  external_sync_error: string;
+  external_last_synced_at: string | null;
   created_at: string;
 };
 

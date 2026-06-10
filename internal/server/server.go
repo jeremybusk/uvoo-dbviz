@@ -1277,6 +1277,23 @@ func (a *App) validateContactForTest(r *http.Request, contact alert.ContactEndpo
 		}
 		return alert.DeliveryResult{Status: "success"}
 	case "pagerduty":
+		if boolString(contact.Config["restSyncEnabled"]) {
+			if strings.TrimSpace(contact.Config["serviceId"]) == "" {
+				return alert.DeliveryResult{Status: "failed", Error: "PagerDuty REST service ID is required"}
+			}
+			if strings.TrimSpace(contact.Config["fromEmail"]) == "" {
+				return alert.DeliveryResult{Status: "failed", Error: "PagerDuty REST From email is required"}
+			}
+			if value := strings.TrimSpace(contact.Config["apiBaseURL"]); value != "" {
+				if err := validatePagerDutyRESTURL(value); err != nil {
+					return alert.DeliveryResult{Status: "failed", Error: err.Error()}
+				}
+			}
+			if result := a.validateOptionalContactSecret(r, contact, "restApiKeySecretRef", "PagerDuty REST API key"); result.Status != "success" {
+				return result
+			}
+			return alert.DeliveryResult{Status: "success"}
+		}
 		if err := validatePagerDutyEventsURL(contact.Target); err != nil {
 			return alert.DeliveryResult{Status: "failed", Error: err.Error()}
 		}
@@ -1286,11 +1303,6 @@ func (a *App) validateContactForTest(r *http.Request, contact alert.ContactEndpo
 		}
 		if _, ok := a.resolveTenantSecretForRequest(r)(r.Context(), statePrincipal(r).TenantID, ref); !ok {
 			return alert.DeliveryResult{Status: "failed", Error: "PagerDuty Events integration key secret is not available: " + ref}
-		}
-		if strings.TrimSpace(contact.Config["restApiKeySecretRef"]) != "" {
-			if result := a.validateOptionalContactSecret(r, contact, "restApiKeySecretRef", "PagerDuty REST API key"); result.Status != "success" {
-				return result
-			}
 		}
 		return alert.DeliveryResult{Status: "success"}
 	default:
@@ -1440,8 +1452,25 @@ func (a *App) normalizeContactConfig(r *http.Request, kind string, name string, 
 		output["restApiKeySecretRef"] = ref
 	}
 	delete(output, "restApiKeyValue")
-	if value, _ := output["routingKeySecretRef"].(string); value == "" {
-		return nil, errors.New("PagerDuty routing key secret ref is required")
+	restSyncEnabled := boolString(output["restSyncEnabled"])
+	if restSyncEnabled {
+		output["restSyncEnabled"] = "true"
+		if value, _ := output["restApiKeySecretRef"].(string); value == "" {
+			return nil, errors.New("PagerDuty REST API key secret ref is required when REST sync is enabled")
+		}
+		if value, _ := output["serviceId"].(string); value == "" {
+			return nil, errors.New("PagerDuty REST service ID is required when REST sync is enabled")
+		}
+		if value, _ := output["fromEmail"].(string); value == "" {
+			return nil, errors.New("PagerDuty REST From email is required when REST sync is enabled")
+		}
+		if value, _ := output["apiBaseURL"].(string); value != "" {
+			if err := validatePagerDutyRESTURL(value); err != nil {
+				return nil, err
+			}
+		}
+	} else if value, _ := output["routingKeySecretRef"].(string); value == "" {
+		return nil, errors.New("PagerDuty Events integration key secret ref is required")
 	}
 	if value, _ := output["severity"].(string); value == "" {
 		output["severity"] = "error"
@@ -1497,6 +1526,25 @@ func validatePagerDutyEventsURL(raw string) error {
 		return errors.New("PagerDuty Events API URL must use events.pagerduty.com")
 	}
 	return nil
+}
+
+func validatePagerDutyRESTURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "https" {
+		return errors.New("PagerDuty REST API URL must use https")
+	}
+	if parsed.Host != "api.pagerduty.com" {
+		return errors.New("PagerDuty REST API URL must use api.pagerduty.com")
+	}
+	return nil
+}
+
+func boolString(input any) bool {
+	value := strings.ToLower(strings.TrimSpace(fmt.Sprint(input)))
+	return value == "true" || value == "1" || value == "yes" || value == "on"
 }
 
 func (a *App) listTenantSecrets(w http.ResponseWriter, r *http.Request) {

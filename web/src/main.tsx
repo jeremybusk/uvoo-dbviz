@@ -157,6 +157,9 @@ function App() {
   const [contactPagerDutyGroup, setContactPagerDutyGroup] = useState('observability');
   const [contactPagerDutyClass, setContactPagerDutyClass] = useState('alert');
   const [contactPagerDutyServiceID, setContactPagerDutyServiceID] = useState('');
+  const [contactPagerDutyRestSyncEnabled, setContactPagerDutyRestSyncEnabled] = useState(false);
+  const [contactPagerDutyFromEmail, setContactPagerDutyFromEmail] = useState('');
+  const [contactPagerDutyApiBaseURL, setContactPagerDutyApiBaseURL] = useState('https://api.pagerduty.com');
   const [editingContactId, setEditingContactId] = useState('');
   const [contactStatus, setContactStatus] = useState('');
   const [selectedContact, setSelectedContact] = useState('');
@@ -598,6 +601,10 @@ function App() {
       setContactRestApiKeyValue('');
       setContactRoutingKeySecretRef(String(saved[0].config.routingKeySecretRef || contactRoutingKeySecretRef));
       setContactRestApiKeySecretRef(String(saved[0].config.restApiKeySecretRef || contactRestApiKeySecretRef));
+      setContactPagerDutyRestSyncEnabled(String(saved[0].config.restSyncEnabled || '').toLowerCase() === 'true' || contactPagerDutyRestSyncEnabled);
+      setContactPagerDutyServiceID(String(saved[0].config.serviceId || contactPagerDutyServiceID));
+      setContactPagerDutyFromEmail(String(saved[0].config.fromEmail || contactPagerDutyFromEmail));
+      setContactPagerDutyApiBaseURL(String(saved[0].config.apiBaseURL || contactPagerDutyApiBaseURL || 'https://api.pagerduty.com'));
       await loadAccessState().catch(() => undefined);
       return saved[0];
     }
@@ -994,6 +1001,9 @@ function App() {
     setContactPagerDutyGroup('observability');
     setContactPagerDutyClass('alert');
     setContactPagerDutyServiceID('');
+    setContactPagerDutyRestSyncEnabled(false);
+    setContactPagerDutyFromEmail('');
+    setContactPagerDutyApiBaseURL('https://api.pagerduty.com');
     setContactStatus('');
   }
 
@@ -1032,6 +1042,9 @@ function App() {
     setContactPagerDutyGroup(String(contact.config.group || 'observability'));
     setContactPagerDutyClass(String(contact.config.class || 'alert'));
     setContactPagerDutyServiceID(String(contact.config.serviceId || ''));
+    setContactPagerDutyRestSyncEnabled(String(contact.config.restSyncEnabled || '').toLowerCase() === 'true');
+    setContactPagerDutyFromEmail(String(contact.config.fromEmail || ''));
+    setContactPagerDutyApiBaseURL(String(contact.config.apiBaseURL || 'https://api.pagerduty.com'));
     setContactStatus('');
   }
 
@@ -1154,7 +1167,10 @@ function App() {
       component: contactPagerDutyComponent.trim(),
       group: contactPagerDutyGroup.trim(),
       class: contactPagerDutyClass.trim(),
-      serviceId: contactPagerDutyServiceID.trim()
+      serviceId: contactPagerDutyServiceID.trim(),
+      restSyncEnabled: contactPagerDutyRestSyncEnabled ? 'true' : 'false',
+      fromEmail: contactPagerDutyFromEmail.trim(),
+      apiBaseURL: contactPagerDutyApiBaseURL.trim() || 'https://api.pagerduty.com'
     };
   }
 
@@ -1341,7 +1357,7 @@ function App() {
     },
     { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertConditionType={alertConditionType} alertField={alertField} alertTextValue={alertTextValue} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} alertPreviewResult={alertPreviewResult} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onConditionType={changeAlertConditionType} onField={setAlertField} onTextValue={setAlertTextValue} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
     { key: 'secrets', label: 'Secrets', children: <SecretsSection user={user} secrets={secrets} secretUsages={secretUsages} editingSecretId={editingSecretId} secretName={secretName} secretDescription={secretDescription} secretValue={secretValue} onName={setSecretName} onDescription={setSecretDescription} onValue={setSecretValue} onNew={newSecret} onSave={() => saveSecret().catch(reportError)} onOpen={openSecret} onDelete={(secret) => deleteSecret(secret).catch(reportError)} /> },
-    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} notifications={notifications} secrets={secrets} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} contactStatus={contactStatus} smtpConfigured={Boolean(config?.alertDelivery.smtpConfigured)} smtpHasAuth={Boolean(config?.alertDelivery.smtpHasAuth)} webhookTokenSecretRef={contactWebhookTokenSecretRef} webhookTokenValue={contactWebhookTokenValue} webhookHeaderName={contactWebhookHeaderName} webhookHeaderValueSecretRef={contactWebhookHeaderValueSecretRef} webhookHeaderValue={contactWebhookHeaderValue} webhookBodyTemplate={contactWebhookBodyTemplate} pagerDutyRoutingKeySecretRef={contactRoutingKeySecretRef} pagerDutyRoutingKeyValue={contactRoutingKeyValue} pagerDutyRestApiKeySecretRef={contactRestApiKeySecretRef} pagerDutyRestApiKeyValue={contactRestApiKeyValue} pagerDutySeverity={contactPagerDutySeverity} pagerDutySourceField={contactPagerDutySourceField} pagerDutyComponent={contactPagerDutyComponent} pagerDutyGroup={contactPagerDutyGroup} pagerDutyClass={contactPagerDutyClass} pagerDutyServiceID={contactPagerDutyServiceID} onName={setContactName} onTarget={setContactTarget} onKind={changeContactKind} onWebhookTokenSecretRef={setContactWebhookTokenSecretRef} onWebhookTokenValue={setContactWebhookTokenValue} onWebhookHeaderName={setContactWebhookHeaderName} onWebhookHeaderValueSecretRef={setContactWebhookHeaderValueSecretRef} onWebhookHeaderValue={setContactWebhookHeaderValue} onWebhookBodyTemplate={setContactWebhookBodyTemplate} onPagerDutyRoutingKeySecretRef={setContactRoutingKeySecretRef} onPagerDutyRoutingKeyValue={setContactRoutingKeyValue} onPagerDutyRestApiKeySecretRef={setContactRestApiKeySecretRef} onPagerDutyRestApiKeyValue={setContactRestApiKeyValue} onPagerDutySeverity={setContactPagerDutySeverity} onPagerDutySourceField={setContactPagerDutySourceField} onPagerDutyComponent={setContactPagerDutyComponent} onPagerDutyGroup={setContactPagerDutyGroup} onPagerDutyClass={setContactPagerDutyClass} onPagerDutyServiceID={setContactPagerDutyServiceID} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={() => saveContact().catch(reportError)} onTest={() => testCurrentContact().catch(reportError)} onValidateSaved={(contact) => testContactAction(contact, 'validate').catch(reportError)} onResolveTestSaved={(contact) => testContactAction(contact, 'resolve').catch(reportError)} onTestSaved={(contact) => testContact(contact).catch(reportError)} onDelete={(contact) => deleteContact(contact).catch(reportError)} /> },
+    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} notifications={notifications} secrets={secrets} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} contactStatus={contactStatus} smtpConfigured={Boolean(config?.alertDelivery.smtpConfigured)} smtpHasAuth={Boolean(config?.alertDelivery.smtpHasAuth)} webhookTokenSecretRef={contactWebhookTokenSecretRef} webhookTokenValue={contactWebhookTokenValue} webhookHeaderName={contactWebhookHeaderName} webhookHeaderValueSecretRef={contactWebhookHeaderValueSecretRef} webhookHeaderValue={contactWebhookHeaderValue} webhookBodyTemplate={contactWebhookBodyTemplate} pagerDutyRoutingKeySecretRef={contactRoutingKeySecretRef} pagerDutyRoutingKeyValue={contactRoutingKeyValue} pagerDutyRestApiKeySecretRef={contactRestApiKeySecretRef} pagerDutyRestApiKeyValue={contactRestApiKeyValue} pagerDutySeverity={contactPagerDutySeverity} pagerDutySourceField={contactPagerDutySourceField} pagerDutyComponent={contactPagerDutyComponent} pagerDutyGroup={contactPagerDutyGroup} pagerDutyClass={contactPagerDutyClass} pagerDutyServiceID={contactPagerDutyServiceID} pagerDutyRestSyncEnabled={contactPagerDutyRestSyncEnabled} pagerDutyFromEmail={contactPagerDutyFromEmail} pagerDutyApiBaseURL={contactPagerDutyApiBaseURL} onName={setContactName} onTarget={setContactTarget} onKind={changeContactKind} onWebhookTokenSecretRef={setContactWebhookTokenSecretRef} onWebhookTokenValue={setContactWebhookTokenValue} onWebhookHeaderName={setContactWebhookHeaderName} onWebhookHeaderValueSecretRef={setContactWebhookHeaderValueSecretRef} onWebhookHeaderValue={setContactWebhookHeaderValue} onWebhookBodyTemplate={setContactWebhookBodyTemplate} onPagerDutyRoutingKeySecretRef={setContactRoutingKeySecretRef} onPagerDutyRoutingKeyValue={setContactRoutingKeyValue} onPagerDutyRestApiKeySecretRef={setContactRestApiKeySecretRef} onPagerDutyRestApiKeyValue={setContactRestApiKeyValue} onPagerDutySeverity={setContactPagerDutySeverity} onPagerDutySourceField={setContactPagerDutySourceField} onPagerDutyComponent={setContactPagerDutyComponent} onPagerDutyGroup={setContactPagerDutyGroup} onPagerDutyClass={setContactPagerDutyClass} onPagerDutyServiceID={setContactPagerDutyServiceID} onPagerDutyRestSyncEnabled={setContactPagerDutyRestSyncEnabled} onPagerDutyFromEmail={setContactPagerDutyFromEmail} onPagerDutyApiBaseURL={setContactPagerDutyApiBaseURL} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={() => saveContact().catch(reportError)} onTest={() => testCurrentContact().catch(reportError)} onValidateSaved={(contact) => testContactAction(contact, 'validate').catch(reportError)} onResolveTestSaved={(contact) => testContactAction(contact, 'resolve').catch(reportError)} onTestSaved={(contact) => testContact(contact).catch(reportError)} onDelete={(contact) => deleteContact(contact).catch(reportError)} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: <span>Notifications {failedNotificationCount > 0 && <Tag color="red">{failedNotificationCount}</Tag>}</span>, children: <NotificationsSection notifications={notifications} /> },
     { key: 'invites', label: 'Invites', children: <InvitesSection user={user} invites={invites} inviteEmail={inviteEmail} inviteRole={inviteRole} inviteToken={inviteToken} onEmail={setInviteEmail} onRole={setInviteRole} onToken={setInviteToken} onAccept={acceptInvite} onCreate={createInvite} onDelete={(invite) => deleteInvite(invite).catch((err) => setError(err.message))} /> },

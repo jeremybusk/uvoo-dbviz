@@ -82,7 +82,24 @@ func main() {
 			if err != nil {
 				return alert.RecordResult{}, err
 			}
-			return alert.RecordResult{IncidentID: incident.ID, Deduped: incident.Deduped, ShouldNotify: incident.ShouldNotify}, nil
+			lastSynced := ""
+			if incident.ExternalLastSyncedAt != nil {
+				lastSynced = *incident.ExternalLastSyncedAt
+			}
+			return alert.RecordResult{
+				IncidentID:           incident.ID,
+				Deduped:              incident.Deduped,
+				ShouldNotify:         incident.ShouldNotify,
+				ExternalProvider:     incident.ExternalProvider,
+				ExternalIncidentID:   incident.ExternalIncidentID,
+				ExternalIncidentURL:  incident.ExternalIncidentURL,
+				ExternalSyncStatus:   incident.ExternalSyncStatus,
+				ExternalLastSyncedAt: lastSynced,
+			}, nil
+		})
+		worker.SetIncidentSyncRecorder(func(ctx context.Context, rule alert.Rule, incidentID string, result alert.DeliveryResult) error {
+			_, err := stateClient.UpdateAlertIncidentSync(ctx, cfg.Alerts.WorkerKey, rule.TenantID, incidentID, result.ExternalProvider, result.ExternalIncidentID, result.ExternalIncidentURL, result.ExternalSyncStatus, result.Error)
+			return err
 		})
 		worker.SetNotificationRecorder(func(ctx context.Context, rule alert.Rule, incidentID string, contact alert.ContactEndpoint, result alert.DeliveryResult, payload map[string]any) error {
 			_, err := stateClient.RecordAlertNotification(ctx, cfg.Alerts.WorkerKey, rule.ID, rule.TenantID, incidentID, contact.Kind, contact.Target, result.Status, result.StatusCode, result.Error, payload)

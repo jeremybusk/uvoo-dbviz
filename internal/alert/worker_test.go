@@ -381,6 +381,87 @@ func TestDeliveryTesterSendsPagerDutyTestPayload(t *testing.T) {
 	}
 }
 
+func TestNotifyPagerDutyRESTCreatesIncident(t *testing.T) {
+	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
+	worker.SetSecretResolver(func(_ context.Context, tenantID string, ref string) (string, bool) {
+		if tenantID != "dev" || ref != "pagerduty-rest-key" {
+			t.Fatalf("secret lookup tenant=%s ref=%s", tenantID, ref)
+		}
+		return "rest-token", true
+	})
+	worker.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || r.URL.Path != "/incidents" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+		if got := r.Header.Get("Authorization"); got != "Token token=rest-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if got := r.Header.Get("From"); got != "alerts@example.com" {
+			t.Fatalf("from = %q", got)
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		incident, _ := payload["incident"].(map[string]any)
+		service, _ := incident["service"].(map[string]any)
+		if incident["title"] != "REST alert" || service["id"] != "P12345" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		return textResponse(http.StatusCreated, `{"incident":{"id":"Q123","html_url":"https://example.pagerduty.com/incidents/Q123"}}`), nil
+	})}
+
+	result := worker.notify(context.Background(), ContactEndpoint{
+		Kind: "pagerduty",
+		Config: map[string]string{
+			"restSyncEnabled":     "true",
+			"restApiKeySecretRef": "pagerduty-rest-key",
+			"serviceId":           "P12345",
+			"fromEmail":           "alerts@example.com",
+			"apiBaseURL":          "https://api.pagerduty.com",
+		},
+	}, map[string]any{"tenantId": "dev", "ruleName": "REST alert", "message": "REST alert"})
+
+	if result.Status != "success" || result.ExternalIncidentID != "Q123" || result.ExternalSyncStatus != "created" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestNotifyPagerDutyRESTResolvesIncident(t *testing.T) {
+	worker := testWorker(fakeClickHouse(t, `{"value":1}`))
+	worker.SetSecretResolver(func(context.Context, string, string) (string, bool) {
+		return "rest-token", true
+	})
+	worker.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPut || r.URL.Path != "/incidents/Q123" {
+			t.Fatalf("request = %s %s", r.Method, r.URL.String())
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		incident, _ := payload["incident"].(map[string]any)
+		if incident["status"] != "resolved" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		return textResponse(http.StatusOK, `{"incident":{"id":"Q123","html_url":"https://example.pagerduty.com/incidents/Q123"}}`), nil
+	})}
+
+	result := worker.notifyPagerDuty(context.Background(), ContactEndpoint{
+		Kind: "pagerduty",
+		Config: map[string]string{
+			"restSyncEnabled":     "true",
+			"restApiKeySecretRef": "pagerduty-rest-key",
+			"serviceId":           "P12345",
+			"fromEmail":           "alerts@example.com",
+		},
+	}, map[string]any{"tenantId": "dev", "externalIncidentId": "Q123"}, "resolve")
+
+	if result.Status != "success" || result.ExternalIncidentID != "Q123" || result.ExternalSyncStatus != "resolved" {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
 func fakeClickHouse(t *testing.T, body string) *clickhouse.Client {
 	t.Helper()
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
