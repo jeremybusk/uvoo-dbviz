@@ -973,6 +973,8 @@ export function SecretsSection(props: {
           <Flex gap={8} align="start" className="action-row full">
             <RowActions items={[
               { key: 'edit', label: 'Edit', onClick: () => props.onOpen(secret) },
+              { key: 'copy-name', label: 'Copy name', onClick: () => copyText(secret.name) },
+              { key: 'copy-id', label: 'Copy ID', onClick: () => copyText(secret.id) },
               {
                 key: 'delete',
                 label: 'Delete',
@@ -1414,6 +1416,10 @@ function defaultRowActionIcon(key: string): React.ReactNode {
   if (key.includes('load') || key.includes('use')) return <PlayCircleOutlined />;
   if (key.includes('toggle')) return <CheckCircleOutlined />;
   return undefined;
+}
+
+function copyText(value: string) {
+  navigator.clipboard?.writeText(value).catch(() => undefined);
 }
 
 function firstDimension(config: PublicConfig | null, datasetID: string): string {

@@ -3,6 +3,7 @@ package alert
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -228,6 +229,76 @@ func TestNotifyPagerDutyEventsV2UsesRoutingKeySecretAndDedupKey(t *testing.T) {
 		"fingerprint": "dev:rule-1:svc-a",
 		"value":       float64(2),
 		"row":         map[string]any{"service_name": "checkout", "message": "timeout"},
+	})
+
+	if result.Status != "success" || result.StatusCode != http.StatusAccepted {
+		t.Fatalf("result = %#v", result)
+	}
+}
+
+func TestDeliveryTesterSendsWebhookTestPayload(t *testing.T) {
+	var sawTestPayload bool
+	tester := NewDeliveryTester(SMTPConfig{}, nil, slog.Default())
+	tester.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() != "http://webhook.local/test" {
+			t.Fatalf("url = %s", r.URL.String())
+		}
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["ruleId"] != "contact-test" || payload["tenantId"] != "dev" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		if !strings.Contains(fmt.Sprint(payload["message"]), "test alert") {
+			t.Fatalf("message = %#v", payload["message"])
+		}
+		sawTestPayload = true
+		return textResponse(http.StatusOK, ""), nil
+	})}
+
+	result, payload := tester.TestContact(context.Background(), "dev", ContactEndpoint{Kind: "webhook", Target: "http://webhook.local/test"})
+
+	if result.Status != "success" || result.StatusCode != http.StatusOK {
+		t.Fatalf("result = %#v", result)
+	}
+	if payload["fingerprint"] != "dbviz-contact-test-dev" {
+		t.Fatalf("fingerprint = %#v", payload["fingerprint"])
+	}
+	if !sawTestPayload {
+		t.Fatal("webhook was not called")
+	}
+}
+
+func TestDeliveryTesterSendsPagerDutyTestPayload(t *testing.T) {
+	tester := NewDeliveryTester(SMTPConfig{}, func(_ context.Context, tenantID string, ref string) (string, bool) {
+		if tenantID != "dev" || ref != "pagerduty-test-key" {
+			t.Fatalf("secret lookup tenant=%s ref=%s", tenantID, ref)
+		}
+		return "routing-key", true
+	}, slog.Default())
+	tester.http = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		var payload map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload["routing_key"] != "routing-key" || payload["event_action"] != "trigger" || payload["dedup_key"] != "dbviz-contact-test-dev" {
+			t.Fatalf("payload = %#v", payload)
+		}
+		body, _ := payload["payload"].(map[string]any)
+		if body["summary"] != "This is a DBViz test alert notification." || body["source"] != "dbviz" {
+			t.Fatalf("event payload = %#v", body)
+		}
+		return textResponse(http.StatusAccepted, ""), nil
+	})}
+
+	result, _ := tester.TestContact(context.Background(), "dev", ContactEndpoint{
+		Kind: "pagerduty",
+		Config: map[string]string{
+			"mode":                "events_v2",
+			"routingKeySecretRef": "pagerduty-test-key",
+			"sourceField":         "service_name",
+		},
 	})
 
 	if result.Status != "success" || result.StatusCode != http.StatusAccepted {
