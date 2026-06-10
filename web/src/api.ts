@@ -168,6 +168,22 @@ export type ContactEndpoint = {
   created_at: string;
 };
 
+export type TenantSecret = {
+  id: string;
+  name: string;
+  description: string;
+  key_version: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContactTestResult = {
+  status: 'success' | 'failed' | 'skipped';
+  statusCode: number;
+  error: string;
+  payload: Record<string, unknown>;
+};
+
 export type AlertRule = {
   id: string;
   name: string;

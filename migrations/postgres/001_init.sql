@@ -739,6 +739,17 @@ AS $$
     ORDER BY s.updated_at DESC;
 $$;
 
+CREATE OR REPLACE FUNCTION get_tenant_secret(secret_name text)
+RETURNS TABLE(name text, ciphertext text, nonce text, key_version text)
+LANGUAGE sql STABLE
+AS $$
+    SELECT s.name, s.ciphertext, s.nonce, s.key_version
+    FROM tenant_secrets s
+    WHERE s.tenant_id = request_tenant_id()
+      AND s.name = secret_name
+    LIMIT 1;
+$$;
+
 CREATE OR REPLACE FUNCTION save_tenant_secret(secret_id uuid, secret_name text, secret_description text, secret_ciphertext text, secret_nonce text, secret_key_version text)
 RETURNS TABLE(id uuid, name text, description text, key_version text, created_at timestamptz, updated_at timestamptz)
 LANGUAGE plpgsql
@@ -813,6 +824,7 @@ END;
 $$;
 
 GRANT EXECUTE ON FUNCTION list_tenant_secrets() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION get_tenant_secret(text) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_tenant_secret(uuid, text, text, text, text, text) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION delete_tenant_secret(uuid) TO dbviz_web;
 

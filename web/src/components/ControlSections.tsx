@@ -44,6 +44,7 @@ import {
   PublicConfig,
   QueryHistory,
   SavedQuery,
+  TenantSecret,
   TenantInvite,
   TenantMember,
   TenantMembership,
@@ -942,13 +943,68 @@ function describeQueryMode(query: unknown): string {
   return 'Builder';
 }
 
+export function SecretsSection(props: {
+  user: Principal | null;
+  secrets: TenantSecret[];
+  editingSecretId: string;
+  secretName: string;
+  secretDescription: string;
+  secretValue: string;
+  onName: (value: string) => void;
+  onDescription: (value: string) => void;
+  onValue: (value: string) => void;
+  onNew: () => void;
+  onSave: () => void;
+  onOpen: (secret: TenantSecret) => void;
+  onDelete: (secret: TenantSecret) => void;
+}) {
+  return (
+    <Section title="Secrets">
+      {props.editingSecretId && <Tag color="blue">Editing existing secret</Tag>}
+      <Field label="Name"><Input value={props.secretName} onChange={(event) => props.onName(event.target.value)} placeholder="pagerduty-prod-events-key" /></Field>
+      <Field label="Description"><Input value={props.secretDescription} onChange={(event) => props.onDescription(event.target.value)} placeholder="PagerDuty Events API integration key" /></Field>
+      <Field label="Secret value"><Input.Password value={props.secretValue} onChange={(event) => props.onValue(event.target.value)} placeholder={props.editingSecretId ? 'Enter a new value to rotate' : 'Paste secret value'} /></Field>
+      <Flex gap={8} wrap="wrap">
+        <Button onClick={props.onNew}>New</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user || !props.secretName.trim() || !props.secretValue} onClick={props.onSave}>{props.editingSecretId ? 'Rotate secret' : 'Save secret'}</Button>
+      </Flex>
+      <ActionList items={props.secrets} empty="No secrets" list render={(secret) => (
+        <List.Item key={secret.id}>
+          <Flex gap={8} align="start" className="action-row full">
+            <RowActions items={[
+              { key: 'edit', label: 'Edit', onClick: () => props.onOpen(secret) },
+              {
+                key: 'delete',
+                label: 'Delete',
+                danger: true,
+                confirm: {
+                  title: 'Delete secret?',
+                  content: 'Contacts that reference this secret will fail until they are updated.',
+                  okText: 'Delete'
+                },
+                onClick: () => props.onDelete(secret)
+              }
+            ]} />
+            <List.Item.Meta
+              title={<Flex gap={6} align="center" wrap="wrap"><span>{secret.name}</span><Tag>{secret.key_version}</Tag></Flex>}
+              description={[secret.description, `id ${secret.id}`, `updated ${new Date(secret.updated_at).toLocaleString()}`].filter(Boolean).join(' - ')}
+            />
+          </Flex>
+        </List.Item>
+      )} />
+    </Section>
+  );
+}
+
 export function ContactsSection(props: {
   user: Principal | null;
   contacts: ContactEndpoint[];
+  secrets: TenantSecret[];
   editingContactId: string;
   contactName: string;
   contactTarget: string;
   contactKind: ContactEndpoint['kind'];
+  contactStatus: string;
   pagerDutyRoutingKeySecretRef: string;
   pagerDutyRoutingKeyValue: string;
   pagerDutyRestApiKeySecretRef: string;
@@ -974,6 +1030,8 @@ export function ContactsSection(props: {
   onOpen: (contact: ContactEndpoint) => void;
   onUseForAlert: (contact: ContactEndpoint) => void;
   onSave: () => void;
+  onTest: () => void;
+  onTestSaved: (contact: ContactEndpoint) => void;
   onDelete: (contact: ContactEndpoint) => void;
 }) {
   const [contactSearch, setContactSearch] = React.useState('');
@@ -986,6 +1044,10 @@ export function ContactsSection(props: {
       contact.target
     ].some((value) => value.toLowerCase().includes(term)));
   }, [contactSearch, props.contacts]);
+  const secretOptions = props.secrets.map((secret) => ({
+    label: secret.name,
+    value: secret.name
+  }));
 
   return (
     <Section title="Contacts">
@@ -1001,16 +1063,30 @@ export function ContactsSection(props: {
       <Field label="Target"><Input value={props.contactTarget} onChange={(event) => props.onTarget(event.target.value)} placeholder={contactTargetPlaceholder(props.contactKind)} /></Field>
       {props.contactKind === 'pagerduty' && (
         <>
-          <Field label="Routing key secret">
-            <Input value={props.pagerDutyRoutingKeySecretRef} onChange={(event) => props.onPagerDutyRoutingKeySecretRef(event.target.value)} placeholder="pagerduty-prod-events-key" />
+          <Field label="Events integration key secret">
+            <Select
+              allowClear
+              showSearch
+              value={props.pagerDutyRoutingKeySecretRef || undefined}
+              onChange={(value) => props.onPagerDutyRoutingKeySecretRef(value || '')}
+              options={secretOptions}
+              placeholder="Select a saved secret"
+            />
           </Field>
-          <Field label="Integration key">
+          <Field label="Paste Events integration key">
             <Input.Password value={props.pagerDutyRoutingKeyValue} onChange={(event) => props.onPagerDutyRoutingKeyValue(event.target.value)} placeholder="Paste to encrypt and store" />
           </Field>
-          <Field label="REST API secret">
-            <Input value={props.pagerDutyRestApiKeySecretRef} onChange={(event) => props.onPagerDutyRestApiKeySecretRef(event.target.value)} placeholder="pagerduty-rest-api-key" />
+          <Field label="REST API key secret">
+            <Select
+              allowClear
+              showSearch
+              value={props.pagerDutyRestApiKeySecretRef || undefined}
+              onChange={(value) => props.onPagerDutyRestApiKeySecretRef(value || '')}
+              options={secretOptions}
+              placeholder="Optional, for incident sync"
+            />
           </Field>
-          <Field label="REST API key">
+          <Field label="Paste REST API key">
             <Input.Password value={props.pagerDutyRestApiKeyValue} onChange={(event) => props.onPagerDutyRestApiKeyValue(event.target.value)} placeholder="Optional for future incident sync" />
           </Field>
           <Field label="Severity">
@@ -1030,7 +1106,9 @@ export function ContactsSection(props: {
       <Flex gap={8} wrap="wrap">
         <Button onClick={props.onNew}>New</Button>
         <Button icon={<SaveOutlined />} disabled={!props.user || !contactCanSave(props)} onClick={props.onSave}>{props.editingContactId ? 'Update contact' : 'Save contact'}</Button>
+        <Button icon={<PlayCircleOutlined />} disabled={!props.user || !contactCanSave(props)} onClick={props.onTest}>Save and test</Button>
       </Flex>
+      {props.contactStatus && <Alert type={props.contactStatus.startsWith('Success') ? 'success' : props.contactStatus.startsWith('Skipped') ? 'warning' : 'error'} showIcon message={props.contactStatus} />}
       <Field label="Find contact">
         <Input.Search allowClear value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} />
       </Field>
@@ -1040,6 +1118,7 @@ export function ContactsSection(props: {
             <RowActions items={[
               { key: 'edit', label: 'Edit', onClick: () => props.onOpen(contact) },
               { key: 'use', label: 'Use in alert', onClick: () => props.onUseForAlert(contact) },
+              { key: 'test', label: 'Test', onClick: () => props.onTestSaved(contact) },
               {
                 key: 'delete',
                 label: 'Delete',

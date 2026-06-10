@@ -179,6 +179,20 @@ func (c *Client) ListTenantSecrets(ctx context.Context, user auth.Principal, bea
 	return rows, err
 }
 
+func (c *Client) GetTenantSecret(ctx context.Context, user auth.Principal, bearer string, secretName string) (EncryptedTenantSecret, error) {
+	var rows []EncryptedTenantSecret
+	err := c.RPC(ctx, "get_tenant_secret", map[string]any{
+		"secret_name": secretName,
+	}, user, bearer, &rows)
+	if err != nil {
+		return EncryptedTenantSecret{}, err
+	}
+	if len(rows) == 0 {
+		return EncryptedTenantSecret{}, fmt.Errorf("tenant secret not found: %s", secretName)
+	}
+	return rows[0], nil
+}
+
 func (c *Client) SaveTenantSecret(ctx context.Context, user auth.Principal, bearer string, id string, name string, description string, ciphertext string, nonce string, keyVersion string) ([]TenantSecret, error) {
 	var rows []TenantSecret
 	var secretID any

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,6 +71,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
 	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
 	a.mux.HandleFunc("POST /api/alerts/contacts/delete", a.requireAuth(a.deleteContactEndpoint))
+	a.mux.HandleFunc("POST /api/alerts/contacts/test", a.requireAuth(a.testContactEndpoint))
 	a.mux.HandleFunc("GET /api/secrets", a.requireAuth(a.listTenantSecrets))
 	a.mux.HandleFunc("POST /api/secrets", a.requireAuth(a.saveTenantSecret))
 	a.mux.HandleFunc("POST /api/secrets/delete", a.requireAuth(a.deleteTenantSecret))
@@ -1128,6 +1130,115 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordAuditEvent(r, "contact_endpoint.save", "contact_endpoint", targetIDFromRows(rows), map[string]any{"name": req.Name, "kind": req.Kind})
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) testContactEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID     string         `json:"id"`
+		Name   string         `json:"name"`
+		Kind   string         `json:"kind"`
+		Target string         `json:"target"`
+		Config map[string]any `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	contact, err := a.contactFromTestRequest(r, req.ID, req.Kind, req.Target, req.Config)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	tester := alert.NewDeliveryTester(alert.SMTPConfig{
+		Host:     a.cfg.Alerts.SMTPHost,
+		Port:     a.cfg.Alerts.SMTPPort,
+		User:     a.cfg.Alerts.SMTPUser,
+		Password: a.cfg.Alerts.SMTPPassword,
+		From:     a.cfg.Alerts.SMTPFrom,
+	}, a.resolveTenantSecretForRequest(r), a.logger)
+	result, payload := tester.TestContact(r.Context(), statePrincipal(r).TenantID, contact)
+	a.recordAuditEvent(r, "contact_endpoint.test", "contact_endpoint", strings.TrimSpace(req.ID), map[string]any{"kind": contact.Kind, "status": result.Status})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     result.Status,
+		"statusCode": result.StatusCode,
+		"error":      result.Error,
+		"payload":    payload,
+	})
+}
+
+func (a *App) contactFromTestRequest(r *http.Request, id string, kind string, target string, config map[string]any) (alert.ContactEndpoint, error) {
+	id = strings.TrimSpace(id)
+	if id != "" && strings.TrimSpace(kind) == "" && strings.TrimSpace(target) == "" {
+		var rows []map[string]any
+		if err := a.state.RPC(r.Context(), "list_contact_endpoints", map[string]any{}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+			return alert.ContactEndpoint{}, err
+		}
+		for _, row := range rows {
+			if fmt.Sprint(row["id"]) == id {
+				return alert.ContactEndpoint{
+					Kind:   fmt.Sprint(row["kind"]),
+					Target: fmt.Sprint(row["target"]),
+					Config: stringMapFromAny(row["config"]),
+				}, nil
+			}
+		}
+		return alert.ContactEndpoint{}, errors.New("contact endpoint was not found")
+	}
+	kind = strings.TrimSpace(kind)
+	target = strings.TrimSpace(target)
+	if kind == "pagerduty" && target == "" {
+		target = "https://events.pagerduty.com/v2/enqueue"
+	}
+	if kind == "" || target == "" {
+		return alert.ContactEndpoint{}, errors.New("contact kind and target are required")
+	}
+	if kind == "pagerduty" {
+		if err := validatePagerDutyEventsURL(target); err != nil {
+			return alert.ContactEndpoint{}, err
+		}
+	}
+	return alert.ContactEndpoint{Kind: kind, Target: target, Config: stringMapFromAny(config)}, nil
+}
+
+func (a *App) resolveTenantSecretForRequest(r *http.Request) func(context.Context, string, string) (string, bool) {
+	user := statePrincipal(r)
+	bearer := r.Header.Get("Authorization")
+	return func(ctx context.Context, tenantID string, secretName string) (string, bool) {
+		if a.cfg.Secrets.EncryptionKey != "" && a.state.Enabled() {
+			row, err := a.state.GetTenantSecret(ctx, user, bearer, strings.TrimSpace(secretName))
+			if err == nil {
+				value, decryptErr := secrets.DecryptString(row.Ciphertext, row.Nonce, a.cfg.Secrets.EncryptionKey)
+				if decryptErr == nil {
+					return value, true
+				}
+				a.logger.Warn("tenant secret decrypt failed", "tenant", tenantID, "secret", secretName, "error", decryptErr)
+			}
+		}
+		return alert.ResolveSecretRefFromEnv(ctx, tenantID, secretName)
+	}
+}
+
+func stringMapFromAny(input any) map[string]string {
+	output := map[string]string{}
+	if input == nil {
+		return output
+	}
+	switch typed := input.(type) {
+	case map[string]string:
+		for key, value := range typed {
+			output[key] = value
+		}
+	case map[string]any:
+		for key, value := range typed {
+			if text, ok := value.(string); ok {
+				output[key] = strings.TrimSpace(text)
+			}
+		}
+	}
+	return output
 }
 
 func (a *App) normalizeContactConfig(r *http.Request, kind string, name string, target string, input map[string]any) (map[string]any, error) {

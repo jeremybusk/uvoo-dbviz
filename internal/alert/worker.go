@@ -155,6 +155,45 @@ func (w *Worker) SetSecretResolver(resolve func(context.Context, string, string)
 	w.secrets = resolve
 }
 
+func NewDeliveryTester(smtp SMTPConfig, resolve func(context.Context, string, string) (string, bool), logger *slog.Logger) *Worker {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	tester := &Worker{
+		http:    &http.Client{Timeout: 10 * time.Second},
+		logger:  logger,
+		smtp:    smtp,
+		secrets: ResolveSecretRefFromEnv,
+	}
+	tester.SetSecretResolver(resolve)
+	return tester
+}
+
+func (w *Worker) TestContact(ctx context.Context, tenantID string, contact ContactEndpoint) (DeliveryResult, map[string]any) {
+	incident := TestIncidentPayload(tenantID)
+	return w.notify(ctx, contact, incident), incident
+}
+
+func TestIncidentPayload(tenantID string) map[string]any {
+	now := time.Now().UTC().Format(time.RFC3339)
+	return map[string]any{
+		"ruleId":      "contact-test",
+		"ruleName":    "DBViz contact test",
+		"tenantId":    tenantID,
+		"status":      "firing",
+		"value":       1,
+		"message":     "This is a DBViz test alert notification.",
+		"fingerprint": "dbviz-contact-test-" + tenantID,
+		"timestamp":   now,
+		"row": map[string]any{
+			"service_name": "dbviz",
+			"severity":     "info",
+			"message":      "This is a DBViz test alert notification.",
+			"timestamp":    now,
+		},
+	}
+}
+
 func RulesFromJSON(raw string) ([]Rule, error) {
 	if raw == "" {
 		return nil, nil
