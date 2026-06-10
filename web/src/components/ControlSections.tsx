@@ -7,6 +7,7 @@ import {
   Input,
   InputNumber,
   List,
+  Popconfirm,
   Select,
   Segmented,
   Space,
@@ -188,24 +189,57 @@ export function SourceSection(props: {
   onDatabase: (value: string) => void;
   onUser: (value: string) => void;
   onSecretRef: (value: string) => void;
+  onNew: () => void;
   onSave: () => void;
   onTest: () => void;
   onOpen: (source: DataSource) => void;
+  onDelete: (source: DataSource) => void;
 }) {
+  const [sourceSearch, setSourceSearch] = React.useState('');
+  const filteredSources = React.useMemo(() => {
+    const term = sourceSearch.trim().toLowerCase();
+    if (!term) return props.dataSources;
+    return props.dataSources.filter((source) => [
+      source.name,
+      source.kind,
+      String(source.config.url || ''),
+      String(source.config.database || '')
+    ].some((value) => value.toLowerCase().includes(term)));
+  }, [props.dataSources, sourceSearch]);
+
   return (
     <Section title="Sources">
+      {props.editingSourceId && <Tag color="blue">Editing existing source</Tag>}
       <Field label="Name"><Input value={props.sourceName} onChange={(event) => props.onName(event.target.value)} /></Field>
       <Field label="URL"><Input value={props.sourceURL} onChange={(event) => props.onURL(event.target.value)} /></Field>
       <Field label="Database"><Input value={props.sourceDatabase} onChange={(event) => props.onDatabase(event.target.value)} /></Field>
       <Field label="User"><Input value={props.sourceUser} onChange={(event) => props.onUser(event.target.value)} /></Field>
       <Field label="Secret"><Input value={props.sourceSecretRef} onChange={(event) => props.onSecretRef(event.target.value)} /></Field>
-      <Flex gap={8}>
-        <Button icon={<SaveOutlined />} disabled={!props.user || !props.sourceURL} onClick={props.onSave}>Save</Button>
+      <Flex gap={8} wrap="wrap">
+        <Button onClick={props.onNew}>New</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user || !props.sourceURL} onClick={props.onSave}>{props.editingSourceId ? 'Update source' : 'Save source'}</Button>
         <Button disabled={!props.user || !props.editingSourceId} onClick={props.onTest}>Test</Button>
       </Flex>
       {props.sourceStatus && <Alert type="info" showIcon message={props.sourceStatus} />}
-      <ActionList items={props.dataSources} empty="No sources" render={(source) => (
-        <Button block key={source.id} onClick={() => props.onOpen(source)}>{source.name} - {source.kind}</Button>
+      <Field label="Find source">
+        <Input.Search allowClear value={sourceSearch} onChange={(event) => setSourceSearch(event.target.value)} />
+      </Field>
+      <ActionList items={filteredSources} empty="No sources" render={(source) => (
+        <Flex key={source.id} gap={6}>
+          <Button block className="stack-button" type={source.id === props.editingSourceId ? 'primary' : 'default'} onClick={() => props.onOpen(source)}>
+            <span>{source.name}</span>
+            <small>{source.kind} - {String(source.config.url || 'server default')}</small>
+          </Button>
+          <Popconfirm
+            title="Delete source?"
+            description="Saved queries and dashboards that reference it may fall back to the server default."
+            okText="Delete"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => props.onDelete(source)}
+          >
+            <Button icon={<DeleteOutlined />} danger />
+          </Popconfirm>
+        </Flex>
       )} />
     </Section>
   );
@@ -388,20 +422,55 @@ export function HistorySection({ queryHistory, onOpen }: { queryHistory: QueryHi
 export function SavedQueriesSection(props: {
   user: Principal | null;
   savedQueries: SavedQuery[];
+  editingSavedQueryId: string;
   savedQueryName: string;
   savedQueryDescription: string;
   onName: (value: string) => void;
   onDescription: (value: string) => void;
+  onNew: () => void;
   onSave: () => void;
   onOpen: (query: SavedQuery) => void;
+  onDelete: (query: SavedQuery) => void;
 }) {
+  const [querySearch, setQuerySearch] = React.useState('');
+  const filteredQueries = React.useMemo(() => {
+    const term = querySearch.trim().toLowerCase();
+    if (!term) return props.savedQueries;
+    return props.savedQueries.filter((query) => [
+      query.name,
+      query.description,
+      describePanelQuery(query.query)
+    ].some((value) => value.toLowerCase().includes(term)));
+  }, [props.savedQueries, querySearch]);
+
   return (
     <Section title="Saved Queries">
+      {props.editingSavedQueryId && <Tag color="blue">Editing saved query</Tag>}
       <Field label="Name"><Input value={props.savedQueryName} onChange={(event) => props.onName(event.target.value)} /></Field>
       <Field label="Description"><Input.TextArea value={props.savedQueryDescription} onChange={(event) => props.onDescription(event.target.value)} /></Field>
-      <Button icon={<SaveOutlined />} disabled={!props.user || !props.savedQueryName} onClick={props.onSave}>Save query</Button>
-      <ActionList items={props.savedQueries} empty="No saved queries" render={(query) => (
-        <Button block key={query.id} onClick={() => props.onOpen(query)}>{query.name}</Button>
+      <Flex gap={8} wrap="wrap">
+        <Button onClick={props.onNew}>New</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user || !props.savedQueryName} onClick={props.onSave}>{props.editingSavedQueryId ? 'Update query' : 'Save query'}</Button>
+      </Flex>
+      <Field label="Find query">
+        <Input.Search allowClear value={querySearch} onChange={(event) => setQuerySearch(event.target.value)} />
+      </Field>
+      <ActionList items={filteredQueries} empty="No saved queries" render={(query) => (
+        <Flex key={query.id} gap={6}>
+          <Button block className="stack-button" type={query.id === props.editingSavedQueryId ? 'primary' : 'default'} onClick={() => props.onOpen(query)}>
+            <span>{query.name}</span>
+            <small>{query.description || describePanelQuery(query.query)}</small>
+          </Button>
+          <Popconfirm
+            title="Delete saved query?"
+            description="This does not change dashboards or alert rules already using copied query payloads."
+            okText="Delete"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => props.onDelete(query)}
+          >
+            <Button icon={<DeleteOutlined />} danger />
+          </Popconfirm>
+        </Flex>
       )} />
     </Section>
   );
@@ -486,7 +555,15 @@ export function DashboardsSection(props: {
           <Button icon={<UpOutlined />} disabled={index === 0} onClick={() => props.onMovePanel(index, -1)} />
           <Button icon={<DownOutlined />} disabled={index === props.dashboardPanels.length - 1} onClick={() => props.onMovePanel(index, 1)} />
           <Button icon={<CopyOutlined />} onClick={() => props.onDuplicatePanel(index)} />
-          <Button icon={<DeleteOutlined />} danger onClick={() => props.onRemovePanel(index)} />
+          <Popconfirm
+            title="Remove panel?"
+            description="This only removes the panel from the dashboard draft."
+            okText="Remove"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => props.onRemovePanel(index)}
+          >
+            <Button icon={<DeleteOutlined />} danger />
+          </Popconfirm>
         </Flex>
       )} />
       <Field label="Find dashboard">
@@ -499,7 +576,15 @@ export function DashboardsSection(props: {
             <small>{dashboard.layout?.charts?.length || 0} panels - updated {new Date(dashboard.updated_at).toLocaleString()}</small>
           </Button>
           <Button icon={<CopyOutlined />} onClick={() => props.onDuplicateDashboard(dashboard)} />
-          <Button icon={<DeleteOutlined />} danger onClick={() => props.onDeleteDashboard(dashboard)} />
+          <Popconfirm
+            title="Delete dashboard?"
+            description="This deletes the saved dashboard for this tenant."
+            okText="Delete"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => props.onDeleteDashboard(dashboard)}
+          >
+            <Button icon={<DeleteOutlined />} danger />
+          </Popconfirm>
         </Flex>
       )} />
     </Section>
@@ -538,9 +623,22 @@ export function AlertsSection(props: {
   onOpen: (rule: AlertRule) => void;
   onLoadQuery: (rule: AlertRule) => void;
   onToggle: (rule: AlertRule) => void;
+  onDelete: (rule: AlertRule) => void;
   onTest: () => void;
   onSave: () => void;
 }) {
+  const [alertSearch, setAlertSearch] = React.useState('');
+  const filteredRules = React.useMemo(() => {
+    const term = alertSearch.trim().toLowerCase();
+    if (!term) return props.alertRules;
+    return props.alertRules.filter((rule) => [
+      rule.name,
+      describeAlertCondition(rule),
+      describeQueryMode(rule.query),
+      rule.enabled ? 'enabled' : 'disabled'
+    ].some((value) => value.toLowerCase().includes(term)));
+  }, [alertSearch, props.alertRules]);
+
   return (
     <Section title="Alerts">
       {props.editingAlertId && <Tag color="blue">Editing existing rule</Tag>}
@@ -579,13 +677,26 @@ export function AlertsSection(props: {
         <Button disabled={!props.user} onClick={props.onTest}>Test</Button>
         <Button icon={<SaveOutlined />} disabled={!props.user} onClick={props.onSave}>{props.editingAlertId ? 'Update rule' : 'Save rule'}</Button>
       </Flex>
-      <ActionList items={props.alertRules} empty="No alert rules" list render={(rule) => (
+      <Field label="Find alert">
+        <Input.Search allowClear value={alertSearch} onChange={(event) => setAlertSearch(event.target.value)} />
+      </Field>
+      <ActionList items={filteredRules} empty="No alert rules" list render={(rule) => (
         <List.Item
           key={rule.id}
           actions={[
             <Button key="edit" size="small" onClick={() => props.onOpen(rule)}>Edit</Button>,
             <Button key="load" size="small" onClick={() => props.onLoadQuery(rule)}>Load query</Button>,
-            <Button key="toggle" size="small" onClick={() => props.onToggle(rule)}>{rule.enabled ? 'Disable' : 'Enable'}</Button>
+            <Button key="toggle" size="small" onClick={() => props.onToggle(rule)}>{rule.enabled ? 'Disable' : 'Enable'}</Button>,
+            <Popconfirm
+              key="delete"
+              title="Delete alert rule?"
+              description="Existing incidents remain for audit history."
+              okText="Delete"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => props.onDelete(rule)}
+            >
+              <Button size="small" danger>Delete</Button>
+            </Popconfirm>
           ]}
         >
           <List.Item.Meta
@@ -637,7 +748,19 @@ export function ContactsSection(props: {
   onOpen: (contact: ContactEndpoint) => void;
   onUseForAlert: (contact: ContactEndpoint) => void;
   onSave: () => void;
+  onDelete: (contact: ContactEndpoint) => void;
 }) {
+  const [contactSearch, setContactSearch] = React.useState('');
+  const filteredContacts = React.useMemo(() => {
+    const term = contactSearch.trim().toLowerCase();
+    if (!term) return props.contacts;
+    return props.contacts.filter((contact) => [
+      contact.name,
+      contact.kind,
+      contact.target
+    ].some((value) => value.toLowerCase().includes(term)));
+  }, [contactSearch, props.contacts]);
+
   return (
     <Section title="Contacts">
       {props.editingContactId && <Tag color="blue">Editing existing contact</Tag>}
@@ -654,12 +777,25 @@ export function ContactsSection(props: {
         <Button onClick={props.onNew}>New</Button>
         <Button icon={<SaveOutlined />} disabled={!props.user || !props.contactTarget} onClick={props.onSave}>{props.editingContactId ? 'Update contact' : 'Save contact'}</Button>
       </Flex>
-      <ActionList items={props.contacts} empty="No contacts" list render={(contact) => (
+      <Field label="Find contact">
+        <Input.Search allowClear value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} />
+      </Field>
+      <ActionList items={filteredContacts} empty="No contacts" list render={(contact) => (
         <List.Item
           key={contact.id}
           actions={[
             <Button key="edit" size="small" onClick={() => props.onOpen(contact)}>Edit</Button>,
-            <Button key="use" size="small" onClick={() => props.onUseForAlert(contact)}>Use in alert</Button>
+            <Button key="use" size="small" onClick={() => props.onUseForAlert(contact)}>Use in alert</Button>,
+            <Popconfirm
+              key="delete"
+              title="Delete contact?"
+              description="Alert rules using this contact will keep running without a contact."
+              okText="Delete"
+              okButtonProps={{ danger: true }}
+              onConfirm={() => props.onDelete(contact)}
+            >
+              <Button size="small" danger>Delete</Button>
+            </Popconfirm>
           ]}
         >
           <List.Item.Meta
@@ -724,7 +860,20 @@ export function InvitesSection(props: {
   onToken: (value: string) => void;
   onAccept: () => void;
   onCreate: () => void;
+  onDelete: (invite: TenantInvite) => void;
 }) {
+  const [inviteSearch, setInviteSearch] = React.useState('');
+  const filteredInvites = React.useMemo(() => {
+    const term = inviteSearch.trim().toLowerCase();
+    if (!term) return props.invites;
+    return props.invites.filter((invite) => [
+      invite.email,
+      invite.role,
+      invite.accepted_at ? 'accepted' : 'pending',
+      invite.token || ''
+    ].some((value) => value.toLowerCase().includes(term)));
+  }, [inviteSearch, props.invites]);
+
   return (
     <Section title="Invites">
       <Field label="Accept token"><Input value={props.inviteToken} onChange={(event) => props.onToken(event.target.value)} /></Field>
@@ -738,11 +887,25 @@ export function InvitesSection(props: {
         </Select>
       </Field>
       <Button disabled={!props.user || !props.inviteEmail} onClick={props.onCreate}>Create invite</Button>
-      <ActionList items={props.invites} empty="No invites" render={(invite) => (
-        <Button block className="stack-button" key={invite.id}>
-          <span>{invite.email} - {invite.role}</span>
-          {invite.token && <small>{invite.token}</small>}
-        </Button>
+      <Field label="Find invite">
+        <Input.Search allowClear value={inviteSearch} onChange={(event) => setInviteSearch(event.target.value)} />
+      </Field>
+      <ActionList items={filteredInvites} empty="No invites" render={(invite) => (
+        <Flex key={invite.id} gap={6}>
+          <Button block className="stack-button">
+            <span>{invite.email} - {invite.role}</span>
+            <small>{invite.accepted_at ? `accepted ${new Date(invite.accepted_at).toLocaleString()}` : invite.token || `expires ${new Date(invite.expires_at).toLocaleString()}`}</small>
+          </Button>
+          <Popconfirm
+            title="Delete invite?"
+            description="The invite token will no longer be accepted."
+            okText="Delete"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => props.onDelete(invite)}
+          >
+            <Button icon={<DeleteOutlined />} danger />
+          </Popconfirm>
+        </Flex>
       )} />
     </Section>
   );
@@ -753,9 +916,25 @@ export function MembersSection(props: {
   onRole: (member: TenantMember, role: Role) => void;
   onDeactivate: (member: TenantMember) => void;
 }) {
+  const [memberSearch, setMemberSearch] = React.useState('');
+  const filteredMembers = React.useMemo(() => {
+    const term = memberSearch.trim().toLowerCase();
+    if (!term) return props.members;
+    return props.members.filter((member) => [
+      member.email,
+      member.display_name,
+      member.provider,
+      member.role,
+      member.disabled_at ? 'disabled' : 'active'
+    ].some((value) => value.toLowerCase().includes(term)));
+  }, [memberSearch, props.members]);
+
   return (
     <Section title="Members">
-      <ActionList items={props.members} empty="No members" render={(member) => (
+      <Field label="Find member">
+        <Input.Search allowClear value={memberSearch} onChange={(event) => setMemberSearch(event.target.value)} />
+      </Field>
+      <ActionList items={filteredMembers} empty="No members" render={(member) => (
         <List.Item
           key={member.id}
           actions={[
@@ -765,7 +944,18 @@ export function MembersSection(props: {
               <Select.Option value="editor">Editor</Select.Option>
               <Select.Option value="viewer">Viewer</Select.Option>
             </Select>,
-            !member.disabled_at && <Button key="disable" size="small" danger onClick={() => props.onDeactivate(member)}>Deactivate</Button>
+            !member.disabled_at && (
+              <Popconfirm
+                key="disable"
+                title="Deactivate member?"
+                description="The member will lose access to this tenant."
+                okText="Deactivate"
+                okButtonProps={{ danger: true }}
+                onConfirm={() => props.onDeactivate(member)}
+              >
+                <Button size="small" danger>Deactivate</Button>
+              </Popconfirm>
+            )
           ]}
         >
           <List.Item.Meta

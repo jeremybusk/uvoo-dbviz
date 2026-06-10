@@ -50,18 +50,22 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/query/history", a.requireAuth(a.listQueryHistory))
 	a.mux.HandleFunc("GET /api/saved-queries", a.requireAuth(a.listSavedQueries))
 	a.mux.HandleFunc("POST /api/saved-queries", a.requireAuth(a.saveSavedQuery))
+	a.mux.HandleFunc("POST /api/saved-queries/delete", a.requireAuth(a.deleteSavedQuery))
 	a.mux.HandleFunc("GET /api/audit/events", a.requireAuth(a.listAuditEvents))
 	a.mux.HandleFunc("GET /api/data-sources", a.requireAuth(a.listDataSources))
 	a.mux.HandleFunc("POST /api/data-sources", a.requireAuth(a.saveDataSource))
+	a.mux.HandleFunc("POST /api/data-sources/delete", a.requireAuth(a.deleteDataSource))
 	a.mux.HandleFunc("POST /api/data-sources/test", a.requireAuth(a.testDataSource))
 	a.mux.HandleFunc("GET /api/dashboards", a.requireAuth(a.listDashboards))
 	a.mux.HandleFunc("POST /api/dashboards", a.requireAuth(a.saveDashboard))
 	a.mux.HandleFunc("POST /api/dashboards/delete", a.requireAuth(a.deleteDashboard))
 	a.mux.HandleFunc("GET /api/alerts/rules", a.requireAuth(a.listAlertRules))
 	a.mux.HandleFunc("POST /api/alerts/rules", a.requireAuth(a.saveAlertRule))
+	a.mux.HandleFunc("POST /api/alerts/rules/delete", a.requireAuth(a.deleteAlertRule))
 	a.mux.HandleFunc("POST /api/alerts/test", a.requireAuth(a.testAlertRule))
 	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
 	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
+	a.mux.HandleFunc("POST /api/alerts/contacts/delete", a.requireAuth(a.deleteContactEndpoint))
 	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
 	a.mux.HandleFunc("GET /api/alerts/notifications", a.requireAuth(a.listAlertNotifications))
 	a.mux.HandleFunc("POST /api/alerts/incidents/resolve", a.requireAuth(a.resolveAlertIncident))
@@ -70,6 +74,7 @@ func (a *App) routes() {
 	a.mux.HandleFunc("POST /api/members/deactivate", a.requireAuth(a.deactivateMember))
 	a.mux.HandleFunc("GET /api/invites", a.requireAuth(a.listInvites))
 	a.mux.HandleFunc("POST /api/invites", a.requireAuth(a.createInvite))
+	a.mux.HandleFunc("POST /api/invites/delete", a.requireAuth(a.deleteInvite))
 	a.mux.HandleFunc("POST /api/invites/accept", a.requireAuth(a.acceptInvite))
 	a.mux.HandleFunc("/", a.static)
 }
@@ -495,6 +500,33 @@ func (a *App) saveDataSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+func (a *App) deleteDataSource(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("data source id is required"))
+		return
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "delete_data_source", map[string]any{
+		"source_id": req.ID,
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.recordAuditEvent(r, "data_source.delete", "data_source", req.ID, nil)
+	writeJSON(w, http.StatusOK, rows)
+}
+
 func (a *App) clickHouseForQuery(r *http.Request, req clickhouse.QueryRequest) (*clickhouse.Client, error) {
 	if strings.TrimSpace(req.SourceID) == "" {
 		return a.ch, nil
@@ -615,6 +647,33 @@ func (a *App) saveDashboard(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+func (a *App) deleteSavedQuery(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("saved query id is required"))
+		return
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "delete_saved_query", map[string]any{
+		"saved_query_id": req.ID,
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.recordAuditEvent(r, "saved_query.delete", "saved_query", req.ID, nil)
+	writeJSON(w, http.StatusOK, rows)
+}
+
 func (a *App) deleteDashboard(w http.ResponseWriter, r *http.Request) {
 	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
 		return
@@ -708,6 +767,33 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.recordAuditEvent(r, "alert_rule.save", "alert_rule", targetIDFromRows(rows), map[string]any{"name": req.Name, "enabled": req.Enabled})
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) deleteAlertRule(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("alert rule id is required"))
+		return
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "delete_alert_rule", map[string]any{
+		"alert_id": req.ID,
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.recordAuditEvent(r, "alert_rule.delete", "alert_rule", req.ID, nil)
 	writeJSON(w, http.StatusOK, rows)
 }
 
@@ -925,6 +1011,33 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, rows)
 }
 
+func (a *App) deleteContactEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("contact endpoint id is required"))
+		return
+	}
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "delete_contact_endpoint", map[string]any{
+		"contact_id": req.ID,
+	}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.recordAuditEvent(r, "contact_endpoint.delete", "contact_endpoint", req.ID, nil)
+	writeJSON(w, http.StatusOK, rows)
+}
+
 func (a *App) listAlertIncidents(w http.ResponseWriter, r *http.Request) {
 	rows, err := a.state.ListAlertIncidents(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), 100)
 	if err != nil {
@@ -1020,6 +1133,36 @@ func (a *App) createInvite(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.recordAuditEvent(r, "tenant_invite.create", "tenant_invite", targetIDFromRows(rows), map[string]any{"email": req.Email, "role": req.Role})
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) deleteInvite(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	req.ID = strings.TrimSpace(req.ID)
+	if req.ID == "" {
+		writeError(w, http.StatusBadRequest, errors.New("invite id is required"))
+		return
+	}
+	user := statePrincipal(r)
+	var rows []map[string]any
+	if err := a.state.RPC(r.Context(), "delete_tenant_invite", map[string]any{
+		"actor_subject":  user.Subject,
+		"actor_provider": user.Provider,
+		"invite_id":      req.ID,
+	}, user, r.Header.Get("Authorization"), &rows); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.recordAuditEvent(r, "tenant_invite.delete", "tenant_invite", req.ID, nil)
 	writeJSON(w, http.StatusOK, rows)
 }
 

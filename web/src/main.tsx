@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Alert, Button, ConfigProvider, Dropdown, Flex, Input, Layout, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message, theme } from 'antd';
+import { Alert, Button, ConfigProvider, Dropdown, Flex, Input, Layout, Popconfirm, Segmented, Select, Space, Spin, Switch, Table, Tabs, Tag, Typography, message, theme } from 'antd';
 import { BulbOutlined, DownOutlined, FilterOutlined, MoonOutlined, ReloadOutlined, SaveOutlined } from '@ant-design/icons';
 import {
   AlertIncident,
@@ -275,6 +275,16 @@ function App() {
     }
   }
 
+  async function deleteDataSource(source: DataSource) {
+    const deleted = await apiPost<DataSource[]>('/api/data-sources/delete', { id: source.id });
+    setDataSources((current) => current.filter((item) => item.id !== source.id));
+    if (editingSourceId === source.id) newDataSource();
+    if (query.sourceId === source.id) setQuery((current) => ({ ...current, sourceId: '' }));
+    loadAuditEvents().catch(() => undefined);
+    if (deleted.length === 0) setError('Data source was not deleted. It may already be gone or belong to another tenant.');
+    else messageApi.success('Data source deleted');
+  }
+
   async function testDataSource() {
     setSourceStatus('');
     if (!editingSourceId) {
@@ -372,12 +382,10 @@ function App() {
   }
 
   async function deleteDashboard(dashboard: Dashboard) {
-    const ok = window.confirm(`Delete dashboard "${dashboard.name}"?`);
-    if (!ok) return;
     const deleted = await apiPost<Dashboard[]>('/api/dashboards/delete', { id: dashboard.id });
     setDashboards((current) => current.filter((item) => item.id !== dashboard.id));
     if (editingDashboardId === dashboard.id) {
-      newDashboard();
+      resetDashboardDraft();
     }
     loadAuditEvents().catch(() => undefined);
     if (deleted.length === 0) {
@@ -401,6 +409,15 @@ function App() {
       setSavedQueryName(saved[0].name);
       setSavedQueryDescription(saved[0].description || '');
     }
+  }
+
+  async function deleteSavedQuery(savedQuery: SavedQuery) {
+    const deleted = await apiPost<SavedQuery[]>('/api/saved-queries/delete', { id: savedQuery.id });
+    setSavedQueries((current) => current.filter((item) => item.id !== savedQuery.id));
+    if (editingSavedQueryId === savedQuery.id) newSavedQuery();
+    loadAuditEvents().catch(() => undefined);
+    if (deleted.length === 0) setError('Saved query was not deleted. It may already be gone or belong to another tenant.');
+    else messageApi.success('Saved query deleted');
   }
 
   async function saveCurrentView() {
@@ -450,6 +467,17 @@ function App() {
     }
   }
 
+  async function deleteContact(contact: ContactEndpoint) {
+    const deleted = await apiPost<ContactEndpoint[]>('/api/alerts/contacts/delete', { id: contact.id });
+    setContacts((current) => current.filter((item) => item.id !== contact.id));
+    setAlertRules((current) => current.map((rule) => rule.contact_endpoint_id === contact.id ? { ...rule, contact_endpoint_id: null } : rule));
+    if (editingContactId === contact.id) newContact();
+    if (selectedContact === contact.id) setSelectedContact('');
+    loadAuditEvents().catch(() => undefined);
+    if (deleted.length === 0) setError('Contact was not deleted. It may already be gone or belong to another tenant.');
+    else messageApi.success('Contact deleted');
+  }
+
   async function saveAlert() {
     const saved = await apiPost<AlertRule[]>('/api/alerts/rules', {
       id: editingAlertId || null,
@@ -463,6 +491,15 @@ function App() {
     setAlertRules((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     if (saved[0]) setEditingAlertId(saved[0].id);
     loadAuditEvents().catch(() => undefined);
+  }
+
+  async function deleteAlert(rule: AlertRule) {
+    const deleted = await apiPost<AlertRule[]>('/api/alerts/rules/delete', { id: rule.id });
+    setAlertRules((current) => current.filter((item) => item.id !== rule.id));
+    if (editingAlertId === rule.id) newAlertRule();
+    loadAuditEvents().catch(() => undefined);
+    if (deleted.length === 0) setError('Alert rule was not deleted. It may already be gone or belong to another tenant.');
+    else messageApi.success('Alert rule deleted');
   }
 
   async function toggleAlert(rule: AlertRule) {
@@ -503,6 +540,14 @@ function App() {
     setInvites((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     setInviteEmail('');
     loadAuditEvents().catch(() => undefined);
+  }
+
+  async function deleteInvite(invite: TenantInvite) {
+    const deleted = await apiPost<TenantInvite[]>('/api/invites/delete', { id: invite.id });
+    setInvites((current) => current.filter((item) => item.id !== invite.id));
+    loadAuditEvents().catch(() => undefined);
+    if (deleted.length === 0) setError('Invite was not deleted. It may already be gone or belong to another tenant.');
+    else messageApi.success('Invite deleted');
   }
 
   async function acceptInvite() {
@@ -558,10 +603,14 @@ function App() {
       ...source,
       id: newClientID(),
       title: `${source.title || 'Panel'} copy`,
-      position: { ...(source.position || {}), x: 0, y: dashboardPanels.length }
-    }, dashboardPanels.length);
-    setDashboardPanels((current) => [...current.slice(0, index + 1), copy, ...current.slice(index + 1)]);
-    setEditingPanelId(copy.id || '');
+      position: { ...(source.position || {}), x: 0, y: index + 1 }
+    }, index + 1);
+    const next = [...dashboardPanels.slice(0, index + 1), copy, ...dashboardPanels.slice(index + 1)].map((panel, itemIndex) => ({
+      ...panel,
+      position: { ...(panel.position || {}), y: itemIndex }
+    }));
+    setDashboardPanels(next);
+    openPanel(next[index + 1] || copy);
     setActiveTab('dashboard');
     messageApi.success('Panel copied');
   }
@@ -741,6 +790,22 @@ function App() {
     setAlertPreview('');
   }
 
+  function newSavedQuery() {
+    setEditingSavedQueryId('');
+    setSavedQueryName('Current query');
+    setSavedQueryDescription('');
+  }
+
+  function newDataSource() {
+    setEditingSourceId('');
+    setSourceName('Default ClickHouse');
+    setSourceURL('http://clickhouse:8123');
+    setSourceDatabase('default');
+    setSourceUser('default');
+    setSourceSecretRef('clickhouse-default');
+    setSourceStatus('');
+  }
+
   function newContact() {
     setEditingContactId('');
     setContactName('Primary webhook');
@@ -790,13 +855,18 @@ function App() {
 
   function removePanel(index: number) {
     const removed = dashboardPanels[index];
-    const next = dashboardPanels.filter((_, itemIndex) => itemIndex !== index);
+    if (!removed) return;
+    const next = dashboardPanels.filter((_, itemIndex) => itemIndex !== index).map((panel, itemIndex) => ({
+      ...panel,
+      position: { ...(panel.position || {}), y: itemIndex }
+    }));
     setDashboardPanels(next);
     if (removed?.id === editingPanelId) {
       const replacement = next[Math.min(index, next.length - 1)];
       if (replacement) openPanel(replacement);
       else setEditingPanelId('');
     }
+    messageApi.success('Panel removed');
   }
 
   function fillDataSource(source: DataSource) {
@@ -886,10 +956,10 @@ function App() {
 
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} jwtClaims={jwtClaims} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
-    { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} /> },
+    { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onNew={newDataSource} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} onDelete={(source) => deleteDataSource(source).catch((err) => setError(err.message))} /> },
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={updateQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
-    { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onSave={saveSavedQuery} onOpen={openSavedQuery} /> },
+    { key: 'saved', label: 'Saved Queries', children: <SavedQueriesSection user={user} savedQueries={savedQueries} editingSavedQueryId={editingSavedQueryId} savedQueryName={savedQueryName} savedQueryDescription={savedQueryDescription} onName={setSavedQueryName} onDescription={setSavedQueryDescription} onNew={newSavedQuery} onSave={saveSavedQuery} onOpen={openSavedQuery} onDelete={(savedQuery) => deleteSavedQuery(savedQuery).catch((err) => setError(err.message))} /> },
     {
       key: 'dashboards',
       label: 'Dashboards',
@@ -925,11 +995,11 @@ function App() {
         onRemovePanel={removePanel}
       />
     },
-    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
-    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} /> },
+    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
+    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} onDelete={(contact) => deleteContact(contact).catch((err) => setError(err.message))} /> },
     { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
     { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },
-    { key: 'invites', label: 'Invites', children: <InvitesSection user={user} invites={invites} inviteEmail={inviteEmail} inviteRole={inviteRole} inviteToken={inviteToken} onEmail={setInviteEmail} onRole={setInviteRole} onToken={setInviteToken} onAccept={acceptInvite} onCreate={createInvite} /> },
+    { key: 'invites', label: 'Invites', children: <InvitesSection user={user} invites={invites} inviteEmail={inviteEmail} inviteRole={inviteRole} inviteToken={inviteToken} onEmail={setInviteEmail} onRole={setInviteRole} onToken={setInviteToken} onAccept={acceptInvite} onCreate={createInvite} onDelete={(invite) => deleteInvite(invite).catch((err) => setError(err.message))} /> },
     { key: 'members', label: 'Members', children: <MembersSection members={members} onRole={updateMemberRole} onDeactivate={deactivateMember} /> },
     { key: 'audit', label: 'Audit', children: <AuditSection auditEvents={auditEvents} /> }
   ];
@@ -1246,7 +1316,15 @@ function DashboardPanelCard({
           <Button size="small" disabled={index === 0} onClick={() => onMove(index, -1)}>Up</Button>
           <Button size="small" disabled={index === panelCount - 1} onClick={() => onMove(index, 1)}>Down</Button>
           <Button size="small" onClick={() => onDuplicate(index)}>Copy</Button>
-          <Button size="small" danger onClick={() => onRemove(index)}>Remove</Button>
+          <Popconfirm
+            title="Remove panel?"
+            description="This only removes the panel from the dashboard draft."
+            okText="Remove"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => onRemove(index)}
+          >
+            <Button size="small" danger>Remove</Button>
+          </Popconfirm>
         </Space>
       </Flex>
       {panelError ? (
