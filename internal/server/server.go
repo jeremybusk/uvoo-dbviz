@@ -189,6 +189,15 @@ func (a *App) me(w http.ResponseWriter, r *http.Request) {
 
 func (a *App) syncSession(w http.ResponseWriter, r *http.Request) {
 	user := principal(r)
+	rows, err := a.syncCurrentUser(r, user)
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) syncCurrentUser(r *http.Request, user auth.Principal) ([]map[string]any, error) {
 	var rows []map[string]any
 	err := a.state.RPC(r.Context(), "sync_current_user", map[string]any{
 		"user_subject":  user.Subject,
@@ -198,14 +207,14 @@ func (a *App) syncSession(w http.ResponseWriter, r *http.Request) {
 		"tenant_slug":   user.TenantID,
 		"tenant_name":   user.TenantID,
 	}, user, r.Header.Get("Authorization"), &rows)
-	if err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, rows)
+	return rows, err
 }
 
 func (a *App) sessionProfile(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.syncCurrentUser(r, principal(r)); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
 	profile, err := a.state.CurrentUserProfile(r.Context(), statePrincipal(r), r.Header.Get("Authorization"))
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
@@ -215,6 +224,10 @@ func (a *App) sessionProfile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) sessionPreferences(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.syncCurrentUser(r, principal(r)); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
 	user := statePrincipal(r)
 	var preferences map[string]any
 	if err := a.state.RPC(r.Context(), "current_user_preferences", map[string]any{
@@ -231,6 +244,10 @@ func (a *App) sessionPreferences(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) saveSessionPreferences(w http.ResponseWriter, r *http.Request) {
+	if _, err := a.syncCurrentUser(r, principal(r)); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
 	var req map[string]any
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, err)
@@ -303,6 +320,10 @@ func validPreferenceRangeUnit(unit string) bool {
 
 func (a *App) listMemberships(w http.ResponseWriter, r *http.Request) {
 	user := principal(r)
+	if _, err := a.syncCurrentUser(r, user); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
 	var rows []map[string]any
 	if err := a.state.RPC(r.Context(), "list_user_memberships", map[string]any{
 		"user_subject":  user.Subject,
@@ -2045,6 +2066,10 @@ func (a *App) updateMemberRole(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) requireStateRole(w http.ResponseWriter, r *http.Request, allowed ...string) bool {
+	if _, err := a.syncCurrentUser(r, principal(r)); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return false
+	}
 	ok, err := a.state.CurrentUserHasRole(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), allowed)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)

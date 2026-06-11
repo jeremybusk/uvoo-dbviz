@@ -235,6 +235,16 @@ INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
 ON CONFLICT (slug) DO NOTHING;
 
+INSERT INTO users (tenant_id, subject, email, display_name, provider, role)
+SELECT id, 'bob@example.com', 'bob@example.com', 'Bob Example', 'keycloak', 'owner'
+FROM tenants
+WHERE slug = 'dev'
+ON CONFLICT ON CONSTRAINT users_tenant_id_email_key DO UPDATE
+SET display_name = EXCLUDED.display_name,
+    provider = EXCLUDED.provider,
+    role = EXCLUDED.role,
+    disabled_at = NULL;
+
 INSERT INTO dashboards (tenant_id, name, layout)
 SELECT id, 'Sample Observability', '{"version":1,"charts":[{"title":"Log volume","query":{"dataset":"logs","groupBy":"service_name","measure":"_rows","aggregation":"count"},"visualization":{"type":"line"}}]}'::jsonb
 FROM tenants
@@ -1992,6 +2002,8 @@ AS $$
 DECLARE
     resolved_tenant_id uuid;
     resolved_user_id uuid;
+    resolved_email text;
+    resolved_provider text;
 BEGIN
     IF tenant_slug IS NULL OR tenant_slug = '' THEN
         RAISE EXCEPTION 'tenant slug is required';
@@ -2005,13 +2017,40 @@ BEGIN
     ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
     RETURNING tenants.id INTO resolved_tenant_id;
 
+    resolved_email := COALESCE(NULLIF(user_email, ''), user_subject);
+    resolved_provider := COALESCE(NULLIF(user_provider, ''), 'unknown');
+
+    UPDATE users
+    SET subject = user_subject,
+        display_name = COALESCE(user_name, ''),
+        disabled_at = NULL
+    WHERE users.tenant_id = resolved_tenant_id
+      AND users.email = resolved_email
+      AND users.provider = resolved_provider
+      AND users.subject <> user_subject
+      AND NOT EXISTS (
+          SELECT 1
+          FROM users existing
+          WHERE existing.provider = resolved_provider
+            AND existing.subject = user_subject
+      )
+    RETURNING users.id INTO resolved_user_id;
+
+    IF resolved_user_id IS NOT NULL THEN
+        RETURN QUERY
+        SELECT u.id, u.tenant_id, u.subject, u.email, u.display_name, u.provider, u.role
+        FROM users u
+        WHERE u.id = resolved_user_id;
+        RETURN;
+    END IF;
+
     INSERT INTO users (tenant_id, subject, email, display_name, provider, role)
     VALUES (
         resolved_tenant_id,
         user_subject,
-        COALESCE(NULLIF(user_email, ''), user_subject),
+        resolved_email,
         COALESCE(user_name, ''),
-        COALESCE(NULLIF(user_provider, ''), 'unknown'),
+        resolved_provider,
         CASE
             WHEN NOT EXISTS (SELECT 1 FROM users WHERE users.tenant_id = resolved_tenant_id) THEN 'owner'
             ELSE 'viewer'

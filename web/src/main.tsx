@@ -223,16 +223,25 @@ function App() {
       setPreferencesLoaded(true);
       setError(err.message);
     });
-    loadAccessState().catch((err) => setError(err.message));
+    loadAccessState().then((nextProfile) => {
+      if (canManageTenant(nextProfile)) {
+        loadSecrets(nextProfile).catch(() => setSecrets([]));
+        loadInvites(nextProfile).catch(() => undefined);
+        loadMembers(nextProfile).catch(() => setMembers([]));
+        loadAuditEvents(nextProfile).catch(() => setAuditEvents([]));
+      } else {
+        setSecrets([]);
+        setInvites([]);
+        setMembers([]);
+        setAuditEvents([]);
+      }
+    }).catch((err) => setError(err.message));
     loadDataSources().catch((err) => setError(err.message));
     loadQueryHistory().catch(() => undefined);
     loadSavedQueries().catch(() => undefined);
     loadDashboards().catch((err) => setError(err.message));
     loadAlertState().catch((err) => setError(err.message));
     loadSystemReadiness().catch(() => setSystemReadiness(null));
-    loadInvites().catch(() => undefined);
-    loadMembers().catch(() => setMembers([]));
-    loadAuditEvents().catch(() => setAuditEvents([]));
   }, [config, user, activeTenant]);
 
   useEffect(() => {
@@ -399,14 +408,13 @@ function App() {
   }
 
   async function loadAccessState() {
-    const [nextMemberships, nextProfile, nextSecrets] = await Promise.all([
+    const [nextMemberships, nextProfile] = await Promise.all([
       apiGet<TenantMembership[]>('/api/session/memberships'),
-      apiGet<UserProfile>('/api/session/profile'),
-      apiGet<TenantSecret[]>('/api/secrets')
+      apiGet<UserProfile>('/api/session/profile')
     ]);
     setMemberships(nextMemberships);
     setProfile(nextProfile);
-    setSecrets(nextSecrets);
+    return nextProfile;
   }
 
   async function loadUserPreferences() {
@@ -422,11 +430,27 @@ function App() {
     return saved;
   }
 
-  async function loadMembers() {
+  async function loadSecrets(nextProfile: UserProfile | null = profile) {
+    if (!canManageTenant(nextProfile)) {
+      setSecrets([]);
+      return;
+    }
+    setSecrets(await apiGet<TenantSecret[]>('/api/secrets'));
+  }
+
+  async function loadMembers(nextProfile: UserProfile | null = profile) {
+    if (!canManageTenant(nextProfile)) {
+      setMembers([]);
+      return;
+    }
     setMembers(await apiGet<TenantMember[]>('/api/members'));
   }
 
-  async function loadAuditEvents() {
+  async function loadAuditEvents(nextProfile: UserProfile | null = profile) {
+    if (!canManageTenant(nextProfile)) {
+      setAuditEvents([]);
+      return;
+    }
     setAuditEvents(await apiGet<AuditEvent[]>('/api/audit/events'));
   }
 
@@ -736,7 +760,11 @@ function App() {
     }
   }
 
-  async function loadInvites() {
+  async function loadInvites(nextProfile: UserProfile | null = profile) {
+    if (!canManageTenant(nextProfile)) {
+      setInvites([]);
+      return;
+    }
     setInvites(await apiGet<TenantInvite[]>('/api/invites'));
   }
 
@@ -2292,6 +2320,10 @@ function decodeJwtClaims(token: string): JwtClaims | null {
   } catch {
     return null;
   }
+}
+
+function canManageTenant(profile: UserProfile | null): boolean {
+  return profile?.role === 'owner' || profile?.role === 'admin';
 }
 
 function readThemePreference(): ThemeMode {

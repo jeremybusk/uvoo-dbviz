@@ -90,8 +90,8 @@
       "enabled": true,
       "emailVerified": true,
       "attributes": {
-        "tenant_id": ["example.com"],
-        "tenant_slug": ["example.com"]
+        "tenant_id": ["dev"],
+        "tenant_slug": ["dev"]
       },
       "credentials": [
         {
