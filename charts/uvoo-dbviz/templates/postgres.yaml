@@ -62,13 +62,28 @@ spec:
                 secretKeyRef:
                   name: {{ default (include "uvoo-sqviz.fullname" .) .Values.secret.existingSecret }}
                   key: SQVIZ_POSTGRES_PASSWORD
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
           ports:
             - name: postgres
               containerPort: 5432
+          startupProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "sqviz", "-d", "sqviz"]
+            failureThreshold: 30
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "sqviz", "-d", "sqviz"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
           readinessProbe:
             exec:
-              command: ["pg_isready", "-U", "sqviz", "-d", "sqviz"]
+              command: ["pg_isready", "-h", "127.0.0.1", "-U", "sqviz", "-d", "sqviz"]
             periodSeconds: 5
+            timeoutSeconds: 5
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data

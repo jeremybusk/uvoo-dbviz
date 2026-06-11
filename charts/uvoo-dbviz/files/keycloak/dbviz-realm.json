@@ -6,7 +6,7 @@
   "loginWithEmailAllowed": true,
   "clients": [
     {
-      "clientId": "uvoo-sqviz-web",
+      "clientId": "{{ include "uvoo-sqviz.keycloakClientId" . }}",
       "name": "Uvoo SQViz Web",
       "enabled": true,
       "publicClient": true,
@@ -17,13 +17,15 @@
         "http://localhost:8080/*",
         "http://localhost:5173/*",
         "http://sqviz.local/*",
-        "https://sqviz.example.com/*"
+        "https://sqviz.example.com/*"{{- if include "uvoo-sqviz.publicURL" . }},
+        "{{ include "uvoo-sqviz.publicURL" . }}/*"{{- end }}
       ],
       "webOrigins": [
         "http://localhost:8080",
         "http://localhost:5173",
         "http://sqviz.local",
-        "https://sqviz.example.com"
+        "https://sqviz.example.com"{{- if include "uvoo-sqviz.publicURL" . }},
+        "{{ include "uvoo-sqviz.publicURL" . }}"{{- end }}
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256"

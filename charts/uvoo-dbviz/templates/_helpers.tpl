@@ -50,6 +50,10 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- printf "%s-keycloak" (include "uvoo-sqviz.fullname" .) -}}
 {{- end -}}
 
+{{- define "uvoo-sqviz.keycloakClientId" -}}
+{{- default "uvoo-sqviz-web" .Values.config.keycloakClientId -}}
+{{- end -}}
+
 {{- define "uvoo-sqviz.otelCollectorName" -}}
 {{- printf "%s-otel-collector" (include "uvoo-sqviz.fullname" .) -}}
 {{- end -}}

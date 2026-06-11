@@ -20,6 +20,10 @@ data:
       batch:
         timeout: 2s
 
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+
     exporters:
       clickhouse:
         endpoint: tcp://{{ include "uvoo-sqviz.fullname" . }}-clickhouse:9000?dial_timeout=10s
@@ -43,6 +47,7 @@ data:
         timeout: 5s
 
     service:
+      extensions: [health_check]
       pipelines:
         logs:
           receivers: [otlp]
@@ -99,6 +104,24 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: otel-collector
     spec:
+      {{- if .Values.clickhouse.enabled }}
+      initContainers:
+        - name: wait-for-clickhouse
+          image: {{ .Values.clickhouse.image | quote }}
+          env:
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ default (include "uvoo-sqviz.fullname" .) .Values.secret.existingSecret }}
+                  key: SQVIZ_CLICKHOUSE_PASSWORD
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until clickhouse-client --host {{ include "uvoo-sqviz.fullname" . }}-clickhouse --port 9000 --password "$CLICKHOUSE_PASSWORD" --query "SELECT 1"; do
+                sleep 2
+              done
+      {{- end }}
       containers:
         - name: otel-collector
           image: {{ .Values.demo.otelCollector.image | quote }}
@@ -114,6 +137,25 @@ spec:
               containerPort: 4317
             - name: otlp-http
               containerPort: 4318
+            - name: health
+              containerPort: 13133
+          startupProbe:
+            httpGet:
+              path: /
+              port: health
+            failureThreshold: 30
+            periodSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: health
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 20
           volumeMounts:
             - name: config
               mountPath: /etc/otelcol

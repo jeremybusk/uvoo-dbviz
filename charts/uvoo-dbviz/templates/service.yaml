@@ -4,6 +4,7 @@ metadata:
   name: {{ include "uvoo-sqviz.fullname" . }}
   labels:
     {{- include "uvoo-sqviz.labels" . | nindent 4 }}
+    app.kubernetes.io/component: app
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -14,4 +15,4 @@ spec:
   selector:
     app.kubernetes.io/name: {{ include "uvoo-sqviz.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
-
+    app.kubernetes.io/component: app

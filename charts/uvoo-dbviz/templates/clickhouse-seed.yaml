@@ -29,6 +29,9 @@ spec:
             - -c
             - |
               set -eu
+              until clickhouse-client --host {{ include "uvoo-sqviz.fullname" . }}-clickhouse --port 9000 --password "$CLICKHOUSE_PASSWORD" --query "SELECT 1"; do
+                sleep 2
+              done
               clickhouse-client --host {{ include "uvoo-sqviz.fullname" . }}-clickhouse --port 9000 --password "$CLICKHOUSE_PASSWORD" --multiquery <<'SQL'
               CREATE TABLE IF NOT EXISTS otel_logs (
                   tenant_id String,

@@ -22,7 +22,7 @@ data:
   SQVIZ_OIDC_MICROSOFT_CLIENT_ID: {{ .Values.config.microsoftClientId | quote }}
   SQVIZ_OIDC_KEYCLOAK_ISSUER: {{ include "uvoo-sqviz.keycloakIssuer" . | quote }}
   SQVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: {{ include "uvoo-sqviz.keycloakDiscoveryURL" . | quote }}
-  SQVIZ_OIDC_KEYCLOAK_CLIENT_ID: {{ .Values.config.keycloakClientId | quote }}
+  SQVIZ_OIDC_KEYCLOAK_CLIENT_ID: {{ include "uvoo-sqviz.keycloakClientId" . | quote }}
   SQVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: {{ .Values.config.keycloakTenantClaim | quote }}
   SQVIZ_ALERTS_ENABLED: {{ .Values.config.alertsEnabled | quote }}
   SQVIZ_ALERT_RULES_JSON: {{ .Values.config.alertRulesJson | quote }}
