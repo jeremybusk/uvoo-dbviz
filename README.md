@@ -105,6 +105,12 @@ into ClickHouse so the default UI datasets can chart the data immediately. It
 also attempts to create the raw-to-normalized materialized views for future OTLP
 traffic.
 
+More usage guides:
+
+- [Docker Compose](docs/DOCKER_COMPOSE.md)
+- [Helm](docs/HELM.md)
+- [Release](docs/RELEASE.md)
+
 ## Build And Verify
 
 ```sh
@@ -112,7 +118,7 @@ make test
 make web
 make build
 make license-check
-helm lint charts/uvoo-sqviz
+make helm-lint
 docker compose config
 make compose-smoke
 ```

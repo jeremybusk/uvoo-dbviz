@@ -65,6 +65,9 @@ config:
 secret:
   clickhousePassword: "clickhouse"
   clickhouseDefaultSecret: "clickhouse"
+  postgresPassword: "sqviz"
+  postgrestJwtSecret: "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret"
+  keycloakAdminPassword: "admin"
   keycloakClientSecret: ""
   alertSmtpPassword: ""
   secretsEncryptionKey: ""
@@ -77,6 +80,43 @@ clickhouse:
   storageClass: ""
   seed:
     enabled: true
+
+demo:
+  enabled: false
+  tenant: dev
+  postgres:
+    enabled: true
+    image: postgres:17-alpine
+    storageSize: 5Gi
+    storageClass: ""
+  postgrest:
+    enabled: true
+    image: postgrest/postgrest:v12.2.12
+  keycloak:
+    enabled: true
+    image: quay.io/keycloak/keycloak:25.0
+    adminUsername: admin
+    hostname: ""
+    service:
+      type: ClusterIP
+      port: 8080
+    ingress:
+      enabled: false
+      className: nginx
+      annotations: {}
+      host: keycloak.sqviz.example.com
+      path: /
+      pathType: Prefix
+      tls:
+        enabled: false
+        secretName: ""
+  otelCollector:
+    enabled: true
+    image: otel/opentelemetry-collector-contrib:0.128.0
+    service:
+      type: ClusterIP
+      grpcPort: 4317
+      httpPort: 4318
 
 ingress:
   enabled: false

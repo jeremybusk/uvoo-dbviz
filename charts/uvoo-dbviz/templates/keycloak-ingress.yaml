@@ -1,0 +1,30 @@
+{{- if and .Values.demo.enabled .Values.demo.keycloak.enabled .Values.demo.keycloak.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "uvoo-sqviz.keycloakName" . }}
+  labels:
+    {{- include "uvoo-sqviz.labels" . | nindent 4 }}
+    app.kubernetes.io/component: keycloak
+  annotations:
+    {{- toYaml .Values.demo.keycloak.ingress.annotations | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.demo.keycloak.ingress.className }}
+  {{- if .Values.demo.keycloak.ingress.tls.enabled }}
+  tls:
+    - hosts:
+        - {{ .Values.demo.keycloak.ingress.host }}
+      secretName: {{ .Values.demo.keycloak.ingress.tls.secretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.demo.keycloak.ingress.host }}
+      http:
+        paths:
+          - path: {{ .Values.demo.keycloak.ingress.path }}
+            pathType: {{ .Values.demo.keycloak.ingress.pathType }}
+            backend:
+              service:
+                name: {{ include "uvoo-sqviz.keycloakName" . }}
+                port:
+                  number: {{ .Values.demo.keycloak.service.port }}
+{{- end }}

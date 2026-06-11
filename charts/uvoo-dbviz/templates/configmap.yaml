@@ -12,16 +12,16 @@ data:
   SQVIZ_REQUIRE_PRODUCTION_SAFE: {{ .Values.config.requireProductionSafe | quote }}
   SQVIZ_ALLOW_INSECURE_DEFAULTS: {{ .Values.config.allowInsecureDefaults | quote }}
   SQVIZ_AUTH_DEV_MODE: {{ .Values.config.authDevMode | quote }}
-  SQVIZ_PUBLIC_URL: {{ .Values.config.publicUrl | quote }}
+  SQVIZ_PUBLIC_URL: {{ include "uvoo-sqviz.publicURL" . | quote }}
   SQVIZ_CLICKHOUSE_URL: {{ include "uvoo-sqviz.clickhouseURL" . | quote }}
   SQVIZ_CLICKHOUSE_DATABASE: {{ .Values.config.clickhouseDatabase | quote }}
   SQVIZ_CLICKHOUSE_USER: {{ .Values.config.clickhouseUser | quote }}
-  SQVIZ_POSTGREST_URL: {{ .Values.config.postgrestUrl | quote }}
+  SQVIZ_POSTGREST_URL: {{ include "uvoo-sqviz.postgrestURL" . | quote }}
   SQVIZ_POSTGREST_FORWARD_BEARER: {{ .Values.config.postgrestForwardBearer | quote }}
   SQVIZ_OIDC_GOOGLE_CLIENT_ID: {{ .Values.config.googleClientId | quote }}
   SQVIZ_OIDC_MICROSOFT_CLIENT_ID: {{ .Values.config.microsoftClientId | quote }}
-  SQVIZ_OIDC_KEYCLOAK_ISSUER: {{ .Values.config.keycloakIssuer | quote }}
-  SQVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: {{ .Values.config.keycloakDiscoveryUrl | quote }}
+  SQVIZ_OIDC_KEYCLOAK_ISSUER: {{ include "uvoo-sqviz.keycloakIssuer" . | quote }}
+  SQVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: {{ include "uvoo-sqviz.keycloakDiscoveryURL" . | quote }}
   SQVIZ_OIDC_KEYCLOAK_CLIENT_ID: {{ .Values.config.keycloakClientId | quote }}
   SQVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: {{ .Values.config.keycloakTenantClaim | quote }}
   SQVIZ_ALERTS_ENABLED: {{ .Values.config.alertsEnabled | quote }}

@@ -18,6 +18,8 @@ jobs:
           node-version: '22'
           cache: npm
           cache-dependency-path: web/package-lock.json
+      - name: Install Helm
+        uses: azure/setup-helm@v4
       - name: Install system dependencies
         run: sudo apt-get update && sudo apt-get install -y jq
       - name: Install license scanner
@@ -27,7 +29,7 @@ jobs:
       - name: Frontend build
         run: make web
       - name: Helm lint
-        run: helm lint charts/uvoo-sqviz
+        run: make helm-lint
       - name: License check
         run: make license-check
 
