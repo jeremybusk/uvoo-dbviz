@@ -1118,6 +1118,8 @@ export function ContactsSection(props: {
   pagerDutyClass: string;
   pagerDutyServiceID: string;
   pagerDutyRestSyncEnabled: boolean;
+  pagerDutyAutoSyncEnabled: boolean;
+  pagerDutySyncInterval: number;
   pagerDutyFromEmail: string;
   pagerDutyApiBaseURL: string;
   onName: (value: string) => void;
@@ -1140,6 +1142,8 @@ export function ContactsSection(props: {
   onPagerDutyClass: (value: string) => void;
   onPagerDutyServiceID: (value: string) => void;
   onPagerDutyRestSyncEnabled: (value: boolean) => void;
+  onPagerDutyAutoSyncEnabled: (value: boolean) => void;
+  onPagerDutySyncInterval: (value: number) => void;
   onPagerDutyFromEmail: (value: string) => void;
   onPagerDutyApiBaseURL: (value: string) => void;
   onNew: () => void;
@@ -1272,6 +1276,21 @@ export function ContactsSection(props: {
           <Field label="REST sync">
             <Switch checked={props.pagerDutyRestSyncEnabled} onChange={props.onPagerDutyRestSyncEnabled} />
           </Field>
+          <Field label="Auto sync from PagerDuty">
+            <Switch checked={props.pagerDutyAutoSyncEnabled} disabled={!props.pagerDutyRestSyncEnabled} onChange={props.onPagerDutyAutoSyncEnabled} />
+          </Field>
+          <Field label="Auto sync interval">
+            <InputNumber
+              className="full"
+              min={0}
+              max={86400}
+              disabled={!props.pagerDutyRestSyncEnabled || !props.pagerDutyAutoSyncEnabled}
+              value={props.pagerDutySyncInterval}
+              onChange={(value) => props.onPagerDutySyncInterval(Number(value || 0))}
+              addonAfter="seconds"
+            />
+            <Typography.Text type="secondary">0 uses the global alert worker interval.</Typography.Text>
+          </Field>
           <Field label="REST service ID"><Input value={props.pagerDutyServiceID} onChange={(event) => props.onPagerDutyServiceID(event.target.value)} placeholder="Optional, for incident sync" /></Field>
           <Field label="REST From email"><Input value={props.pagerDutyFromEmail} onChange={(event) => props.onPagerDutyFromEmail(event.target.value)} placeholder="your-email@domain.com" /></Field>
           <Field label="REST API URL"><Input value={props.pagerDutyApiBaseURL} onChange={(event) => props.onPagerDutyApiBaseURL(event.target.value)} placeholder="https://api.pagerduty.com" /></Field>
@@ -1403,6 +1422,7 @@ function contactSaveBlockReason(props: {
   pagerDutyRestApiKeyValue?: string;
   pagerDutyServiceID?: string;
   pagerDutyFromEmail?: string;
+  pagerDutySyncInterval?: number;
 }): string {
   if (props.contactKind === 'pagerduty') {
     if (props.pagerDutyRestSyncEnabled) {
@@ -1411,6 +1431,8 @@ function contactSaveBlockReason(props: {
         props.pagerDutyServiceID?.trim() ? '' : 'REST service ID',
         props.pagerDutyFromEmail?.trim() ? '' : 'REST From email'
       ].filter(Boolean);
+      const interval = Number(props.pagerDutySyncInterval || 0);
+      if (interval > 0 && interval < 30) return 'PagerDuty auto sync interval must be 0 or at least 30 seconds.';
       return missing.length > 0 ? `REST sync is missing: ${missing.join(', ')}.` : '';
     }
     return props.pagerDutyRoutingKeySecretRef.trim() || props.pagerDutyRoutingKeyValue.trim() ? '' : 'PagerDuty Events delivery needs an integration key secret or pasted integration key.';

@@ -1687,10 +1687,25 @@ BEGIN
     JOIN contact_endpoints c ON c.id = a.contact_endpoint_id
     WHERE c.kind = 'pagerduty'
       AND COALESCE(c.config->>'restSyncEnabled', '') IN ('true', '1', 'yes', 'on')
+      AND COALESCE(NULLIF(c.config->>'autoSyncEnabled', ''), 'true') IN ('true', '1', 'yes', 'on')
       AND i.external_provider = 'pagerduty'
       AND i.external_incident_id <> ''
       AND i.status IN ('firing', 'acknowledged')
       AND i.resolved_at IS NULL
+      AND (
+          CASE
+              WHEN COALESCE(c.config->>'syncIntervalSeconds', '') ~ '^[0-9]+$' THEN (c.config->>'syncIntervalSeconds')::integer
+              ELSE 0
+          END = 0
+          OR i.external_last_synced_at IS NULL
+          OR now() - i.external_last_synced_at >= make_interval(secs => GREATEST(
+              CASE
+                  WHEN COALESCE(c.config->>'syncIntervalSeconds', '') ~ '^[0-9]+$' THEN (c.config->>'syncIntervalSeconds')::integer
+                  ELSE 0
+              END,
+              30
+          ))
+      )
     ORDER BY i.last_seen_at DESC
     LIMIT 500;
 END;

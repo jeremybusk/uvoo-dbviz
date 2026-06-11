@@ -1463,6 +1463,28 @@ func (a *App) normalizeContactConfig(r *http.Request, kind string, name string, 
 	restSyncEnabled := boolString(output["restSyncEnabled"])
 	if restSyncEnabled {
 		output["restSyncEnabled"] = "true"
+		autoSyncEnabled := true
+		if rawAutoSync, ok := output["autoSyncEnabled"]; ok {
+			autoSyncEnabled = boolString(rawAutoSync)
+		}
+		if autoSyncEnabled {
+			output["autoSyncEnabled"] = "true"
+		} else {
+			output["autoSyncEnabled"] = "false"
+		}
+		syncIntervalSeconds := 0
+		if value, ok := numericValue(output["syncIntervalSeconds"]); ok {
+			syncIntervalSeconds = int(value)
+		} else if strings.TrimSpace(fmt.Sprint(output["syncIntervalSeconds"])) != "" {
+			return nil, errors.New("PagerDuty auto sync interval must be a number of seconds")
+		}
+		if syncIntervalSeconds < 0 {
+			return nil, errors.New("PagerDuty auto sync interval cannot be negative")
+		}
+		if syncIntervalSeconds > 0 && syncIntervalSeconds < 30 {
+			return nil, errors.New("PagerDuty auto sync interval must be 0 or at least 30 seconds")
+		}
+		output["syncIntervalSeconds"] = fmt.Sprint(syncIntervalSeconds)
 		if value, _ := output["restApiKeySecretRef"].(string); value == "" {
 			return nil, errors.New("PagerDuty REST API key secret ref is required when REST sync is enabled")
 		}
