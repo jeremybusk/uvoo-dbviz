@@ -295,9 +295,9 @@ export type TenantInvite = {
   created_at: string;
 };
 
-const tokenKey = 'uvoo-dbviz-token';
-const tenantKey = 'uvoo-dbviz-active-tenant';
-const devAuthPausedKey = 'uvoo-dbviz-dev-auth-paused';
+const tokenKey = 'uvoo-sqviz-token';
+const tenantKey = 'uvoo-sqviz-active-tenant';
+const devAuthPausedKey = 'uvoo-sqviz-dev-auth-paused';
 
 export function getToken(): string {
   const legacy = localStorage.getItem(tokenKey);
@@ -341,7 +341,7 @@ export async function apiGet<T>(path: string): Promise<T> {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const tenant = getActiveTenant();
-  if (tenant) headers['X-DBViz-Tenant'] = tenant;
+  if (tenant) headers['X-SQViz-Tenant'] = tenant;
   const res = await fetch(path, { headers });
   if (!res.ok) throw new Error(await errorText(res));
   return res.json();
@@ -352,7 +352,7 @@ export async function apiPost<T>(path: string, body: unknown): Promise<T> {
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const tenant = getActiveTenant();
-  if (tenant) headers['X-DBViz-Tenant'] = tenant;
+  if (tenant) headers['X-SQViz-Tenant'] = tenant;
   const res = await fetch(path, { method: 'POST', headers, body: JSON.stringify(body) });
   if (!res.ok) throw new Error(await errorText(res));
   return res.json();

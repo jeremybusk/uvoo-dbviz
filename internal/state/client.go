@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"uvoo-dbviz/internal/auth"
-	"uvoo-dbviz/internal/config"
+	"uvoo-sqviz/internal/auth"
+	"uvoo-sqviz/internal/config"
 )
 
 type Client struct {
@@ -171,10 +171,10 @@ func (c *Client) RPC(ctx context.Context, name string, body any, user auth.Princ
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-DBViz-Tenant", user.TenantID)
-	req.Header.Set("X-DBViz-Subject", user.Subject)
-	req.Header.Set("X-DBViz-Provider", user.Provider)
-	req.Header.Set("X-DBViz-Email", user.Email)
+	req.Header.Set("X-SQViz-Tenant", user.TenantID)
+	req.Header.Set("X-SQViz-Subject", user.Subject)
+	req.Header.Set("X-SQViz-Provider", user.Provider)
+	req.Header.Set("X-SQViz-Email", user.Email)
 	if bearer != "" && c.forwardBearer {
 		req.Header.Set("Authorization", bearer)
 	} else {

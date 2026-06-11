@@ -1,6 +1,6 @@
-# uvoo-dbviz
+# uvoo-sqviz
 
-Uvoo DBViz is a tenant-aware ClickHouse visualizer for observability data. It keeps
+Uvoo SQViz is a tenant-aware ClickHouse visualizer for observability data. It keeps
 the control plane relational in PostgreSQL/PostgREST, keeps analytics in
 ClickHouse, and keeps the API small: the Go backend validates OIDC tokens,
 enforces tenant scope, and turns UI requests into constrained ClickHouse queries.
@@ -15,10 +15,10 @@ enforces tenant scope, and turns UI requests into constrained ClickHouse queries
 - Deployment: Docker Compose, Helm, GHCR workflow, CI, and license checks
 
 Google and Microsoft OIDC providers are present and enabled in the public config
-by default. Add `DBVIZ_OIDC_GOOGLE_CLIENT_ID` and/or
-`DBVIZ_OIDC_MICROSOFT_CLIENT_ID` to activate browser sign-in. Keycloak and other
+by default. Add `SQVIZ_OIDC_GOOGLE_CLIENT_ID` and/or
+`SQVIZ_OIDC_MICROSOFT_CLIENT_ID` to activate browser sign-in. Keycloak and other
 private IdPs can be added with the Keycloak env vars or
-`DBVIZ_OIDC_PROVIDERS_JSON`.
+`SQVIZ_OIDC_PROVIDERS_JSON`.
 
 ## Local Testing
 
@@ -31,8 +31,8 @@ For browser testing from another machine on an isolated LAN, set the host name o
 IP address clients will use before starting Compose:
 
 ```sh
-DBVIZ_BIND_ADDR=0.0.0.0
-DBVIZ_PUBLIC_HOST=192.168.1.50
+SQVIZ_BIND_ADDR=0.0.0.0
+SQVIZ_PUBLIC_HOST=192.168.1.50
 ```
 
 Then open `http://192.168.1.50:8080`. Keycloak will advertise the same public
@@ -41,11 +41,11 @@ Keycloak through the internal Docker service URL.
 
 Compose starts:
 
-- `uvoo-dbviz` on <http://localhost:8080>
+- `uvoo-sqviz` on <http://localhost:8080>
 - ClickHouse on <http://localhost:8123> with seeded `dev` tenant data
 - PostgreSQL on `localhost:5432`
 - PostgREST on <http://localhost:3000>
-- Keycloak on <http://localhost:8089> with realm `dbviz`
+- Keycloak on <http://localhost:8089> with realm `sqviz`
 - OpenTelemetry Collector on `localhost:4317` and `localhost:4318`
 
 The OpenTelemetry Collector exports received OTLP logs, traces, and metrics to
@@ -62,14 +62,14 @@ Development auth is enabled by default in Compose. The seeded Keycloak users are
 - `alice` / `password`, tenant `dev`
 - `bob` / `password`, tenant `example.com`
 
-The UI can also use dev auth when `DBVIZ_AUTH_DEV_MODE=true`. Browser state
+The UI can also use dev auth when `SQVIZ_AUTH_DEV_MODE=true`. Browser state
 operations go through the Go API, which validates bearer tokens and forwards the
 verified tenant/user context to PostgREST. PostgREST still enforces RLS with
 that request context or `X-Dev-Tenant: dev` in local development.
 
 In the default Compose profile, the Go API validates OIDC tokens and does not
 forward the browser bearer token to PostgREST
-(`DBVIZ_POSTGREST_FORWARD_BEARER=false`). This avoids PostgREST rejecting local
+(`SQVIZ_POSTGREST_FORWARD_BEARER=false`). This avoids PostgREST rejecting local
 Keycloak tokens when it is not configured with Keycloak's signing keys. Enable
 bearer forwarding only when PostgREST has a real JWT verifier configured.
 
@@ -85,7 +85,7 @@ deactivation, and audit event access is limited to `owner` and `admin`.
 Users can belong to a tenant even when their public IdP does not emit that
 tenant as a claim. Owners and admins create an invite, the invited user signs in
 with the matching email address, and `POST /api/invites/accept` attaches that
-identity to the invited tenant. The UI then sends `X-DBViz-Tenant` for the
+identity to the invited tenant. The UI then sends `X-SQViz-Tenant` for the
 selected active tenant; the Go API forwards it to PostgREST with the verified
 subject/provider headers, and PostgreSQL only resolves the tenant when a
 matching membership exists.
@@ -105,6 +105,12 @@ into ClickHouse so the default UI datasets can chart the data immediately. It
 also attempts to create the raw-to-normalized materialized views for future OTLP
 traffic.
 
+More usage guides:
+
+- [Docker Compose](docs/DOCKER_COMPOSE.md)
+- [Helm](docs/HELM.md)
+- [Release](docs/RELEASE.md)
+
 ## Build And Verify
 
 ```sh
@@ -112,16 +118,16 @@ make test
 make web
 make build
 make license-check
-helm lint charts/uvoo-dbviz
+make helm-lint
 docker compose config
 make compose-smoke
 ```
 
-Production safety checks are enabled by setting `DBVIZ_ENV=production` or
-`DBVIZ_REQUIRE_PRODUCTION_SAFE=true`. The process then rejects development auth,
+Production safety checks are enabled by setting `SQVIZ_ENV=production` or
+`SQVIZ_REQUIRE_PRODUCTION_SAFE=true`. The process then rejects development auth,
 localhost service URLs, default alert worker keys, demo PostgREST JWT secrets,
 and missing usable OIDC provider configuration unless
-`DBVIZ_ALLOW_INSECURE_DEFAULTS=true` is explicitly set.
+`SQVIZ_ALLOW_INSECURE_DEFAULTS=true` is explicitly set.
 
 ## Data Model
 
@@ -140,8 +146,8 @@ passwords are rejected by the Go API and stripped by PostgreSQL RPCs. At query
 time, a selected `sourceId` is loaded through tenant-scoped RLS and converted
 into a ClickHouse client. The `passwordSecretRef` value maps to an environment
 variable by uppercasing and replacing non-alphanumerics with `_`, prefixed with
-`DBVIZ_SECRET_`; for example, `clickhouse-default` resolves from
-`DBVIZ_SECRET_CLICKHOUSE_DEFAULT`.
+`SQVIZ_SECRET_`; for example, `clickhouse-default` resolves from
+`SQVIZ_SECRET_CLICKHOUSE_DEFAULT`.
 
 ## Dashboards
 
@@ -226,8 +232,8 @@ operator/threshold. `POST /api/alerts/test` previews that value before saving.
 The alert worker is disabled by default. Enable it with:
 
 ```sh
-DBVIZ_ALERTS_ENABLED=true
-DBVIZ_ALERT_RULES_JSON='[{"id":"log-volume","name":"High log volume","tenantId":"dev","enabled":true,"query":{"dataset":"logs","groupBy":"service_name","aggregation":"count"},"condition":{"operator":"gt","threshold":100},"intervalSeconds":60,"contacts":[{"kind":"webhook","target":"http://example-webhook:8080/alerts","config":{}}]}]'
+SQVIZ_ALERTS_ENABLED=true
+SQVIZ_ALERT_RULES_JSON='[{"id":"log-volume","name":"High log volume","tenantId":"dev","enabled":true,"query":{"dataset":"logs","groupBy":"service_name","aggregation":"count"},"condition":{"operator":"gt","threshold":100},"intervalSeconds":60,"contacts":[{"kind":"webhook","target":"http://example-webhook:8080/alerts","config":{}}]}]'
 ```
 
 The worker evaluates rules through the same constrained ClickHouse query builder
@@ -237,23 +243,23 @@ incident is recorded. Contact kinds are `webhook`, `pagerduty`, and `email`.
 Email delivery is enabled when SMTP settings are configured:
 
 ```sh
-DBVIZ_ALERT_SMTP_HOST=smtp.example.com
-DBVIZ_ALERT_SMTP_PORT=587
-DBVIZ_ALERT_SMTP_USER=alerts@example.com
-DBVIZ_ALERT_SMTP_PASSWORD=...
-DBVIZ_ALERT_SMTP_FROM=alerts@example.com
+SQVIZ_ALERT_SMTP_HOST=smtp.example.com
+SQVIZ_ALERT_SMTP_PORT=587
+SQVIZ_ALERT_SMTP_USER=alerts@example.com
+SQVIZ_ALERT_SMTP_PASSWORD=...
+SQVIZ_ALERT_SMTP_FROM=alerts@example.com
 ```
 
 Persisted alert rules saved through `POST /api/alerts/rules` are loaded by the
-worker when `DBVIZ_ALERT_LOAD_PERSISTED=true`. The worker uses
-`DBVIZ_ALERT_WORKER_KEY` with the `list_enabled_alert_rules_for_worker()` RPC.
+worker when `SQVIZ_ALERT_LOAD_PERSISTED=true`. The worker uses
+`SQVIZ_ALERT_WORKER_KEY` with the `list_enabled_alert_rules_for_worker()` RPC.
 For production, set the database setting `app.alert_worker_key` to the same
 secret value and do not use the dev default.
 
 When a rule fires, the worker records an `alert_incidents` row through
 `record_alert_incident_for_worker()`. Open firing incidents are deduped by a
 stable fingerprint, `occurrence_count` and `last_seen_at` are updated on repeat
-fires, and contact delivery is suppressed until `DBVIZ_ALERT_DEDUPE_SECONDS`
+fires, and contact delivery is suppressed until `SQVIZ_ALERT_DEDUPE_SECONDS`
 passes. When the condition clears, the worker marks the open incident
 `resolved`; operators can also resolve incidents with
 `POST /api/alerts/incidents/resolve`. Every contact delivery attempt is recorded

@@ -22,9 +22,9 @@ import (
 	"sync"
 	"time"
 
-	"uvoo-dbviz/internal/clickhouse"
-	"uvoo-dbviz/internal/config"
-	"uvoo-dbviz/internal/state"
+	"uvoo-sqviz/internal/clickhouse"
+	"uvoo-sqviz/internal/config"
+	"uvoo-sqviz/internal/state"
 )
 
 type Rule struct {
@@ -224,17 +224,17 @@ func TestIncidentPayload(tenantID string) map[string]any {
 	now := time.Now().UTC().Format(time.RFC3339)
 	return map[string]any{
 		"ruleId":      "contact-test",
-		"ruleName":    "DBViz contact test",
+		"ruleName":    "SQViz contact test",
 		"tenantId":    tenantID,
 		"status":      "firing",
 		"value":       1,
-		"message":     "This is a DBViz test alert notification.",
-		"fingerprint": "dbviz-contact-test-" + tenantID,
+		"message":     "This is a SQViz test alert notification.",
+		"fingerprint": "sqviz-contact-test-" + tenantID,
 		"timestamp":   now,
 		"row": map[string]any{
-			"service_name": "dbviz",
+			"service_name": "sqviz",
 			"severity":     "info",
-			"message":      "This is a DBViz test alert notification.",
+			"message":      "This is a SQViz test alert notification.",
 			"timestamp":    now,
 		},
 	}
@@ -719,7 +719,7 @@ func (w *Worker) notifyEmail(contact ContactEndpoint, incident map[string]any) D
 	}
 	addr := net.JoinHostPort(w.smtp.Host, fmt.Sprint(port))
 	body, _ := json.MarshalIndent(incident, "", "  ")
-	subject := fmt.Sprintf("DBViz alert: %v", incident["ruleName"])
+	subject := fmt.Sprintf("SQViz alert: %v", incident["ruleName"])
 	message := strings.Join([]string{
 		"From: " + w.smtp.From,
 		"To: " + contact.Target,
@@ -1042,7 +1042,7 @@ func pagerDutyCEF(contact ContactEndpoint, incident map[string]any) map[string]a
 		valueFromField(row, contact.Config["sourceField"]),
 		fmt.Sprint(row["service_name"]),
 		fmt.Sprint(incident["tenantId"]),
-		"uvoo-dbviz",
+		"uvoo-sqviz",
 	)
 	severity := strings.TrimSpace(contact.Config["severity"])
 	if severity == "" {
@@ -1052,7 +1052,7 @@ func pagerDutyCEF(contact ContactEndpoint, incident map[string]any) map[string]a
 		"summary":   summary,
 		"source":    source,
 		"severity":  severity,
-		"component": firstNonEmptyString(contact.Config["component"], fmt.Sprint(row["service_name"]), "uvoo-dbviz"),
+		"component": firstNonEmptyString(contact.Config["component"], fmt.Sprint(row["service_name"]), "uvoo-sqviz"),
 		"group":     firstNonEmptyString(contact.Config["group"], fmt.Sprint(incident["tenantId"]), "observability"),
 		"class":     firstNonEmptyString(contact.Config["class"], fmt.Sprint(incident["ruleName"]), "alert"),
 	}
@@ -1136,7 +1136,7 @@ var secretRefCleaner = regexp.MustCompile(`[^A-Za-z0-9]+`)
 
 func SecretEnvName(ref string) string {
 	clean := strings.Trim(secretRefCleaner.ReplaceAllString(strings.ToUpper(strings.TrimSpace(ref)), "_"), "_")
-	return "DBVIZ_SECRET_" + clean
+	return "SQVIZ_SECRET_" + clean
 }
 
 func NormalizeCondition(condition Condition) Condition {

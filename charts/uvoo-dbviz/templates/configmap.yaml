@@ -1,36 +1,36 @@
-{{- include "uvoo-dbviz.validateValues" . -}}
+{{- include "uvoo-sqviz.validateValues" . -}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: {{ include "uvoo-dbviz.fullname" . }}
+  name: {{ include "uvoo-sqviz.fullname" . }}
   labels:
-    {{- include "uvoo-dbviz.labels" . | nindent 4 }}
+    {{- include "uvoo-sqviz.labels" . | nindent 4 }}
 data:
-  DBVIZ_ADDR: ":8080"
-  DBVIZ_WEB_ROOT: "/app/web/dist"
-  DBVIZ_ENV: {{ .Values.config.environment | quote }}
-  DBVIZ_REQUIRE_PRODUCTION_SAFE: {{ .Values.config.requireProductionSafe | quote }}
-  DBVIZ_ALLOW_INSECURE_DEFAULTS: {{ .Values.config.allowInsecureDefaults | quote }}
-  DBVIZ_AUTH_DEV_MODE: {{ .Values.config.authDevMode | quote }}
-  DBVIZ_PUBLIC_URL: {{ .Values.config.publicUrl | quote }}
-  DBVIZ_CLICKHOUSE_URL: {{ include "uvoo-dbviz.clickhouseURL" . | quote }}
-  DBVIZ_CLICKHOUSE_DATABASE: {{ .Values.config.clickhouseDatabase | quote }}
-  DBVIZ_CLICKHOUSE_USER: {{ .Values.config.clickhouseUser | quote }}
-  DBVIZ_POSTGREST_URL: {{ .Values.config.postgrestUrl | quote }}
-  DBVIZ_POSTGREST_FORWARD_BEARER: {{ .Values.config.postgrestForwardBearer | quote }}
-  DBVIZ_OIDC_GOOGLE_CLIENT_ID: {{ .Values.config.googleClientId | quote }}
-  DBVIZ_OIDC_MICROSOFT_CLIENT_ID: {{ .Values.config.microsoftClientId | quote }}
-  DBVIZ_OIDC_KEYCLOAK_ISSUER: {{ .Values.config.keycloakIssuer | quote }}
-  DBVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: {{ .Values.config.keycloakDiscoveryUrl | quote }}
-  DBVIZ_OIDC_KEYCLOAK_CLIENT_ID: {{ .Values.config.keycloakClientId | quote }}
-  DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: {{ .Values.config.keycloakTenantClaim | quote }}
-  DBVIZ_ALERTS_ENABLED: {{ .Values.config.alertsEnabled | quote }}
-  DBVIZ_ALERT_RULES_JSON: {{ .Values.config.alertRulesJson | quote }}
-  DBVIZ_ALERT_LOAD_PERSISTED: {{ .Values.config.alertLoadPersisted | quote }}
-  DBVIZ_ALERT_WORKER_KEY: {{ .Values.config.alertWorkerKey | quote }}
-  DBVIZ_ALERT_POLL_SECONDS: {{ .Values.config.alertPollSeconds | quote }}
-  DBVIZ_ALERT_DEDUPE_SECONDS: {{ .Values.config.alertDedupeSeconds | quote }}
-  DBVIZ_ALERT_SMTP_HOST: {{ .Values.config.alertSmtpHost | quote }}
-  DBVIZ_ALERT_SMTP_PORT: {{ .Values.config.alertSmtpPort | quote }}
-  DBVIZ_ALERT_SMTP_USER: {{ .Values.config.alertSmtpUser | quote }}
-  DBVIZ_ALERT_SMTP_FROM: {{ .Values.config.alertSmtpFrom | quote }}
+  SQVIZ_ADDR: ":8080"
+  SQVIZ_WEB_ROOT: "/app/web/dist"
+  SQVIZ_ENV: {{ .Values.config.environment | quote }}
+  SQVIZ_REQUIRE_PRODUCTION_SAFE: {{ .Values.config.requireProductionSafe | quote }}
+  SQVIZ_ALLOW_INSECURE_DEFAULTS: {{ .Values.config.allowInsecureDefaults | quote }}
+  SQVIZ_AUTH_DEV_MODE: {{ .Values.config.authDevMode | quote }}
+  SQVIZ_PUBLIC_URL: {{ include "uvoo-sqviz.publicURL" . | quote }}
+  SQVIZ_CLICKHOUSE_URL: {{ include "uvoo-sqviz.clickhouseURL" . | quote }}
+  SQVIZ_CLICKHOUSE_DATABASE: {{ .Values.config.clickhouseDatabase | quote }}
+  SQVIZ_CLICKHOUSE_USER: {{ .Values.config.clickhouseUser | quote }}
+  SQVIZ_POSTGREST_URL: {{ include "uvoo-sqviz.postgrestURL" . | quote }}
+  SQVIZ_POSTGREST_FORWARD_BEARER: {{ .Values.config.postgrestForwardBearer | quote }}
+  SQVIZ_OIDC_GOOGLE_CLIENT_ID: {{ .Values.config.googleClientId | quote }}
+  SQVIZ_OIDC_MICROSOFT_CLIENT_ID: {{ .Values.config.microsoftClientId | quote }}
+  SQVIZ_OIDC_KEYCLOAK_ISSUER: {{ include "uvoo-sqviz.keycloakIssuer" . | quote }}
+  SQVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: {{ include "uvoo-sqviz.keycloakDiscoveryURL" . | quote }}
+  SQVIZ_OIDC_KEYCLOAK_CLIENT_ID: {{ .Values.config.keycloakClientId | quote }}
+  SQVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: {{ .Values.config.keycloakTenantClaim | quote }}
+  SQVIZ_ALERTS_ENABLED: {{ .Values.config.alertsEnabled | quote }}
+  SQVIZ_ALERT_RULES_JSON: {{ .Values.config.alertRulesJson | quote }}
+  SQVIZ_ALERT_LOAD_PERSISTED: {{ .Values.config.alertLoadPersisted | quote }}
+  SQVIZ_ALERT_WORKER_KEY: {{ .Values.config.alertWorkerKey | quote }}
+  SQVIZ_ALERT_POLL_SECONDS: {{ .Values.config.alertPollSeconds | quote }}
+  SQVIZ_ALERT_DEDUPE_SECONDS: {{ .Values.config.alertDedupeSeconds | quote }}
+  SQVIZ_ALERT_SMTP_HOST: {{ .Values.config.alertSmtpHost | quote }}
+  SQVIZ_ALERT_SMTP_PORT: {{ .Values.config.alertSmtpPort | quote }}
+  SQVIZ_ALERT_SMTP_USER: {{ .Values.config.alertSmtpUser | quote }}
+  SQVIZ_ALERT_SMTP_FROM: {{ .Values.config.alertSmtpFrom | quote }}

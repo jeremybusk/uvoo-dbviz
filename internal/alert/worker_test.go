@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"uvoo-dbviz/internal/clickhouse"
-	"uvoo-dbviz/internal/config"
+	"uvoo-sqviz/internal/clickhouse"
+	"uvoo-sqviz/internal/config"
 )
 
 func TestEvaluateFiringRuleRecordsAndNotifies(t *testing.T) {
@@ -262,7 +262,7 @@ func TestDeliveryTesterSendsWebhookTestPayload(t *testing.T) {
 	if result.Status != "success" || result.StatusCode != http.StatusOK {
 		t.Fatalf("result = %#v", result)
 	}
-	if payload["fingerprint"] != "dbviz-contact-test-dev" {
+	if payload["fingerprint"] != "sqviz-contact-test-dev" {
 		t.Fatalf("fingerprint = %#v", payload["fingerprint"])
 	}
 	if !sawTestPayload {
@@ -357,11 +357,11 @@ func TestDeliveryTesterSendsPagerDutyTestPayload(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload["routing_key"] != "routing-key" || payload["event_action"] != "trigger" || payload["dedup_key"] != "dbviz-contact-test-dev" {
+		if payload["routing_key"] != "routing-key" || payload["event_action"] != "trigger" || payload["dedup_key"] != "sqviz-contact-test-dev" {
 			t.Fatalf("payload = %#v", payload)
 		}
 		body, _ := payload["payload"].(map[string]any)
-		if body["summary"] != "This is a DBViz test alert notification." || body["source"] != "dbviz" {
+		if body["summary"] != "This is a SQViz test alert notification." || body["source"] != "sqviz" {
 			t.Fatalf("event payload = %#v", body)
 		}
 		return textResponse(http.StatusAccepted, ""), nil

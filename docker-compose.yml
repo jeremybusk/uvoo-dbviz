@@ -1,6 +1,6 @@
 services:
-  uvoo-dbviz:
-    image: ${DBVIZ_IMAGE:-uvoo-dbviz:local}
+  uvoo-sqviz:
+    image: ${SQVIZ_IMAGE:-uvoo-sqviz:local}
     build: .
     depends_on:
       clickhouse:
@@ -12,44 +12,44 @@ services:
       postgrest:
         condition: service_started
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_HTTP_PORT:-8080}:8080"
+      - "${SQVIZ_BIND_ADDR:-0.0.0.0}:${SQVIZ_HTTP_PORT:-8080}:8080"
     environment:
-      DBVIZ_ADDR: :8080
-      DBVIZ_PUBLIC_URL: http://${DBVIZ_PUBLIC_HOST:-localhost}:8080
-      DBVIZ_WEB_ROOT: /app/web/dist
-      DBVIZ_AUTH_DEV_MODE: ${DBVIZ_AUTH_DEV_MODE:-true}
-      DBVIZ_CLICKHOUSE_URL: http://clickhouse:8123
-      DBVIZ_CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
-      DBVIZ_SECRET_CLICKHOUSE_DEFAULT: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
-      DBVIZ_CLICKHOUSE_DATABASE: default
-      DBVIZ_POSTGREST_URL: http://postgrest:3000
-      DBVIZ_POSTGREST_FORWARD_BEARER: ${DBVIZ_POSTGREST_FORWARD_BEARER:-false}
-      DBVIZ_OIDC_KEYCLOAK_ISSUER: http://${DBVIZ_PUBLIC_HOST:-localhost}:8089/realms/dbviz
-      DBVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: http://keycloak:8080/realms/dbviz
-      DBVIZ_OIDC_KEYCLOAK_CLIENT_ID: uvoo-dbviz-web
-      DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: tenant_slug
-      DBVIZ_ALERTS_ENABLED: ${DBVIZ_ALERTS_ENABLED:-false}
-      DBVIZ_ALERT_RULES_JSON: ${DBVIZ_ALERT_RULES_JSON:-[]}
-      DBVIZ_ALERT_LOAD_PERSISTED: ${DBVIZ_ALERT_LOAD_PERSISTED:-true}
-      DBVIZ_ALERT_WORKER_KEY: ${DBVIZ_ALERT_WORKER_KEY:-dev-alert-worker-key}
-      DBVIZ_ALERT_POLL_SECONDS: ${DBVIZ_ALERT_POLL_SECONDS:-30}
-      DBVIZ_ALERT_DEDUPE_SECONDS: ${DBVIZ_ALERT_DEDUPE_SECONDS:-300}
-      DBVIZ_ALERT_SMTP_HOST: ${DBVIZ_ALERT_SMTP_HOST:-}
-      DBVIZ_ALERT_SMTP_PORT: ${DBVIZ_ALERT_SMTP_PORT:-587}
-      DBVIZ_ALERT_SMTP_USER: ${DBVIZ_ALERT_SMTP_USER:-}
-      DBVIZ_ALERT_SMTP_FROM: ${DBVIZ_ALERT_SMTP_FROM:-}
-      DBVIZ_ALERT_SMTP_PASSWORD: ${DBVIZ_ALERT_SMTP_PASSWORD:-}
-      DBVIZ_SECRETS_ENCRYPTION_KEY: ${DBVIZ_SECRETS_ENCRYPTION_KEY:-dev-local-test-secret-key}
+      SQVIZ_ADDR: :8080
+      SQVIZ_PUBLIC_URL: http://${SQVIZ_PUBLIC_HOST:-localhost}:8080
+      SQVIZ_WEB_ROOT: /app/web/dist
+      SQVIZ_AUTH_DEV_MODE: ${SQVIZ_AUTH_DEV_MODE:-true}
+      SQVIZ_CLICKHOUSE_URL: http://clickhouse:8123
+      SQVIZ_CLICKHOUSE_PASSWORD: ${SQVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      SQVIZ_SECRET_CLICKHOUSE_DEFAULT: ${SQVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      SQVIZ_CLICKHOUSE_DATABASE: default
+      SQVIZ_POSTGREST_URL: http://postgrest:3000
+      SQVIZ_POSTGREST_FORWARD_BEARER: ${SQVIZ_POSTGREST_FORWARD_BEARER:-false}
+      SQVIZ_OIDC_KEYCLOAK_ISSUER: http://${SQVIZ_PUBLIC_HOST:-localhost}:8089/realms/sqviz
+      SQVIZ_OIDC_KEYCLOAK_DISCOVERY_URL: http://keycloak:8080/realms/sqviz
+      SQVIZ_OIDC_KEYCLOAK_CLIENT_ID: uvoo-sqviz-web
+      SQVIZ_OIDC_KEYCLOAK_TENANT_CLAIM: tenant_slug
+      SQVIZ_ALERTS_ENABLED: ${SQVIZ_ALERTS_ENABLED:-false}
+      SQVIZ_ALERT_RULES_JSON: ${SQVIZ_ALERT_RULES_JSON:-[]}
+      SQVIZ_ALERT_LOAD_PERSISTED: ${SQVIZ_ALERT_LOAD_PERSISTED:-true}
+      SQVIZ_ALERT_WORKER_KEY: ${SQVIZ_ALERT_WORKER_KEY:-dev-alert-worker-key}
+      SQVIZ_ALERT_POLL_SECONDS: ${SQVIZ_ALERT_POLL_SECONDS:-30}
+      SQVIZ_ALERT_DEDUPE_SECONDS: ${SQVIZ_ALERT_DEDUPE_SECONDS:-300}
+      SQVIZ_ALERT_SMTP_HOST: ${SQVIZ_ALERT_SMTP_HOST:-}
+      SQVIZ_ALERT_SMTP_PORT: ${SQVIZ_ALERT_SMTP_PORT:-587}
+      SQVIZ_ALERT_SMTP_USER: ${SQVIZ_ALERT_SMTP_USER:-}
+      SQVIZ_ALERT_SMTP_FROM: ${SQVIZ_ALERT_SMTP_FROM:-}
+      SQVIZ_ALERT_SMTP_PASSWORD: ${SQVIZ_ALERT_SMTP_PASSWORD:-}
+      SQVIZ_SECRETS_ENCRYPTION_KEY: ${SQVIZ_SECRETS_ENCRYPTION_KEY:-dev-local-test-secret-key}
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5-alpine
     environment:
       CLICKHOUSE_USER: default
-      CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${SQVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_CLICKHOUSE_HTTP_PORT:-8123}:8123"
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_CLICKHOUSE_NATIVE_PORT:-9000}:9000"
+      - "${SQVIZ_BIND_ADDR:-0.0.0.0}:${SQVIZ_CLICKHOUSE_HTTP_PORT:-8123}:8123"
+      - "${SQVIZ_BIND_ADDR:-0.0.0.0}:${SQVIZ_CLICKHOUSE_NATIVE_PORT:-9000}:9000"
     volumes:
       - clickhouse-data:/var/lib/clickhouse
     healthcheck:
@@ -70,7 +70,7 @@ services:
     environment:
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "9000"
-      CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${SQVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
 
   otel-normalizer:
     image: clickhouse/clickhouse-server:25.5-alpine
@@ -85,18 +85,18 @@ services:
     environment:
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "9000"
-      CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
-      DBVIZ_OTEL_DEFAULT_TENANT: ${DBVIZ_OTEL_DEFAULT_TENANT:-dev}
-      DBVIZ_OTEL_NORMALIZER_WAIT_SECONDS: ${DBVIZ_OTEL_NORMALIZER_WAIT_SECONDS:-90}
+      CLICKHOUSE_PASSWORD: ${SQVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      SQVIZ_OTEL_DEFAULT_TENANT: ${SQVIZ_OTEL_DEFAULT_TENANT:-dev}
+      SQVIZ_OTEL_NORMALIZER_WAIT_SECONDS: ${SQVIZ_OTEL_NORMALIZER_WAIT_SECONDS:-90}
 
   postgres:
     image: postgres:17-alpine
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_POSTGRES_PORT:-5432}:5432"
+      - "${SQVIZ_BIND_ADDR:-0.0.0.0}:${SQVIZ_POSTGRES_PORT:-5432}:5432"
     environment:
-      POSTGRES_DB: dbviz
-      POSTGRES_USER: dbviz
-      POSTGRES_PASSWORD: dbviz
+      POSTGRES_DB: sqviz
+      POSTGRES_USER: sqviz
+      POSTGRES_PASSWORD: sqviz
     volumes:
       - postgres-data:/var/lib/postgresql/data
       - ./migrations/postgres:/docker-entrypoint-initdb.d:ro
@@ -106,18 +106,18 @@ services:
     depends_on:
       - postgres
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_POSTGREST_PORT:-3000}:3000"
+      - "${SQVIZ_BIND_ADDR:-0.0.0.0}:${SQVIZ_POSTGREST_PORT:-3000}:3000"
     environment:
-      PGRST_DB_URI: postgres://dbviz:dbviz@postgres:5432/dbviz
+      PGRST_DB_URI: postgres://sqviz:sqviz@postgres:5432/sqviz
       PGRST_DB_SCHEMA: public
-      PGRST_DB_ANON_ROLE: dbviz_web
+      PGRST_DB_ANON_ROLE: sqviz_web
       PGRST_JWT_SECRET: "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret"
 
   keycloak:
     image: quay.io/keycloak/keycloak:25.0
-    command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://${DBVIZ_PUBLIC_HOST:-localhost}:8089"]
+    command: ["start-dev", "--import-realm", "--http-port=8080", "--hostname=http://${SQVIZ_PUBLIC_HOST:-localhost}:8089"]
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_KEYCLOAK_PORT:-8089}:8080"
+      - "${SQVIZ_BIND_ADDR:-0.0.0.0}:${SQVIZ_KEYCLOAK_PORT:-8089}:8080"
     environment:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
@@ -131,10 +131,10 @@ services:
       clickhouse:
         condition: service_healthy
     ports:
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_OTEL_GRPC_PORT:-4317}:4317"
-      - "${DBVIZ_BIND_ADDR:-0.0.0.0}:${DBVIZ_OTEL_HTTP_PORT:-4318}:4318"
+      - "${SQVIZ_BIND_ADDR:-0.0.0.0}:${SQVIZ_OTEL_GRPC_PORT:-4317}:4317"
+      - "${SQVIZ_BIND_ADDR:-0.0.0.0}:${SQVIZ_OTEL_HTTP_PORT:-4318}:4318"
     environment:
-      CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${SQVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
     volumes:
       - ./deploy/otel/collector.yaml:/etc/otelcol/config.yaml:ro
 
@@ -153,7 +153,7 @@ services:
       OTEL_ENDPOINT: http://otel-collector:4318
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_PORT: "9000"
-      CLICKHOUSE_PASSWORD: ${DBVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
+      CLICKHOUSE_PASSWORD: ${SQVIZ_CLICKHOUSE_PASSWORD:-clickhouse}
       TENANT_ID: dev
 
 volumes:

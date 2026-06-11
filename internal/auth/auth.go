@@ -21,7 +21,7 @@ import (
 	"sync"
 	"time"
 
-	"uvoo-dbviz/internal/config"
+	"uvoo-sqviz/internal/config"
 )
 
 type Principal struct {

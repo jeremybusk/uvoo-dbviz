@@ -7,10 +7,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"uvoo-dbviz/internal/auth"
-	"uvoo-dbviz/internal/clickhouse"
-	"uvoo-dbviz/internal/config"
-	"uvoo-dbviz/internal/state"
+	"uvoo-sqviz/internal/auth"
+	"uvoo-sqviz/internal/clickhouse"
+	"uvoo-sqviz/internal/config"
+	"uvoo-sqviz/internal/state"
 )
 
 func TestHealth(t *testing.T) {

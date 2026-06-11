@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"uvoo-dbviz/internal/auth"
-	"uvoo-dbviz/internal/config"
+	"uvoo-sqviz/internal/auth"
+	"uvoo-sqviz/internal/config"
 )
 
 func TestRPCForwardsPrincipalHeadersAndStripsBearerByDefault(t *testing.T) {
@@ -17,10 +17,10 @@ func TestRPCForwardsPrincipalHeadersAndStripsBearerByDefault(t *testing.T) {
 		if r.URL.Path != "/rpc/current_user_has_role" {
 			t.Fatalf("path = %s", r.URL.Path)
 		}
-		assertHeader(t, r, "X-DBViz-Tenant", "dev")
-		assertHeader(t, r, "X-DBViz-Subject", "alice")
-		assertHeader(t, r, "X-DBViz-Provider", "keycloak")
-		assertHeader(t, r, "X-DBViz-Email", "alice@example.com")
+		assertHeader(t, r, "X-SQViz-Tenant", "dev")
+		assertHeader(t, r, "X-SQViz-Subject", "alice")
+		assertHeader(t, r, "X-SQViz-Provider", "keycloak")
+		assertHeader(t, r, "X-SQViz-Email", "alice@example.com")
 		assertHeader(t, r, "X-Dev-Tenant", "dev")
 		assertHeader(t, r, "X-Dev-Email", "alice@example.com")
 		if r.Header.Get("Authorization") != "" {
@@ -77,7 +77,7 @@ func TestRPCForwardsBearerWhenEnabled(t *testing.T) {
 
 func TestRPCAddsDevHeadersWhenBearerIsMissing(t *testing.T) {
 	httpClient := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
-		assertHeader(t, r, "X-DBViz-Tenant", "dev")
+		assertHeader(t, r, "X-SQViz-Tenant", "dev")
 		assertHeader(t, r, "X-Dev-Tenant", "dev")
 		assertHeader(t, r, "X-Dev-Email", "dev@example.com")
 		if r.Header.Get("Authorization") != "" {

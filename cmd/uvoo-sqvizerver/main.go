@@ -7,13 +7,13 @@ import (
 	"os"
 	"time"
 
-	"uvoo-dbviz/internal/alert"
-	"uvoo-dbviz/internal/auth"
-	"uvoo-dbviz/internal/clickhouse"
-	"uvoo-dbviz/internal/config"
-	"uvoo-dbviz/internal/secrets"
-	"uvoo-dbviz/internal/server"
-	"uvoo-dbviz/internal/state"
+	"uvoo-sqviz/internal/alert"
+	"uvoo-sqviz/internal/auth"
+	"uvoo-sqviz/internal/clickhouse"
+	"uvoo-sqviz/internal/config"
+	"uvoo-sqviz/internal/secrets"
+	"uvoo-sqviz/internal/server"
+	"uvoo-sqviz/internal/state"
 )
 
 func main() {
@@ -123,7 +123,7 @@ func main() {
 	}
 
 	app := server.New(cfg, authn, ch, stateClient, logger)
-	logger.Info("starting uvoo-dbviz", "addr", cfg.Addr)
+	logger.Info("starting uvoo-sqviz", "addr", cfg.Addr)
 	if err := http.ListenAndServe(cfg.Addr, app); err != nil {
 		logger.Error("server stopped", "error", err)
 		os.Exit(1)

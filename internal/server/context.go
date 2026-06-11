@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 
-	"uvoo-dbviz/internal/auth"
+	"uvoo-sqviz/internal/auth"
 )
 
 type principalKey struct{}

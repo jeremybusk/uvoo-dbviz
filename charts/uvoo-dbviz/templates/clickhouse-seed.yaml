@@ -2,15 +2,15 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: {{ include "uvoo-dbviz.fullname" . }}-clickhouse-seed
+  name: {{ include "uvoo-sqviz.fullname" . }}-clickhouse-seed
   labels:
-    {{- include "uvoo-dbviz.labels" . | nindent 4 }}
+    {{- include "uvoo-sqviz.labels" . | nindent 4 }}
     app.kubernetes.io/component: clickhouse-seed
 spec:
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: {{ include "uvoo-dbviz.name" . }}
+        app.kubernetes.io/name: {{ include "uvoo-sqviz.name" . }}
         app.kubernetes.io/instance: {{ .Release.Name }}
         app.kubernetes.io/component: clickhouse-seed
     spec:
@@ -22,14 +22,14 @@ spec:
             - name: CLICKHOUSE_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: {{ default (include "uvoo-dbviz.fullname" .) .Values.secret.existingSecret }}
-                  key: DBVIZ_CLICKHOUSE_PASSWORD
+                  name: {{ default (include "uvoo-sqviz.fullname" .) .Values.secret.existingSecret }}
+                  key: SQVIZ_CLICKHOUSE_PASSWORD
           command:
             - /bin/sh
             - -c
             - |
               set -eu
-              clickhouse-client --host {{ include "uvoo-dbviz.fullname" . }}-clickhouse --port 9000 --password "$CLICKHOUSE_PASSWORD" --multiquery <<'SQL'
+              clickhouse-client --host {{ include "uvoo-sqviz.fullname" . }}-clickhouse --port 9000 --password "$CLICKHOUSE_PASSWORD" --multiquery <<'SQL'
               CREATE TABLE IF NOT EXISTS otel_logs (
                   tenant_id String,
                   timestamp DateTime64(3, 'UTC'),

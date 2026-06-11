@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"uvoo-dbviz/internal/config"
+	"uvoo-sqviz/internal/config"
 )
 
 func TestBuildTimeseriesSQLScopesTenantAndAllowlistsColumns(t *testing.T) {
