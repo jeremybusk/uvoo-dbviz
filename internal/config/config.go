@@ -126,168 +126,168 @@ type PublicAlertDelivery struct {
 
 func Load() Config {
 	cfg := Config{
-		Addr:      env("DBVIZ_ADDR", ":8080"),
-		PublicURL: env("DBVIZ_PUBLIC_URL", "http://localhost:8080"),
-		WebRoot:   env("DBVIZ_WEB_ROOT", "web/dist"),
+		Addr:      env("SQVIZ_ADDR", ":8080"),
+		PublicURL: env("SQVIZ_PUBLIC_URL", "http://localhost:8080"),
+		WebRoot:   env("SQVIZ_WEB_ROOT", "web/dist"),
 		Runtime: RuntimeConfig{
-			Environment:           strings.ToLower(env("DBVIZ_ENV", "development")),
-			RequireProductionSafe: envBool("DBVIZ_REQUIRE_PRODUCTION_SAFE", false),
-			AllowInsecureDefaults: envBool("DBVIZ_ALLOW_INSECURE_DEFAULTS", false),
+			Environment:           strings.ToLower(env("SQVIZ_ENV", "development")),
+			RequireProductionSafe: envBool("SQVIZ_REQUIRE_PRODUCTION_SAFE", false),
+			AllowInsecureDefaults: envBool("SQVIZ_ALLOW_INSECURE_DEFAULTS", false),
 		},
 		Auth: AuthConfig{
-			DevMode: envBool("DBVIZ_AUTH_DEV_MODE", false),
+			DevMode: envBool("SQVIZ_AUTH_DEV_MODE", false),
 			Providers: []OIDCProvider{
 				{
 					ID:          "google",
 					Name:        "Google",
 					Issuer:      "https://accounts.google.com",
-					ClientID:    os.Getenv("DBVIZ_OIDC_GOOGLE_CLIENT_ID"),
-					Audience:    csv("DBVIZ_OIDC_GOOGLE_AUDIENCE", os.Getenv("DBVIZ_OIDC_GOOGLE_CLIENT_ID")),
+					ClientID:    os.Getenv("SQVIZ_OIDC_GOOGLE_CLIENT_ID"),
+					Audience:    csv("SQVIZ_OIDC_GOOGLE_AUDIENCE", os.Getenv("SQVIZ_OIDC_GOOGLE_CLIENT_ID")),
 					Scopes:      []string{"openid", "email", "profile"},
-					TenantClaim: env("DBVIZ_OIDC_GOOGLE_TENANT_CLAIM", "hd"),
+					TenantClaim: env("SQVIZ_OIDC_GOOGLE_TENANT_CLAIM", "hd"),
 					EmailClaim:  "email",
 					NameClaim:   "name",
-					Enabled:     envBool("DBVIZ_OIDC_GOOGLE_ENABLED", true),
+					Enabled:     envBool("SQVIZ_OIDC_GOOGLE_ENABLED", true),
 				},
 				{
 					ID:                  "microsoft",
 					Name:                "Microsoft",
-					Issuer:              env("DBVIZ_OIDC_MICROSOFT_ISSUER", "https://login.microsoftonline.com/common/v2.0"),
-					ClientID:            os.Getenv("DBVIZ_OIDC_MICROSOFT_CLIENT_ID"),
-					Audience:            csv("DBVIZ_OIDC_MICROSOFT_AUDIENCE", os.Getenv("DBVIZ_OIDC_MICROSOFT_CLIENT_ID")),
+					Issuer:              env("SQVIZ_OIDC_MICROSOFT_ISSUER", "https://login.microsoftonline.com/common/v2.0"),
+					ClientID:            os.Getenv("SQVIZ_OIDC_MICROSOFT_CLIENT_ID"),
+					Audience:            csv("SQVIZ_OIDC_MICROSOFT_AUDIENCE", os.Getenv("SQVIZ_OIDC_MICROSOFT_CLIENT_ID")),
 					Scopes:              []string{"openid", "email", "profile"},
-					TenantClaim:         env("DBVIZ_OIDC_MICROSOFT_TENANT_CLAIM", "tid"),
+					TenantClaim:         env("SQVIZ_OIDC_MICROSOFT_TENANT_CLAIM", "tid"),
 					EmailClaim:          "preferred_username",
 					NameClaim:           "name",
-					Enabled:             envBool("DBVIZ_OIDC_MICROSOFT_ENABLED", true),
+					Enabled:             envBool("SQVIZ_OIDC_MICROSOFT_ENABLED", true),
 					AllowIssuerPrefixes: []string{"https://login.microsoftonline.com/"},
 				},
 			},
 		},
 		ClickHouse: ClickHouseConfig{
-			URL:             env("DBVIZ_CLICKHOUSE_URL", "http://localhost:8123"),
-			User:            env("DBVIZ_CLICKHOUSE_USER", "default"),
-			Password:        os.Getenv("DBVIZ_CLICKHOUSE_PASSWORD"),
-			Database:        env("DBVIZ_CLICKHOUSE_DATABASE", "default"),
-			Timeout:         time.Duration(envInt("DBVIZ_CLICKHOUSE_TIMEOUT_SECONDS", 30)) * time.Second,
-			MaxRows:         envInt("DBVIZ_CLICKHOUSE_MAX_ROWS", 10000),
-			MaxQuerySeconds: envInt("DBVIZ_CLICKHOUSE_MAX_QUERY_SECONDS", 20),
+			URL:             env("SQVIZ_CLICKHOUSE_URL", "http://localhost:8123"),
+			User:            env("SQVIZ_CLICKHOUSE_USER", "default"),
+			Password:        os.Getenv("SQVIZ_CLICKHOUSE_PASSWORD"),
+			Database:        env("SQVIZ_CLICKHOUSE_DATABASE", "default"),
+			Timeout:         time.Duration(envInt("SQVIZ_CLICKHOUSE_TIMEOUT_SECONDS", 30)) * time.Second,
+			MaxRows:         envInt("SQVIZ_CLICKHOUSE_MAX_ROWS", 10000),
+			MaxQuerySeconds: envInt("SQVIZ_CLICKHOUSE_MAX_QUERY_SECONDS", 20),
 		},
 		PostgREST: PostgRESTConfig{
-			URL:           env("DBVIZ_POSTGREST_URL", "/state"),
-			ForwardBearer: envBool("DBVIZ_POSTGREST_FORWARD_BEARER", false),
+			URL:           env("SQVIZ_POSTGREST_URL", "/state"),
+			ForwardBearer: envBool("SQVIZ_POSTGREST_FORWARD_BEARER", false),
 		},
 		Alerts: AlertConfig{
-			Enabled:       envBool("DBVIZ_ALERTS_ENABLED", false),
-			Rules:         os.Getenv("DBVIZ_ALERT_RULES_JSON"),
-			WorkerKey:     env("DBVIZ_ALERT_WORKER_KEY", "dev-alert-worker-key"),
-			PollSeconds:   envInt("DBVIZ_ALERT_POLL_SECONDS", 30),
-			DedupeSeconds: envInt("DBVIZ_ALERT_DEDUPE_SECONDS", 300),
-			LoadPersisted: envBool("DBVIZ_ALERT_LOAD_PERSISTED", true),
-			SMTPHost:      os.Getenv("DBVIZ_ALERT_SMTP_HOST"),
-			SMTPPort:      envInt("DBVIZ_ALERT_SMTP_PORT", 587),
-			SMTPUser:      os.Getenv("DBVIZ_ALERT_SMTP_USER"),
-			SMTPPassword:  os.Getenv("DBVIZ_ALERT_SMTP_PASSWORD"),
-			SMTPFrom:      os.Getenv("DBVIZ_ALERT_SMTP_FROM"),
+			Enabled:       envBool("SQVIZ_ALERTS_ENABLED", false),
+			Rules:         os.Getenv("SQVIZ_ALERT_RULES_JSON"),
+			WorkerKey:     env("SQVIZ_ALERT_WORKER_KEY", "dev-alert-worker-key"),
+			PollSeconds:   envInt("SQVIZ_ALERT_POLL_SECONDS", 30),
+			DedupeSeconds: envInt("SQVIZ_ALERT_DEDUPE_SECONDS", 300),
+			LoadPersisted: envBool("SQVIZ_ALERT_LOAD_PERSISTED", true),
+			SMTPHost:      os.Getenv("SQVIZ_ALERT_SMTP_HOST"),
+			SMTPPort:      envInt("SQVIZ_ALERT_SMTP_PORT", 587),
+			SMTPUser:      os.Getenv("SQVIZ_ALERT_SMTP_USER"),
+			SMTPPassword:  os.Getenv("SQVIZ_ALERT_SMTP_PASSWORD"),
+			SMTPFrom:      os.Getenv("SQVIZ_ALERT_SMTP_FROM"),
 		},
 		Secrets: SecretConfig{
-			EncryptionKey: os.Getenv("DBVIZ_SECRETS_ENCRYPTION_KEY"),
+			EncryptionKey: os.Getenv("SQVIZ_SECRETS_ENCRYPTION_KEY"),
 		},
 		Datasets: map[string]Dataset{
 			"logs": {
 				ID:           "logs",
 				Name:         "Logs",
-				Table:        env("DBVIZ_CLICKHOUSE_LOGS_TABLE", "otel_logs"),
-				TimeColumn:   env("DBVIZ_CLICKHOUSE_LOGS_TIME_COLUMN", "timestamp"),
-				TenantColumn: env("DBVIZ_CLICKHOUSE_LOGS_TENANT_COLUMN", "tenant_id"),
-				Dimensions:   csvDefault("DBVIZ_CLICKHOUSE_LOGS_DIMENSIONS", []string{"service_name", "severity", "host_name"}),
-				Filters:      csvDefault("DBVIZ_CLICKHOUSE_LOGS_FILTERS", []string{"service_name", "severity", "host_name", "trace_id"}),
+				Table:        env("SQVIZ_CLICKHOUSE_LOGS_TABLE", "otel_logs"),
+				TimeColumn:   env("SQVIZ_CLICKHOUSE_LOGS_TIME_COLUMN", "timestamp"),
+				TenantColumn: env("SQVIZ_CLICKHOUSE_LOGS_TENANT_COLUMN", "tenant_id"),
+				Dimensions:   csvDefault("SQVIZ_CLICKHOUSE_LOGS_DIMENSIONS", []string{"service_name", "severity", "host_name"}),
+				Filters:      csvDefault("SQVIZ_CLICKHOUSE_LOGS_FILTERS", []string{"service_name", "severity", "host_name", "trace_id"}),
 				FilterOperators: map[string][]string{
 					"service_name": {"eq", "contains"},
 					"severity":     {"eq"},
 					"host_name":    {"eq", "contains"},
 					"trace_id":     {"eq"},
 				},
-				EventColumns:       csvDefault("DBVIZ_CLICKHOUSE_LOGS_EVENT_COLUMNS", []string{"timestamp", "service_name", "severity", "host_name", "trace_id", "body"}),
-				SearchColumns:      csvDefault("DBVIZ_CLICKHOUSE_LOGS_SEARCH_COLUMNS", []string{"body", "service_name", "severity", "host_name", "trace_id"}),
+				EventColumns:       csvDefault("SQVIZ_CLICKHOUSE_LOGS_EVENT_COLUMNS", []string{"timestamp", "service_name", "severity", "host_name", "trace_id", "body"}),
+				SearchColumns:      csvDefault("SQVIZ_CLICKHOUSE_LOGS_SEARCH_COLUMNS", []string{"body", "service_name", "severity", "host_name", "trace_id"}),
 				Measures:           []string{"_rows"},
 				Aggregations:       []string{"count"},
 				DefaultMeasure:     "_rows",
 				DefaultAggregation: "count",
-				MaxLookbackHours:   envInt("DBVIZ_CLICKHOUSE_LOGS_MAX_LOOKBACK_HOURS", 168),
-				MaxRows:            envInt("DBVIZ_CLICKHOUSE_LOGS_MAX_ROWS", 5000),
+				MaxLookbackHours:   envInt("SQVIZ_CLICKHOUSE_LOGS_MAX_LOOKBACK_HOURS", 168),
+				MaxRows:            envInt("SQVIZ_CLICKHOUSE_LOGS_MAX_ROWS", 5000),
 			},
 			"traces": {
 				ID:           "traces",
 				Name:         "Traces",
-				Table:        env("DBVIZ_CLICKHOUSE_TRACES_TABLE", "otel_traces"),
-				TimeColumn:   env("DBVIZ_CLICKHOUSE_TRACES_TIME_COLUMN", "timestamp"),
-				TenantColumn: env("DBVIZ_CLICKHOUSE_TRACES_TENANT_COLUMN", "tenant_id"),
-				Dimensions:   csvDefault("DBVIZ_CLICKHOUSE_TRACES_DIMENSIONS", []string{"service_name", "span_name", "status_code"}),
-				Filters:      csvDefault("DBVIZ_CLICKHOUSE_TRACES_FILTERS", []string{"service_name", "span_name", "status_code", "trace_id"}),
+				Table:        env("SQVIZ_CLICKHOUSE_TRACES_TABLE", "otel_traces"),
+				TimeColumn:   env("SQVIZ_CLICKHOUSE_TRACES_TIME_COLUMN", "timestamp"),
+				TenantColumn: env("SQVIZ_CLICKHOUSE_TRACES_TENANT_COLUMN", "tenant_id"),
+				Dimensions:   csvDefault("SQVIZ_CLICKHOUSE_TRACES_DIMENSIONS", []string{"service_name", "span_name", "status_code"}),
+				Filters:      csvDefault("SQVIZ_CLICKHOUSE_TRACES_FILTERS", []string{"service_name", "span_name", "status_code", "trace_id"}),
 				FilterOperators: map[string][]string{
 					"service_name": {"eq", "contains"},
 					"span_name":    {"eq", "contains"},
 					"status_code":  {"eq"},
 					"trace_id":     {"eq"},
 				},
-				EventColumns:       csvDefault("DBVIZ_CLICKHOUSE_TRACES_EVENT_COLUMNS", []string{"timestamp", "service_name", "span_name", "status_code", "trace_id", "span_id", "duration_ms"}),
-				SearchColumns:      csvDefault("DBVIZ_CLICKHOUSE_TRACES_SEARCH_COLUMNS", []string{"service_name", "span_name", "status_code", "trace_id", "span_id"}),
+				EventColumns:       csvDefault("SQVIZ_CLICKHOUSE_TRACES_EVENT_COLUMNS", []string{"timestamp", "service_name", "span_name", "status_code", "trace_id", "span_id", "duration_ms"}),
+				SearchColumns:      csvDefault("SQVIZ_CLICKHOUSE_TRACES_SEARCH_COLUMNS", []string{"service_name", "span_name", "status_code", "trace_id", "span_id"}),
 				Measures:           []string{"duration_ms", "_rows"},
 				Aggregations:       []string{"count", "avg", "max", "p95"},
 				DefaultMeasure:     "_rows",
 				DefaultAggregation: "count",
-				MaxLookbackHours:   envInt("DBVIZ_CLICKHOUSE_TRACES_MAX_LOOKBACK_HOURS", 168),
-				MaxRows:            envInt("DBVIZ_CLICKHOUSE_TRACES_MAX_ROWS", 5000),
+				MaxLookbackHours:   envInt("SQVIZ_CLICKHOUSE_TRACES_MAX_LOOKBACK_HOURS", 168),
+				MaxRows:            envInt("SQVIZ_CLICKHOUSE_TRACES_MAX_ROWS", 5000),
 			},
 			"metrics": {
 				ID:           "metrics",
 				Name:         "Metrics",
-				Table:        env("DBVIZ_CLICKHOUSE_METRICS_TABLE", "otel_metrics"),
-				TimeColumn:   env("DBVIZ_CLICKHOUSE_METRICS_TIME_COLUMN", "timestamp"),
-				TenantColumn: env("DBVIZ_CLICKHOUSE_METRICS_TENANT_COLUMN", "tenant_id"),
-				Dimensions:   csvDefault("DBVIZ_CLICKHOUSE_METRICS_DIMENSIONS", []string{"service_name", "metric_name"}),
-				Filters:      csvDefault("DBVIZ_CLICKHOUSE_METRICS_FILTERS", []string{"service_name", "metric_name"}),
+				Table:        env("SQVIZ_CLICKHOUSE_METRICS_TABLE", "otel_metrics"),
+				TimeColumn:   env("SQVIZ_CLICKHOUSE_METRICS_TIME_COLUMN", "timestamp"),
+				TenantColumn: env("SQVIZ_CLICKHOUSE_METRICS_TENANT_COLUMN", "tenant_id"),
+				Dimensions:   csvDefault("SQVIZ_CLICKHOUSE_METRICS_DIMENSIONS", []string{"service_name", "metric_name"}),
+				Filters:      csvDefault("SQVIZ_CLICKHOUSE_METRICS_FILTERS", []string{"service_name", "metric_name"}),
 				FilterOperators: map[string][]string{
 					"service_name": {"eq", "contains"},
 					"metric_name":  {"eq", "contains"},
 				},
-				EventColumns:       csvDefault("DBVIZ_CLICKHOUSE_METRICS_EVENT_COLUMNS", []string{"timestamp", "service_name", "metric_name", "value"}),
-				SearchColumns:      csvDefault("DBVIZ_CLICKHOUSE_METRICS_SEARCH_COLUMNS", []string{"service_name", "metric_name"}),
+				EventColumns:       csvDefault("SQVIZ_CLICKHOUSE_METRICS_EVENT_COLUMNS", []string{"timestamp", "service_name", "metric_name", "value"}),
+				SearchColumns:      csvDefault("SQVIZ_CLICKHOUSE_METRICS_SEARCH_COLUMNS", []string{"service_name", "metric_name"}),
 				Measures:           []string{"value"},
 				Aggregations:       []string{"avg", "sum", "max", "min", "p95"},
 				DefaultMeasure:     "value",
 				DefaultAggregation: "avg",
-				MaxLookbackHours:   envInt("DBVIZ_CLICKHOUSE_METRICS_MAX_LOOKBACK_HOURS", 720),
-				MaxRows:            envInt("DBVIZ_CLICKHOUSE_METRICS_MAX_ROWS", 10000),
+				MaxLookbackHours:   envInt("SQVIZ_CLICKHOUSE_METRICS_MAX_LOOKBACK_HOURS", 720),
+				MaxRows:            envInt("SQVIZ_CLICKHOUSE_METRICS_MAX_ROWS", 10000),
 			},
 		},
 	}
 
-	if keycloakIssuer := os.Getenv("DBVIZ_OIDC_KEYCLOAK_ISSUER"); keycloakIssuer != "" {
+	if keycloakIssuer := os.Getenv("SQVIZ_OIDC_KEYCLOAK_ISSUER"); keycloakIssuer != "" {
 		cfg.Auth.Providers = append(cfg.Auth.Providers, OIDCProvider{
 			ID:           "keycloak",
-			Name:         env("DBVIZ_OIDC_KEYCLOAK_NAME", "Keycloak"),
+			Name:         env("SQVIZ_OIDC_KEYCLOAK_NAME", "Keycloak"),
 			Issuer:       keycloakIssuer,
-			DiscoveryURL: env("DBVIZ_OIDC_KEYCLOAK_DISCOVERY_URL", keycloakIssuer),
-			ClientID:     os.Getenv("DBVIZ_OIDC_KEYCLOAK_CLIENT_ID"),
-			ClientSecret: os.Getenv("DBVIZ_OIDC_KEYCLOAK_CLIENT_SECRET"),
-			Audience:     csv("DBVIZ_OIDC_KEYCLOAK_AUDIENCE", os.Getenv("DBVIZ_OIDC_KEYCLOAK_CLIENT_ID")),
+			DiscoveryURL: env("SQVIZ_OIDC_KEYCLOAK_DISCOVERY_URL", keycloakIssuer),
+			ClientID:     os.Getenv("SQVIZ_OIDC_KEYCLOAK_CLIENT_ID"),
+			ClientSecret: os.Getenv("SQVIZ_OIDC_KEYCLOAK_CLIENT_SECRET"),
+			Audience:     csv("SQVIZ_OIDC_KEYCLOAK_AUDIENCE", os.Getenv("SQVIZ_OIDC_KEYCLOAK_CLIENT_ID")),
 			Scopes:       []string{"openid", "email", "profile"},
-			TenantClaim:  env("DBVIZ_OIDC_KEYCLOAK_TENANT_CLAIM", "tenant_id"),
-			EmailClaim:   env("DBVIZ_OIDC_KEYCLOAK_EMAIL_CLAIM", "email"),
-			NameClaim:    env("DBVIZ_OIDC_KEYCLOAK_NAME_CLAIM", "name"),
-			Enabled:      envBool("DBVIZ_OIDC_KEYCLOAK_ENABLED", true),
+			TenantClaim:  env("SQVIZ_OIDC_KEYCLOAK_TENANT_CLAIM", "tenant_id"),
+			EmailClaim:   env("SQVIZ_OIDC_KEYCLOAK_EMAIL_CLAIM", "email"),
+			NameClaim:    env("SQVIZ_OIDC_KEYCLOAK_NAME_CLAIM", "name"),
+			Enabled:      envBool("SQVIZ_OIDC_KEYCLOAK_ENABLED", true),
 		})
 	}
 
-	if raw := os.Getenv("DBVIZ_OIDC_PROVIDERS_JSON"); raw != "" {
+	if raw := os.Getenv("SQVIZ_OIDC_PROVIDERS_JSON"); raw != "" {
 		var extra []OIDCProvider
 		if err := json.Unmarshal([]byte(raw), &extra); err == nil {
 			cfg.Auth.Providers = append(cfg.Auth.Providers, extra...)
 		}
 	}
-	if raw := os.Getenv("DBVIZ_DATASETS_JSON"); raw != "" {
+	if raw := os.Getenv("SQVIZ_DATASETS_JSON"); raw != "" {
 		var datasets []Dataset
 		if err := json.Unmarshal([]byte(raw), &datasets); err == nil {
 			for _, ds := range datasets {
@@ -304,27 +304,27 @@ func (c Config) Validate() error {
 	}
 	var problems []string
 	if c.Auth.DevMode {
-		problems = append(problems, "DBVIZ_AUTH_DEV_MODE must be false")
+		problems = append(problems, "SQVIZ_AUTH_DEV_MODE must be false")
 	}
 	if strings.TrimSpace(c.PublicURL) == "" || strings.Contains(c.PublicURL, "localhost") {
-		problems = append(problems, "DBVIZ_PUBLIC_URL must be set to a non-localhost URL")
+		problems = append(problems, "SQVIZ_PUBLIC_URL must be set to a non-localhost URL")
 	}
 	if strings.TrimSpace(c.PostgREST.URL) == "" || c.PostgREST.URL == "/state" {
-		problems = append(problems, "DBVIZ_POSTGREST_URL must point at a production PostgREST service")
+		problems = append(problems, "SQVIZ_POSTGREST_URL must point at a production PostgREST service")
 	}
 	if strings.TrimSpace(c.ClickHouse.URL) == "" || strings.Contains(c.ClickHouse.URL, "localhost") {
-		problems = append(problems, "DBVIZ_CLICKHOUSE_URL must point at a production ClickHouse service")
+		problems = append(problems, "SQVIZ_CLICKHOUSE_URL must point at a production ClickHouse service")
 	}
 	if c.Alerts.Enabled {
 		if c.Alerts.WorkerKey == "" || c.Alerts.WorkerKey == "dev-alert-worker-key" {
-			problems = append(problems, "DBVIZ_ALERT_WORKER_KEY must be set to a non-default secret")
+			problems = append(problems, "SQVIZ_ALERT_WORKER_KEY must be set to a non-default secret")
 		}
 	}
 	if strings.TrimSpace(c.Secrets.EncryptionKey) == "" {
-		problems = append(problems, "DBVIZ_SECRETS_ENCRYPTION_KEY must be set for encrypted tenant secrets")
+		problems = append(problems, "SQVIZ_SECRETS_ENCRYPTION_KEY must be set for encrypted tenant secrets")
 	}
 	if os.Getenv("PGRST_JWT_SECRET") == "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret" ||
-		os.Getenv("DBVIZ_POSTGREST_JWT_SECRET") == "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret" {
+		os.Getenv("SQVIZ_POSTGREST_JWT_SECRET") == "replace-this-with-your-oidc-jwk-or-proxy-jwt-secret" {
 		problems = append(problems, "PostgREST JWT secret must not use the demo default")
 	}
 	if !c.Auth.DevMode && !hasUsableOIDCProvider(c.Auth.Providers) {

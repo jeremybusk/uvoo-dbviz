@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-APP_NAME="${APP_NAME:-uvoo-dbvizerver}"
+APP_NAME="${APP_NAME:-uvoo-sqvizerver}"
 OUT="${OUT:-$ROOT/bin/$APP_NAME}"
 
 need() {
@@ -25,5 +25,5 @@ npm run build
 
 cd "$ROOT"
 mkdir -p "$(dirname "$OUT")"
-GOCACHE="${GOCACHE:-/tmp/go-build-cache}" CGO_ENABLED="${CGO_ENABLED:-0}" go build -trimpath -ldflags="-s -w" -o "$OUT" ./cmd/uvoo-dbvizerver
+GOCACHE="${GOCACHE:-/tmp/go-build-cache}" CGO_ENABLED="${CGO_ENABLED:-0}" go build -trimpath -ldflags="-s -w" -o "$OUT" ./cmd/uvoo-sqvizerver
 echo "built $OUT"

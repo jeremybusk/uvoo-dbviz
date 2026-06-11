@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"uvoo-dbviz/internal/config"
+	"uvoo-sqviz/internal/config"
 )
 
 func TestVerifyJWTUsesInternalDiscoveryAndPublicIssuer(t *testing.T) {
@@ -24,19 +24,19 @@ func TestVerifyJWTUsesInternalDiscoveryAndPublicIssuer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const publicIssuer = "http://localhost:8089/realms/dbviz"
-	const internalIssuer = "http://keycloak:8080/realms/dbviz"
+	const publicIssuer = "http://localhost:8089/realms/sqviz"
+	const internalIssuer = "http://keycloak:8080/realms/sqviz"
 
 	client := &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.Path {
-		case "/realms/dbviz/.well-known/openid-configuration":
+		case "/realms/sqviz/.well-known/openid-configuration":
 			return testJSONResponse(t, discovery{
 				Issuer:                internalIssuer,
 				AuthorizationEndpoint: internalIssuer + "/protocol/openid-connect/auth",
 				TokenEndpoint:         internalIssuer + "/protocol/openid-connect/token",
 				JWKSURI:               internalIssuer + "/protocol/openid-connect/certs",
 			})
-		case "/realms/dbviz/protocol/openid-connect/certs":
+		case "/realms/sqviz/protocol/openid-connect/certs":
 			return testJSONResponse(t, jwks{Keys: []jwk{rsaTestJWK(key.PublicKey, "test-key")}})
 		default:
 			return &http.Response{
@@ -52,8 +52,8 @@ func TestVerifyJWTUsesInternalDiscoveryAndPublicIssuer(t *testing.T) {
 		Name:         "Keycloak",
 		Issuer:       publicIssuer,
 		DiscoveryURL: internalIssuer,
-		ClientID:     "uvoo-dbviz-web",
-		Audience:     []string{"uvoo-dbviz-web"},
+		ClientID:     "uvoo-sqviz-web",
+		Audience:     []string{"uvoo-sqviz-web"},
 		TenantClaim:  "tenant_slug",
 		EmailClaim:   "email",
 		NameClaim:    "name",
@@ -71,7 +71,7 @@ func TestVerifyJWTUsesInternalDiscoveryAndPublicIssuer(t *testing.T) {
 	token := signedJWT(t, key, map[string]any{
 		"iss":         publicIssuer,
 		"sub":         "alice",
-		"aud":         "uvoo-dbviz-web",
+		"aud":         "uvoo-sqviz-web",
 		"exp":         time.Now().Add(time.Hour).Unix(),
 		"tenant_slug": "dev",
 		"email":       "alice@example.com",

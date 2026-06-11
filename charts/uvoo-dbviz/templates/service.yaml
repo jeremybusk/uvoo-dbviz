@@ -1,9 +1,9 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "uvoo-dbviz.fullname" . }}
+  name: {{ include "uvoo-sqviz.fullname" . }}
   labels:
-    {{- include "uvoo-dbviz.labels" . | nindent 4 }}
+    {{- include "uvoo-sqviz.labels" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
@@ -12,6 +12,6 @@ spec:
       protocol: TCP
       name: http
   selector:
-    app.kubernetes.io/name: {{ include "uvoo-dbviz.name" . }}
+    app.kubernetes.io/name: {{ include "uvoo-sqviz.name" . }}
     app.kubernetes.io/instance: {{ .Release.Name }}
 

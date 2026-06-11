@@ -15,12 +15,12 @@ import (
 	"strings"
 	"time"
 
-	"uvoo-dbviz/internal/alert"
-	"uvoo-dbviz/internal/auth"
-	"uvoo-dbviz/internal/clickhouse"
-	"uvoo-dbviz/internal/config"
-	"uvoo-dbviz/internal/secrets"
-	"uvoo-dbviz/internal/state"
+	"uvoo-sqviz/internal/alert"
+	"uvoo-sqviz/internal/auth"
+	"uvoo-sqviz/internal/clickhouse"
+	"uvoo-sqviz/internal/config"
+	"uvoo-sqviz/internal/secrets"
+	"uvoo-sqviz/internal/state"
 )
 
 type App struct {
@@ -133,7 +133,7 @@ func (a *App) systemReadiness(w http.ResponseWriter, r *http.Request) {
 		}
 		add("Alert worker", "ok", detail)
 	} else {
-		add("Alert worker", "warning", "DBVIZ_ALERTS_ENABLED is false")
+		add("Alert worker", "warning", "SQVIZ_ALERTS_ENABLED is false")
 	}
 	if strings.TrimSpace(a.cfg.Alerts.SMTPHost) != "" && strings.TrimSpace(a.cfg.Alerts.SMTPFrom) != "" {
 		detail := "SMTP host and sender configured"
@@ -147,7 +147,7 @@ func (a *App) systemReadiness(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(a.cfg.Secrets.EncryptionKey) != "" {
 		add("Secrets", "ok", "tenant secret encryption key configured")
 	} else {
-		add("Secrets", "failed", "DBVIZ_SECRETS_ENCRYPTION_KEY is required for stored tenant secrets")
+		add("Secrets", "failed", "SQVIZ_SECRETS_ENCRYPTION_KEY is required for stored tenant secrets")
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"status":     overall,
@@ -2064,7 +2064,7 @@ func (a *App) requireAuth(next http.HandlerFunc) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, err)
 			return
 		}
-		if activeTenant := strings.TrimSpace(r.Header.Get("X-DBViz-Tenant")); activeTenant != "" {
+		if activeTenant := strings.TrimSpace(r.Header.Get("X-SQViz-Tenant")); activeTenant != "" {
 			if user.Headers == nil {
 				user.Headers = map[string]string{}
 			}

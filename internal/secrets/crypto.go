@@ -49,7 +49,7 @@ func DecryptString(ciphertext string, nonce string, keyMaterial string) (string,
 func newAEAD(keyMaterial string) (cipher.AEAD, error) {
 	keyMaterial = strings.TrimSpace(keyMaterial)
 	if keyMaterial == "" {
-		return nil, errors.New("DBVIZ_SECRETS_ENCRYPTION_KEY is required")
+		return nil, errors.New("SQVIZ_SECRETS_ENCRYPTION_KEY is required")
 	}
 	sum := sha256.Sum256([]byte(keyMaterial))
 	block, err := aes.NewCipher(sum[:])

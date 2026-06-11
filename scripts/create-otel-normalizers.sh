@@ -6,8 +6,8 @@ PORT="${CLICKHOUSE_PORT:-9000}"
 USER="${CLICKHOUSE_USER:-default}"
 PASSWORD="${CLICKHOUSE_PASSWORD:-clickhouse}"
 DATABASE="${CLICKHOUSE_DATABASE:-default}"
-TENANT_FALLBACK="${DBVIZ_OTEL_DEFAULT_TENANT:-dev}"
-WAIT_SECONDS="${DBVIZ_OTEL_NORMALIZER_WAIT_SECONDS:-90}"
+TENANT_FALLBACK="${SQVIZ_OTEL_DEFAULT_TENANT:-dev}"
+WAIT_SECONDS="${SQVIZ_OTEL_NORMALIZER_WAIT_SECONDS:-90}"
 
 client() {
     clickhouse-client \
@@ -52,15 +52,15 @@ while :; do
     sleep 3
 done
 
-create_view dbviz_mv_otelcol_logs otelcol_logs "
-CREATE MATERIALIZED VIEW IF NOT EXISTS dbviz_mv_otelcol_logs
+create_view sqviz_mv_otelcol_logs otelcol_logs "
+CREATE MATERIALIZED VIEW IF NOT EXISTS sqviz_mv_otelcol_logs
 TO otel_logs
 AS
 SELECT
     multiIf(
         mapContains(ResourceAttributes, 'tenant_id'), ResourceAttributes['tenant_id'],
         mapContains(ResourceAttributes, 'tenant.id'), ResourceAttributes['tenant.id'],
-        mapContains(ResourceAttributes, 'dbviz.tenant_id'), ResourceAttributes['dbviz.tenant_id'],
+        mapContains(ResourceAttributes, 'sqviz.tenant_id'), ResourceAttributes['sqviz.tenant_id'],
         '$TENANT_FALLBACK'
     ) AS tenant_id,
     toDateTime64(Timestamp, 3, 'UTC') AS timestamp,
@@ -76,15 +76,15 @@ SELECT
     toJSONString(mapConcat(ResourceAttributes, LogAttributes)) AS attributes
 FROM otelcol_logs"
 
-create_view dbviz_mv_otelcol_traces otelcol_traces "
-CREATE MATERIALIZED VIEW IF NOT EXISTS dbviz_mv_otelcol_traces
+create_view sqviz_mv_otelcol_traces otelcol_traces "
+CREATE MATERIALIZED VIEW IF NOT EXISTS sqviz_mv_otelcol_traces
 TO otel_traces
 AS
 SELECT
     multiIf(
         mapContains(ResourceAttributes, 'tenant_id'), ResourceAttributes['tenant_id'],
         mapContains(ResourceAttributes, 'tenant.id'), ResourceAttributes['tenant.id'],
-        mapContains(ResourceAttributes, 'dbviz.tenant_id'), ResourceAttributes['dbviz.tenant_id'],
+        mapContains(ResourceAttributes, 'sqviz.tenant_id'), ResourceAttributes['sqviz.tenant_id'],
         '$TENANT_FALLBACK'
     ) AS tenant_id,
     toDateTime64(Timestamp, 3, 'UTC') AS timestamp,
@@ -98,15 +98,15 @@ SELECT
 FROM otelcol_traces"
 
 for source in otelcol_metrics_gauge otelcol_metrics_sum; do
-    create_view "dbviz_mv_${source}" "$source" "
-CREATE MATERIALIZED VIEW IF NOT EXISTS dbviz_mv_${source}
+    create_view "sqviz_mv_${source}" "$source" "
+CREATE MATERIALIZED VIEW IF NOT EXISTS sqviz_mv_${source}
 TO otel_metrics
 AS
 SELECT
     multiIf(
         mapContains(ResourceAttributes, 'tenant_id'), ResourceAttributes['tenant_id'],
         mapContains(ResourceAttributes, 'tenant.id'), ResourceAttributes['tenant.id'],
-        mapContains(ResourceAttributes, 'dbviz.tenant_id'), ResourceAttributes['dbviz.tenant_id'],
+        mapContains(ResourceAttributes, 'sqviz.tenant_id'), ResourceAttributes['sqviz.tenant_id'],
         '$TENANT_FALLBACK'
     ) AS tenant_id,
     toDateTime64(TimeUnix, 3, 'UTC') AS timestamp,

@@ -1,13 +1,13 @@
 {
-  "realm": "dbviz",
+  "realm": "sqviz",
   "enabled": true,
-  "displayName": "Uvoo DBViz",
+  "displayName": "Uvoo SQViz",
   "registrationAllowed": false,
   "loginWithEmailAllowed": true,
   "clients": [
     {
-      "clientId": "uvoo-dbviz-web",
-      "name": "Uvoo DBViz Web",
+      "clientId": "uvoo-sqviz-web",
+      "name": "Uvoo SQViz Web",
       "enabled": true,
       "publicClient": true,
       "protocol": "openid-connect",

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"uvoo-dbviz/internal/config"
+	"uvoo-sqviz/internal/config"
 )
 
 type Client struct {

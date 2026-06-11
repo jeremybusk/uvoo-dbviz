@@ -49,7 +49,7 @@ func TestPublicConfigIncludesAlertDeliveryReadiness(t *testing.T) {
 			Enabled:  true,
 			SMTPHost: "smtp.example.com",
 			SMTPFrom: "alerts@example.com",
-			SMTPUser: "dbviz",
+			SMTPUser: "sqviz",
 		},
 	}
 

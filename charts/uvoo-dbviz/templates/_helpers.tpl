@@ -1,8 +1,8 @@
-{{- define "uvoo-dbviz.name" -}}
+{{- define "uvoo-sqviz.name" -}}
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 
-{{- define "uvoo-dbviz.fullname" -}}
+{{- define "uvoo-sqviz.fullname" -}}
 {{- if .Values.fullnameOverride -}}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
@@ -15,30 +15,30 @@
 {{- end -}}
 {{- end -}}
 
-{{- define "uvoo-dbviz.labels" -}}
-app.kubernetes.io/name: {{ include "uvoo-dbviz.name" . }}
+{{- define "uvoo-sqviz.labels" -}}
+app.kubernetes.io/name: {{ include "uvoo-sqviz.name" . }}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{- define "uvoo-dbviz.serviceAccountName" -}}
+{{- define "uvoo-sqviz.serviceAccountName" -}}
 {{- if .Values.serviceAccount.create -}}
-{{- default (include "uvoo-dbviz.fullname" .) .Values.serviceAccount.name -}}
+{{- default (include "uvoo-sqviz.fullname" .) .Values.serviceAccount.name -}}
 {{- else -}}
 {{- default "default" .Values.serviceAccount.name -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "uvoo-dbviz.clickhouseURL" -}}
+{{- define "uvoo-sqviz.clickhouseURL" -}}
 {{- if .Values.config.clickhouseUrl -}}
 {{- .Values.config.clickhouseUrl -}}
 {{- else -}}
-{{- printf "http://%s-clickhouse:8123" (include "uvoo-dbviz.fullname" .) -}}
+{{- printf "http://%s-clickhouse:8123" (include "uvoo-sqviz.fullname" .) -}}
 {{- end -}}
 {{- end -}}
 
-{{- define "uvoo-dbviz.validateValues" -}}
+{{- define "uvoo-sqviz.validateValues" -}}
 {{- if not .Values.config.allowInsecureDefaults -}}
 {{- if .Values.config.authDevMode -}}
 {{- fail "config.authDevMode enables header-based development authentication; set config.authDevMode=false for production or config.allowInsecureDefaults=true for a demo install" -}}

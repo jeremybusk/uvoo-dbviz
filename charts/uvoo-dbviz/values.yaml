@@ -1,7 +1,7 @@
 replicaCount: 1
 
 image:
-  repository: ghcr.io/jeremybusk/uvoo-dbviz
+  repository: ghcr.io/jeremybusk/uvoo-sqviz
   pullPolicy: Always
   tag: latest
 
@@ -82,7 +82,7 @@ ingress:
   enabled: false
   className: nginx
   annotations: {}
-  host: dbviz.example.com
+  host: sqviz.example.com
   path: /
   pathType: Prefix
   tls:

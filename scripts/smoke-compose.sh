@@ -1,22 +1,22 @@
 #!/bin/sh
 set -eu
 
-COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-uvoo_dbviz_smoke}"
+COMPOSE_PROJECT_NAME="${COMPOSE_PROJECT_NAME:-uvoo_sqviz_smoke}"
 export COMPOSE_PROJECT_NAME
-export DBVIZ_BIND_ADDR="${DBVIZ_BIND_ADDR:-127.0.0.1}"
-export DBVIZ_PUBLIC_HOST="${DBVIZ_PUBLIC_HOST:-127.0.0.1}"
-export DBVIZ_HTTP_PORT="${DBVIZ_HTTP_PORT:-18080}"
-export DBVIZ_CLICKHOUSE_HTTP_PORT="${DBVIZ_CLICKHOUSE_HTTP_PORT:-18123}"
-export DBVIZ_CLICKHOUSE_NATIVE_PORT="${DBVIZ_CLICKHOUSE_NATIVE_PORT:-19000}"
-export DBVIZ_POSTGRES_PORT="${DBVIZ_POSTGRES_PORT:-15432}"
-export DBVIZ_POSTGREST_PORT="${DBVIZ_POSTGREST_PORT:-13000}"
-export DBVIZ_KEYCLOAK_PORT="${DBVIZ_KEYCLOAK_PORT:-18089}"
-export DBVIZ_OTEL_GRPC_PORT="${DBVIZ_OTEL_GRPC_PORT:-14317}"
-export DBVIZ_OTEL_HTTP_PORT="${DBVIZ_OTEL_HTTP_PORT:-14318}"
-if [ -n "${DBVIZ_SMOKE_BASE_URL:-}" ]; then
-    BASE_URL="$DBVIZ_SMOKE_BASE_URL"
+export SQVIZ_BIND_ADDR="${SQVIZ_BIND_ADDR:-127.0.0.1}"
+export SQVIZ_PUBLIC_HOST="${SQVIZ_PUBLIC_HOST:-127.0.0.1}"
+export SQVIZ_HTTP_PORT="${SQVIZ_HTTP_PORT:-18080}"
+export SQVIZ_CLICKHOUSE_HTTP_PORT="${SQVIZ_CLICKHOUSE_HTTP_PORT:-18123}"
+export SQVIZ_CLICKHOUSE_NATIVE_PORT="${SQVIZ_CLICKHOUSE_NATIVE_PORT:-19000}"
+export SQVIZ_POSTGRES_PORT="${SQVIZ_POSTGRES_PORT:-15432}"
+export SQVIZ_POSTGREST_PORT="${SQVIZ_POSTGREST_PORT:-13000}"
+export SQVIZ_KEYCLOAK_PORT="${SQVIZ_KEYCLOAK_PORT:-18089}"
+export SQVIZ_OTEL_GRPC_PORT="${SQVIZ_OTEL_GRPC_PORT:-14317}"
+export SQVIZ_OTEL_HTTP_PORT="${SQVIZ_OTEL_HTTP_PORT:-14318}"
+if [ -n "${SQVIZ_SMOKE_BASE_URL:-}" ]; then
+    BASE_URL="$SQVIZ_SMOKE_BASE_URL"
 else
-    BASE_URL="http://${DBVIZ_BIND_ADDR}:${DBVIZ_HTTP_PORT}"
+    BASE_URL="http://${SQVIZ_BIND_ADDR}:${SQVIZ_HTTP_PORT}"
 fi
 
 cleanup() {
@@ -45,8 +45,8 @@ docker compose up -d --build --remove-orphans
 deadline=$(( $(date +%s) + 180 ))
 until curl -fsS "$BASE_URL/healthz" >/dev/null; do
     if [ "$(date +%s)" -ge "$deadline" ]; then
-        docker compose logs --no-color uvoo-dbviz >&2 || true
-        echo "uvoo-dbviz did not become healthy" >&2
+        docker compose logs --no-color uvoo-sqviz >&2 || true
+        echo "uvoo-sqviz did not become healthy" >&2
         exit 1
     fi
     sleep 3

@@ -27,7 +27,7 @@ jobs:
       - name: Frontend build
         run: make web
       - name: Helm lint
-        run: helm lint charts/uvoo-dbviz
+        run: helm lint charts/uvoo-sqviz
       - name: License check
         run: make license-check
 

@@ -67,7 +67,7 @@ const { Content, Sider } = Layout;
 const Chart = React.lazy(() => import('./components/Chart').then((module) => ({ default: module.Chart })));
 const primaryColor = '#2563eb';
 const secondaryColor = '#64748b';
-const themeStorageKey = 'uvoo-dbviz-theme';
+const themeStorageKey = 'uvoo-sqviz-theme';
 
 function App() {
   const [messageApi, messageContext] = message.useMessage();
@@ -154,7 +154,7 @@ function App() {
   const [contactRestApiKeyValue, setContactRestApiKeyValue] = useState('');
   const [contactPagerDutySeverity, setContactPagerDutySeverity] = useState('error');
   const [contactPagerDutySourceField, setContactPagerDutySourceField] = useState('service_name');
-  const [contactPagerDutyComponent, setContactPagerDutyComponent] = useState('uvoo-dbviz');
+  const [contactPagerDutyComponent, setContactPagerDutyComponent] = useState('uvoo-sqviz');
   const [contactPagerDutyGroup, setContactPagerDutyGroup] = useState('observability');
   const [contactPagerDutyClass, setContactPagerDutyClass] = useState('alert');
   const [contactPagerDutyServiceID, setContactPagerDutyServiceID] = useState('');
@@ -1026,7 +1026,7 @@ function App() {
     setContactRestApiKeyValue('');
     setContactPagerDutySeverity('error');
     setContactPagerDutySourceField('service_name');
-    setContactPagerDutyComponent('uvoo-dbviz');
+    setContactPagerDutyComponent('uvoo-sqviz');
     setContactPagerDutyGroup('observability');
     setContactPagerDutyClass('alert');
     setContactPagerDutyServiceID('');
@@ -1069,7 +1069,7 @@ function App() {
     setContactRestApiKeyValue('');
     setContactPagerDutySeverity(String(contact.config.severity || 'error'));
     setContactPagerDutySourceField(String(contact.config.sourceField || 'service_name'));
-    setContactPagerDutyComponent(String(contact.config.component || 'uvoo-dbviz'));
+    setContactPagerDutyComponent(String(contact.config.component || 'uvoo-sqviz'));
     setContactPagerDutyGroup(String(contact.config.group || 'observability'));
     setContactPagerDutyClass(String(contact.config.class || 'alert'));
     setContactPagerDutyServiceID(String(contact.config.serviceId || ''));
@@ -1441,7 +1441,7 @@ function App() {
               <Flex align="center" gap={12}>
                 <div className="mark">U</div>
                 <div className="sidebar-title">
-                  <Typography.Title level={1}>Uvoo DBViz</Typography.Title>
+                  <Typography.Title level={1}>Uvoo SQViz</Typography.Title>
                   <Typography.Text type="secondary">Tenant-aware ClickHouse analytics</Typography.Text>
                 </div>
                 <Flex gap={6} className="sidebar-tools">

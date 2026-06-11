@@ -2,14 +2,14 @@ CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'dbviz_web') THEN
-        CREATE ROLE dbviz_web NOLOGIN;
+    IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'sqviz_web') THEN
+        CREATE ROLE sqviz_web NOLOGIN;
     END IF;
 END $$;
 
 DO $$
 BEGIN
-    EXECUTE format('GRANT dbviz_web TO %I', current_user);
+    EXECUTE format('GRANT sqviz_web TO %I', current_user);
 END $$;
 
 CREATE TABLE IF NOT EXISTS tenants (
@@ -228,8 +228,8 @@ CREATE INDEX IF NOT EXISTS alert_notifications_tenant_created_idx ON alert_notif
 CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS audit_events_tenant_created_idx ON audit_events(tenant_id, created_at DESC);
 
-GRANT USAGE ON SCHEMA public TO dbviz_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, tenant_secrets, alert_rules, alert_incidents, alert_notifications, query_history, audit_events TO dbviz_web;
+GRANT USAGE ON SCHEMA public TO sqviz_web;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, tenant_secrets, alert_rules, alert_incidents, alert_notifications, query_history, audit_events TO sqviz_web;
 
 INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
@@ -290,15 +290,15 @@ BEGIN
     request_headers := COALESCE(NULLIF(current_setting('request.headers', true), '')::jsonb, '{}'::jsonb);
     tenant_id_claim := NULLIF(current_setting('request.jwt.claim.tenant_id', true), '');
     tenant_slug_claim := COALESCE(
-        NULLIF(request_headers->>'x-dbviz-tenant', ''),
+        NULLIF(request_headers->>'x-sqviz-tenant', ''),
         NULLIF(request_headers->>'x-dev-tenant', ''),
         NULLIF(current_setting('request.jwt.claim.tenant_key', true), ''),
         NULLIF(current_setting('request.jwt.claim.tenant_slug', true), ''),
         NULLIF(current_setting('request.jwt.claim.hd', true), ''),
         NULLIF(current_setting('request.jwt.claim.tid', true), '')
     );
-    requested_subject := NULLIF(request_headers->>'x-dbviz-subject', '');
-    requested_provider := NULLIF(request_headers->>'x-dbviz-provider', '');
+    requested_subject := NULLIF(request_headers->>'x-sqviz-subject', '');
+    requested_provider := NULLIF(request_headers->>'x-sqviz-provider', '');
 
     IF tenant_slug_claim ~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$' THEN
         resolved_tenant_id := tenant_slug_claim::uuid;
@@ -537,12 +537,12 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_data_sources() TO dbviz_web;
-GRANT EXECUTE ON FUNCTION get_data_source(uuid) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION save_data_source(uuid, text, text, jsonb) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION delete_data_source(uuid) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION list_query_history(integer) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION record_query_history(text, text, text, jsonb, integer, integer, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_data_sources() TO sqviz_web;
+GRANT EXECUTE ON FUNCTION get_data_source(uuid) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION save_data_source(uuid, text, text, jsonb) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION delete_data_source(uuid) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION list_query_history(integer) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION record_query_history(text, text, text, jsonb, integer, integer, text, text) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION list_audit_events(event_limit integer DEFAULT 100)
 RETURNS TABLE(id uuid, actor_email text, action text, target_type text, target_id text, payload jsonb, created_at timestamptz)
@@ -599,8 +599,8 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_audit_events(integer) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION record_audit_event(text, text, text, text, text, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_audit_events(integer) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION record_audit_event(text, text, text, text, text, text, jsonb) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION list_dashboards()
 RETURNS TABLE(id uuid, name text, layout jsonb, updated_at timestamptz, created_at timestamptz)
@@ -661,9 +661,9 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_dashboards() TO dbviz_web;
-GRANT EXECUTE ON FUNCTION save_dashboard(uuid, text, jsonb) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION delete_dashboard(uuid) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_dashboards() TO sqviz_web;
+GRANT EXECUTE ON FUNCTION save_dashboard(uuid, text, jsonb) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION delete_dashboard(uuid) TO sqviz_web;
 NOTIFY pgrst, 'reload schema';
 
 CREATE OR REPLACE FUNCTION list_saved_queries()
@@ -694,8 +694,8 @@ BEGIN
     SELECT u.id INTO resolved_user_id
     FROM users u
     WHERE u.tenant_id = request_tenant_id()
-      AND u.subject = request_headers->>'x-dbviz-subject'
-      AND u.provider = request_headers->>'x-dbviz-provider'
+      AND u.subject = request_headers->>'x-sqviz-subject'
+      AND u.provider = request_headers->>'x-sqviz-provider'
     LIMIT 1;
 
     IF saved_query_id IS NULL THEN
@@ -741,9 +741,9 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_saved_queries() TO dbviz_web;
-GRANT EXECUTE ON FUNCTION save_saved_query(uuid, text, text, jsonb) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION delete_saved_query(uuid) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_saved_queries() TO sqviz_web;
+GRANT EXECUTE ON FUNCTION save_saved_query(uuid, text, text, jsonb) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION delete_saved_query(uuid) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION list_tenant_secrets()
 RETURNS TABLE(id uuid, name text, description text, key_version text, created_at timestamptz, updated_at timestamptz)
@@ -870,11 +870,11 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_tenant_secrets() TO dbviz_web;
-GRANT EXECUTE ON FUNCTION get_tenant_secret(text) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION list_tenant_secret_usage(text) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION save_tenant_secret(uuid, text, text, text, text, text) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION delete_tenant_secret(uuid) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_tenant_secrets() TO sqviz_web;
+GRANT EXECUTE ON FUNCTION get_tenant_secret(text) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION list_tenant_secret_usage(text) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION save_tenant_secret(uuid, text, text, text, text, text) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION delete_tenant_secret(uuid) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION list_contact_endpoints()
 RETURNS TABLE(id uuid, name text, kind text, target text, config jsonb, created_at timestamptz)
@@ -1312,17 +1312,17 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_contact_endpoints() TO dbviz_web;
-GRANT EXECUTE ON FUNCTION save_contact_endpoint(uuid, text, text, text, jsonb) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION delete_contact_endpoint(uuid) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION list_alert_rules() TO dbviz_web;
-GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boolean, uuid) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION delete_alert_rule(uuid) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION list_alert_notifications(integer) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION record_contact_test_notification(text, text, text, integer, text, jsonb) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION acknowledge_alert_incident(text, text, uuid) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION resolve_alert_incident(text, text, uuid) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_contact_endpoints() TO sqviz_web;
+GRANT EXECUTE ON FUNCTION save_contact_endpoint(uuid, text, text, text, jsonb) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION delete_contact_endpoint(uuid) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION list_alert_rules() TO sqviz_web;
+GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boolean, uuid) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION delete_alert_rule(uuid) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION list_alert_notifications(integer) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION record_contact_test_notification(text, text, text, integer, text, jsonb) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION acknowledge_alert_incident(text, text, uuid) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION resolve_alert_incident(text, text, uuid) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION list_enabled_alert_rules_for_worker(worker_key text)
 RETURNS TABLE(
@@ -1366,7 +1366,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_enabled_alert_rules_for_worker(text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_enabled_alert_rules_for_worker(text) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION get_tenant_secret_for_worker(worker_key text, tenant_slug text, secret_name text)
 RETURNS TABLE(name text, ciphertext text, nonce text, key_version text)
@@ -1398,7 +1398,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION get_tenant_secret_for_worker(text, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION get_tenant_secret_for_worker(text, text, text) TO sqviz_web;
 
 DROP FUNCTION IF EXISTS record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb);
 DROP FUNCTION IF EXISTS record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer);
@@ -1560,7 +1560,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION update_alert_incident_sync_for_worker(
     worker_key text,
@@ -1647,7 +1647,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION update_alert_incident_sync_for_worker(text, text, uuid, text, text, text, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION update_alert_incident_sync_for_worker(text, text, uuid, text, text, text, text, text) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION list_pagerduty_synced_incidents_for_worker(worker_key text)
 RETURNS TABLE(
@@ -1711,7 +1711,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents_for_worker(text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents_for_worker(text) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION list_pagerduty_synced_incidents()
 RETURNS TABLE(
@@ -1752,7 +1752,7 @@ AS $$
     LIMIT 100;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents() TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION get_pagerduty_incident_contact(incident_id uuid)
 RETURNS TABLE(
@@ -1790,7 +1790,7 @@ AS $$
     LIMIT 1;
 $$;
 
-GRANT EXECUTE ON FUNCTION get_pagerduty_incident_contact(uuid) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION get_pagerduty_incident_contact(uuid) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION reconcile_pagerduty_incident_for_worker(
     worker_key text,
@@ -1888,7 +1888,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION reconcile_pagerduty_incident_for_worker(text, text, uuid, text, text, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION reconcile_pagerduty_incident_for_worker(text, text, uuid, text, text, text, text) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION record_alert_notification_for_worker(
     worker_key text,
@@ -1981,7 +1981,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION record_alert_notification_for_worker(text, uuid, text, uuid, text, text, text, integer, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION record_alert_notification_for_worker(text, uuid, text, uuid, text, text, text, integer, text, jsonb) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION sync_current_user(user_subject text, user_email text, user_name text, user_provider text, tenant_slug text, tenant_name text)
 RETURNS TABLE(id uuid, tenant_id uuid, subject text, email text, display_name text, provider text, role text)
@@ -2030,7 +2030,7 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION sync_current_user(text, text, text, text, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION sync_current_user(text, text, text, text, text, text) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION current_user_profile(user_subject text, user_provider text)
 RETURNS TABLE(id uuid, tenant_id uuid, tenant_slug text, subject text, email text, display_name text, provider text, role text)
@@ -2093,10 +2093,10 @@ AS $$
     );
 $$;
 
-GRANT EXECUTE ON FUNCTION current_user_profile(text, text) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION current_user_preferences(text, text) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION save_current_user_preferences(text, text, jsonb) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION current_user_has_role(text, text, text[]) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION current_user_profile(text, text) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION current_user_preferences(text, text) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION save_current_user_preferences(text, text, jsonb) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION current_user_has_role(text, text, text[]) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION list_user_memberships(user_subject text, user_provider text)
 RETURNS TABLE(tenant_id uuid, tenant_slug text, tenant_name text, role text)
@@ -2251,10 +2251,10 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_user_memberships(text, text) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION list_tenant_members(text, text) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION update_tenant_member_role(text, text, uuid, text) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION deactivate_tenant_member(text, text, uuid) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_user_memberships(text, text) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION list_tenant_members(text, text) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION update_tenant_member_role(text, text, uuid, text) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION deactivate_tenant_member(text, text, uuid) TO sqviz_web;
 
 CREATE OR REPLACE FUNCTION list_tenant_invites()
 RETURNS TABLE(id uuid, email text, role text, accepted_at timestamptz, expires_at timestamptz, created_at timestamptz)
@@ -2375,8 +2375,8 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION list_tenant_invites() TO dbviz_web;
-GRANT EXECUTE ON FUNCTION create_tenant_invite(text, text, text, text) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION delete_tenant_invite(text, text, uuid) TO dbviz_web;
-GRANT EXECUTE ON FUNCTION accept_tenant_invite(text, text, text, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_tenant_invites() TO sqviz_web;
+GRANT EXECUTE ON FUNCTION create_tenant_invite(text, text, text, text) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION delete_tenant_invite(text, text, uuid) TO sqviz_web;
+GRANT EXECUTE ON FUNCTION accept_tenant_invite(text, text, text, text, text) TO sqviz_web;
 NOTIFY pgrst, 'reload schema';
