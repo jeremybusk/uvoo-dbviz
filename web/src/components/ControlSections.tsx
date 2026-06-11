@@ -108,6 +108,8 @@ export function AccessSection(props: {
             <code>{props.user.subject || '-'}</code>
             <span>Tenant</span>
             <code>{tenantValue || '-'}</code>
+            <span>Build</span>
+            <code>{buildLabel(props.config)}</code>
           </div>
           <Select value={tenantValue} onChange={props.onSelectTenant}>
             {props.memberships.length === 0 && <Select.Option value={tenantValue}>{tenantValue}</Select.Option>}
@@ -168,6 +170,10 @@ export function AccessSection(props: {
             Use development login
           </Button>
         )}
+        <div className="identity-grid">
+          <span>Build</span>
+          <code>{buildLabel(props.config)}</code>
+        </div>
       </Space>
     </Section>
   );
@@ -339,6 +345,13 @@ function orderedClaimEntries(claims: JwtClaims): [string, unknown][] {
     if (leftIndex !== -1 || rightIndex !== -1) return (leftIndex === -1 ? preferred.length : leftIndex) - (rightIndex === -1 ? preferred.length : rightIndex);
     return left.localeCompare(right);
   });
+}
+
+function buildLabel(config: PublicConfig | null): string {
+  if (!config?.build) return '-';
+  const version = config.build.version || 'dev';
+  const commit = config.build.commit && config.build.commit !== 'unknown' ? config.build.commit.slice(0, 12) : '';
+  return commit ? `${version} (${commit})` : version;
 }
 
 function formatClaimValue(key: string, value: unknown): string {

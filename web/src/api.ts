@@ -28,6 +28,11 @@ export type PublicConfig = {
   providers: Provider[];
   datasets: Dataset[];
   devMode: boolean;
+  build: {
+    version: string;
+    commit: string;
+    date: string;
+  };
   alertDelivery: {
     alertsEnabled: boolean;
     smtpConfigured: boolean;

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"uvoo-sqviz/internal/build"
 )
 
 type Config struct {
@@ -20,12 +22,19 @@ type Config struct {
 	Alerts     AlertConfig
 	Secrets    SecretConfig
 	Runtime    RuntimeConfig
+	Build      BuildConfig
 }
 
 type RuntimeConfig struct {
 	Environment           string
 	RequireProductionSafe bool
 	AllowInsecureDefaults bool
+}
+
+type BuildConfig struct {
+	Version string `json:"version"`
+	Commit  string `json:"commit"`
+	Date    string `json:"date"`
 }
 
 type AuthConfig struct {
@@ -116,6 +125,7 @@ type PublicConfig struct {
 	Datasets      []Dataset           `json:"datasets"`
 	DevMode       bool                `json:"devMode"`
 	AlertDelivery PublicAlertDelivery `json:"alertDelivery"`
+	Build         BuildConfig         `json:"build"`
 }
 
 type PublicAlertDelivery struct {
@@ -133,6 +143,11 @@ func Load() Config {
 			Environment:           strings.ToLower(env("SQVIZ_ENV", "development")),
 			RequireProductionSafe: envBool("SQVIZ_REQUIRE_PRODUCTION_SAFE", false),
 			AllowInsecureDefaults: envBool("SQVIZ_ALLOW_INSECURE_DEFAULTS", false),
+		},
+		Build: BuildConfig{
+			Version: env("SQVIZ_BUILD_VERSION", build.Version),
+			Commit:  env("SQVIZ_BUILD_COMMIT", build.Commit),
+			Date:    env("SQVIZ_BUILD_DATE", build.Date),
 		},
 		Auth: AuthConfig{
 			DevMode: envBool("SQVIZ_AUTH_DEV_MODE", false),
@@ -372,6 +387,7 @@ func (c Config) Public() PublicConfig {
 		Providers: providers,
 		Datasets:  datasets,
 		DevMode:   c.Auth.DevMode,
+		Build:     c.Build,
 		AlertDelivery: PublicAlertDelivery{
 			AlertsEnabled:  c.Alerts.Enabled,
 			SMTPConfigured: strings.TrimSpace(c.Alerts.SMTPHost) != "" && strings.TrimSpace(c.Alerts.SMTPFrom) != "",
