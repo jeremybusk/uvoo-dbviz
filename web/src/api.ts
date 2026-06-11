@@ -28,6 +28,11 @@ export type PublicConfig = {
   providers: Provider[];
   datasets: Dataset[];
   devMode: boolean;
+  alertDelivery: {
+    alertsEnabled: boolean;
+    smtpConfigured: boolean;
+    smtpHasAuth: boolean;
+  };
 };
 
 export type Principal = {
@@ -47,6 +52,19 @@ export type UserProfile = {
   display_name: string;
   provider: string;
   role: 'owner' | 'admin' | 'editor' | 'viewer';
+};
+
+export type UserPreferences = {
+  themeMode?: 'light' | 'dark';
+  refreshSeconds?: number;
+  relativeRange?: {
+    value: number;
+    unit: 'minutes' | 'hours' | 'days' | 'weeks' | 'months' | 'years';
+  };
+  eventLimit?: number;
+  dataset?: string;
+  sourceId?: string;
+  visualization?: 'line' | 'area' | 'bar';
 };
 
 export type TenantMembership = {
@@ -155,13 +173,50 @@ export type ContactEndpoint = {
   created_at: string;
 };
 
+export type TenantSecret = {
+  id: string;
+  name: string;
+  description: string;
+  key_version: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ContactTestResult = {
+  status: 'success' | 'failed' | 'skipped';
+  statusCode: number;
+  error: string;
+  payload: Record<string, unknown>;
+};
+
+export type AlertPreviewResult = {
+  value: number;
+  operator: string;
+  threshold: number;
+  firing: boolean;
+  match_count: number;
+  condition: AlertRule['condition'];
+  matches: Array<{
+    Fingerprint?: string;
+    fingerprint?: string;
+    Value?: number;
+    value?: number;
+    Payload?: Record<string, unknown>;
+    payload?: Record<string, unknown>;
+  }>;
+  rows: Record<string, unknown>[];
+};
+
 export type AlertRule = {
   id: string;
   name: string;
   query: unknown;
   condition: {
+    type?: 'numeric_threshold' | 'row_count' | 'any_rows' | 'sql_result' | 'no_data' | 'text_match';
     operator: string;
+    field?: string;
     threshold: number;
+    value?: string;
     for?: string;
   };
   interval_seconds: number;
@@ -173,8 +228,10 @@ export type AlertRule = {
 export type AlertIncident = {
   id: string;
   alert_rule_id: string | null;
+  rule_name: string;
+  contact_name: string;
   fingerprint: string;
-  status: 'firing' | 'resolved' | 'notify_failed';
+  status: 'firing' | 'acknowledged' | 'resolved' | 'notify_failed';
   value: number;
   payload: Record<string, unknown>;
   occurrence_count: number;
@@ -182,7 +239,27 @@ export type AlertIncident = {
   last_seen_at: string;
   last_notified_at: string | null;
   resolved_at: string | null;
+  external_provider: string;
+  external_incident_id: string;
+  external_incident_url: string;
+  external_sync_status: string;
+  external_sync_error: string;
+  external_last_synced_at: string | null;
   created_at: string;
+};
+
+export type PagerDutySyncResult = {
+  count: number;
+  message: string;
+  results: Array<{
+    IncidentID: string;
+    ExternalIncidentID: string;
+    RemoteStatus: string;
+    Status: string;
+    StatusCode: number;
+    Error: string;
+    ExternalURL: string;
+  }>;
 };
 
 export type AlertNotification = {
@@ -196,6 +273,16 @@ export type AlertNotification = {
   error: string;
   payload: Record<string, unknown>;
   created_at: string;
+};
+
+export type SystemReadiness = {
+  status: 'ok' | 'warning' | 'failed';
+  checkedAt: string;
+  components: Array<{
+    name: string;
+    status: 'ok' | 'warning' | 'failed';
+    detail: string;
+  }>;
 };
 
 export type TenantInvite = {

@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +15,11 @@ import (
 	"strings"
 	"time"
 
+	"uvoo-dbviz/internal/alert"
 	"uvoo-dbviz/internal/auth"
 	"uvoo-dbviz/internal/clickhouse"
 	"uvoo-dbviz/internal/config"
+	"uvoo-dbviz/internal/secrets"
 	"uvoo-dbviz/internal/state"
 )
 
@@ -43,7 +46,10 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/me", a.requireAuth(a.me))
 	a.mux.HandleFunc("POST /api/session/sync", a.requireAuth(a.syncSession))
 	a.mux.HandleFunc("GET /api/session/profile", a.requireAuth(a.sessionProfile))
+	a.mux.HandleFunc("GET /api/session/preferences", a.requireAuth(a.sessionPreferences))
+	a.mux.HandleFunc("POST /api/session/preferences", a.requireAuth(a.saveSessionPreferences))
 	a.mux.HandleFunc("GET /api/session/memberships", a.requireAuth(a.listMemberships))
+	a.mux.HandleFunc("GET /api/system/readiness", a.requireAuth(a.systemReadiness))
 	a.mux.HandleFunc("POST /api/query", a.requireAuth(a.query))
 	a.mux.HandleFunc("POST /api/events", a.requireAuth(a.events))
 	a.mux.HandleFunc("POST /api/sql", a.requireAuth(a.customSQL))
@@ -66,9 +72,15 @@ func (a *App) routes() {
 	a.mux.HandleFunc("GET /api/alerts/contacts", a.requireAuth(a.listContactEndpoints))
 	a.mux.HandleFunc("POST /api/alerts/contacts", a.requireAuth(a.saveContactEndpoint))
 	a.mux.HandleFunc("POST /api/alerts/contacts/delete", a.requireAuth(a.deleteContactEndpoint))
+	a.mux.HandleFunc("POST /api/alerts/contacts/test", a.requireAuth(a.testContactEndpoint))
+	a.mux.HandleFunc("GET /api/secrets", a.requireAuth(a.listTenantSecrets))
+	a.mux.HandleFunc("POST /api/secrets", a.requireAuth(a.saveTenantSecret))
+	a.mux.HandleFunc("POST /api/secrets/delete", a.requireAuth(a.deleteTenantSecret))
 	a.mux.HandleFunc("GET /api/alerts/incidents", a.requireAuth(a.listAlertIncidents))
 	a.mux.HandleFunc("GET /api/alerts/notifications", a.requireAuth(a.listAlertNotifications))
+	a.mux.HandleFunc("POST /api/alerts/incidents/acknowledge", a.requireAuth(a.acknowledgeAlertIncident))
 	a.mux.HandleFunc("POST /api/alerts/incidents/resolve", a.requireAuth(a.resolveAlertIncident))
+	a.mux.HandleFunc("POST /api/alerts/pagerduty/sync", a.requireAuth(a.syncPagerDutyIncidents))
 	a.mux.HandleFunc("GET /api/members", a.requireAuth(a.listMembers))
 	a.mux.HandleFunc("POST /api/members/role", a.requireAuth(a.updateMemberRole))
 	a.mux.HandleFunc("POST /api/members/deactivate", a.requireAuth(a.deactivateMember))
@@ -85,6 +97,63 @@ func (a *App) health(w http.ResponseWriter, _ *http.Request) {
 
 func (a *App) publicConfig(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, a.cfg.Public())
+}
+
+func (a *App) systemReadiness(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+	components := []map[string]any{}
+	overall := "ok"
+	add := func(name string, status string, detail string) {
+		if status == "failed" {
+			overall = "failed"
+		} else if status == "warning" && overall == "ok" {
+			overall = "warning"
+		}
+		components = append(components, map[string]any{
+			"name":   name,
+			"status": status,
+			"detail": detail,
+		})
+	}
+	if err := a.ch.Ping(ctx); err != nil {
+		add("ClickHouse", "failed", err.Error())
+	} else {
+		add("ClickHouse", "ok", "query endpoint reachable")
+	}
+	if err := a.state.Ping(ctx); err != nil {
+		add("Postgres/PostgREST", "failed", err.Error())
+	} else {
+		add("Postgres/PostgREST", "ok", "state API reachable")
+	}
+	if a.cfg.Alerts.Enabled {
+		detail := "alert worker enabled"
+		if a.cfg.Alerts.LoadPersisted {
+			detail += ", persisted rules enabled"
+		}
+		add("Alert worker", "ok", detail)
+	} else {
+		add("Alert worker", "warning", "DBVIZ_ALERTS_ENABLED is false")
+	}
+	if strings.TrimSpace(a.cfg.Alerts.SMTPHost) != "" && strings.TrimSpace(a.cfg.Alerts.SMTPFrom) != "" {
+		detail := "SMTP host and sender configured"
+		if strings.TrimSpace(a.cfg.Alerts.SMTPUser) != "" {
+			detail += ", auth configured"
+		}
+		add("SMTP", "ok", detail)
+	} else {
+		add("SMTP", "warning", "email contacts will be skipped until SMTP host and sender are set")
+	}
+	if strings.TrimSpace(a.cfg.Secrets.EncryptionKey) != "" {
+		add("Secrets", "ok", "tenant secret encryption key configured")
+	} else {
+		add("Secrets", "failed", "DBVIZ_SECRETS_ENCRYPTION_KEY is required for stored tenant secrets")
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     overall,
+		"checkedAt":  time.Now().UTC().Format(time.RFC3339),
+		"components": components,
+	})
 }
 
 func (a *App) oidcDiscovery(w http.ResponseWriter, r *http.Request) {
@@ -143,6 +212,93 @@ func (a *App) sessionProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, profile)
+}
+
+func (a *App) sessionPreferences(w http.ResponseWriter, r *http.Request) {
+	user := statePrincipal(r)
+	var preferences map[string]any
+	if err := a.state.RPC(r.Context(), "current_user_preferences", map[string]any{
+		"user_subject":  user.Subject,
+		"user_provider": user.Provider,
+	}, user, r.Header.Get("Authorization"), &preferences); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if preferences == nil {
+		preferences = map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, preferences)
+}
+
+func (a *App) saveSessionPreferences(w http.ResponseWriter, r *http.Request) {
+	var req map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	user := statePrincipal(r)
+	var preferences map[string]any
+	if err := a.state.RPC(r.Context(), "save_current_user_preferences", map[string]any{
+		"user_subject":     user.Subject,
+		"user_provider":    user.Provider,
+		"user_preferences": sanitizePreferences(req),
+	}, user, r.Header.Get("Authorization"), &preferences); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if preferences == nil {
+		preferences = map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, preferences)
+}
+
+func sanitizePreferences(input map[string]any) map[string]any {
+	out := map[string]any{}
+	if value, _ := input["themeMode"].(string); value == "light" || value == "dark" {
+		out["themeMode"] = value
+	}
+	if value, ok := numericValue(input["refreshSeconds"]); ok {
+		seconds := int(value)
+		switch seconds {
+		case 0, 10, 30, 60, 300:
+			out["refreshSeconds"] = seconds
+		}
+	}
+	if value, ok := numericValue(input["eventLimit"]); ok {
+		limit := int(value)
+		if limit >= 10 && limit <= 1000 {
+			out["eventLimit"] = limit
+		}
+	}
+	if value, _ := input["dataset"].(string); value != "" && len(value) <= 80 {
+		out["dataset"] = strings.TrimSpace(value)
+	}
+	if value, _ := input["sourceId"].(string); len(value) <= 80 {
+		out["sourceId"] = strings.TrimSpace(value)
+	}
+	if value, _ := input["visualization"].(string); value == "line" || value == "area" || value == "bar" {
+		out["visualization"] = value
+	}
+	if rawRange, ok := input["relativeRange"].(map[string]any); ok {
+		if value, valueOK := numericValue(rawRange["value"]); valueOK {
+			if unit, unitOK := rawRange["unit"].(string); unitOK && validPreferenceRangeUnit(unit) {
+				rangeValue := int(value)
+				if rangeValue >= 1 && rangeValue <= 999 {
+					out["relativeRange"] = map[string]any{"value": rangeValue, "unit": unit}
+				}
+			}
+		}
+	}
+	return out
+}
+
+func validPreferenceRangeUnit(unit string) bool {
+	switch unit {
+	case "minutes", "hours", "days", "weeks", "months", "years":
+		return true
+	default:
+		return false
+	}
 }
 
 func (a *App) listMemberships(w http.ResponseWriter, r *http.Request) {
@@ -587,19 +743,12 @@ func validateDataSourceURL(raw string) error {
 }
 
 func resolveSecretRef(ref string) (string, bool) {
-	name := secretEnvName(ref)
+	name := alert.SecretEnvName(ref)
 	value, ok := os.LookupEnv(name)
 	if ok {
 		return value, true
 	}
 	return "", false
-}
-
-var secretRefCleaner = regexp.MustCompile(`[^A-Za-z0-9]+`)
-
-func secretEnvName(ref string) string {
-	clean := strings.Trim(secretRefCleaner.ReplaceAllString(strings.ToUpper(strings.TrimSpace(ref)), "_"), "_")
-	return "DBVIZ_SECRET_" + clean
 }
 
 func (a *App) listDashboards(w http.ResponseWriter, r *http.Request) {
@@ -738,13 +887,12 @@ func (a *App) saveAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert condition is required"))
 		return
 	}
-	operator, threshold, err := normalizeAlertCondition(req.Condition)
+	condition, err := normalizeAlertCondition(req.Condition)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	req.Condition["operator"] = operator
-	req.Condition["threshold"] = threshold
+	applyNormalizedAlertCondition(req.Condition, condition)
 	var alertID, contactID any
 	if req.ID != "" {
 		alertID = req.ID
@@ -813,7 +961,7 @@ func (a *App) testAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, errors.New("alert condition is required"))
 		return
 	}
-	operator, threshold, err := normalizeAlertCondition(req.Condition)
+	condition, err := normalizeAlertCondition(req.Condition)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err)
 		return
@@ -828,13 +976,26 @@ func (a *App) testAlertRule(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
-	value := maxNumericValue(rows, "value")
+	if rows == nil {
+		rows = []map[string]any{}
+	}
+	evaluations := alert.EvaluateRows(condition, rows, "preview")
+	if evaluations == nil {
+		evaluations = []alert.Evaluation{}
+	}
+	value := 0.0
+	if len(evaluations) > 0 {
+		value = evaluations[0].Value
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"value":     value,
-		"operator":  operator,
-		"threshold": threshold,
-		"firing":    compareAlertValue(value, operator, threshold),
-		"rows":      rows,
+		"value":       value,
+		"operator":    condition.Operator,
+		"threshold":   condition.Threshold,
+		"condition":   condition,
+		"firing":      len(evaluations) > 0,
+		"matches":     evaluations,
+		"match_count": len(evaluations),
+		"rows":        rows,
 	})
 }
 
@@ -903,63 +1064,78 @@ func (a *App) runAlertPreviewQuery(r *http.Request, req clickhouse.QueryRequest)
 	return ch.QueryJSONEachRow(r.Context(), sql)
 }
 
-func maxNumericValue(rows []map[string]any, key string) float64 {
-	var max float64
-	for i, row := range rows {
-		value, ok := numericValue(row[key])
-		if !ok {
-			continue
-		}
-		if i == 0 || value > max {
-			max = value
-		}
-	}
-	return max
-}
-
-func compareAlertValue(value float64, op string, threshold float64) bool {
-	switch op {
-	case "gte":
-		return value >= threshold
-	case "lt":
-		return value < threshold
-	case "lte":
-		return value <= threshold
-	case "eq":
-		return value == threshold
-	default:
-		return value > threshold
-	}
-}
-
-func normalizeAlertCondition(condition map[string]any) (string, float64, error) {
-	threshold, ok := numericValue(condition["threshold"])
-	if !ok {
-		return "", 0, errors.New("alert threshold must be numeric")
-	}
+func normalizeAlertCondition(condition map[string]any) (alert.Condition, error) {
+	conditionType, _ := condition["type"].(string)
 	operator, _ := condition["operator"].(string)
-	if operator == "" {
-		operator = "gt"
+	field, _ := condition["field"].(string)
+	textValue, _ := condition["value"].(string)
+	threshold, hasThreshold := numericValue(condition["threshold"])
+	normalized := alert.NormalizeCondition(alert.Condition{
+		Type:      strings.TrimSpace(conditionType),
+		Operator:  strings.TrimSpace(operator),
+		Field:     strings.TrimSpace(field),
+		Threshold: threshold,
+		Value:     textValue,
+	})
+	if alertConditionNeedsThreshold(normalized.Type) && !hasThreshold {
+		return alert.Condition{}, errors.New("alert threshold must be numeric")
 	}
-	if !validAlertOperator(operator) {
-		return "", 0, errors.New("alert operator is not supported")
+	if !validAlertOperator(normalized.Type, normalized.Operator) {
+		return alert.Condition{}, errors.New("alert operator is not supported")
+	}
+	if normalized.Type == "text_match" && strings.TrimSpace(normalized.Value) == "" {
+		return alert.Condition{}, errors.New("alert text match value is required")
 	}
 	if rawFor, ok := condition["for"].(string); ok && strings.TrimSpace(rawFor) != "" {
 		holdFor, err := time.ParseDuration(strings.TrimSpace(rawFor))
 		if err != nil || holdFor < 0 {
-			return "", 0, errors.New("alert for duration must be a valid duration such as 5m or 1h")
+			return alert.Condition{}, errors.New("alert for duration must be a valid duration such as 5m or 1h")
 		}
-		condition["for"] = strings.TrimSpace(rawFor)
+		normalized.For = strings.TrimSpace(rawFor)
 	}
-	return operator, threshold, nil
+	return normalized, nil
 }
 
-func validAlertOperator(op string) bool {
-	switch op {
-	case "gt", "gte", "lt", "lte", "eq":
+func applyNormalizedAlertCondition(target map[string]any, condition alert.Condition) {
+	target["type"] = condition.Type
+	target["operator"] = condition.Operator
+	target["field"] = condition.Field
+	target["threshold"] = condition.Threshold
+	target["value"] = condition.Value
+	if condition.For != "" {
+		target["for"] = condition.For
+	} else {
+		delete(target, "for")
+	}
+}
+
+func alertConditionNeedsThreshold(conditionType string) bool {
+	switch conditionType {
+	case "row_count", "numeric_threshold", "":
 		return true
 	default:
 		return false
+	}
+}
+
+func validAlertOperator(conditionType string, op string) bool {
+	switch conditionType {
+	case "text_match":
+		switch op {
+		case "contains", "not_contains", "eq", "neq", "regex":
+			return true
+		default:
+			return false
+		}
+	case "any_rows", "sql_result", "no_data":
+		return op != ""
+	default:
+		switch op {
+		case "gt", "gte", "lt", "lte", "eq", "neq":
+			return true
+		default:
+			return false
+		}
 	}
 }
 
@@ -987,6 +1163,17 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err)
 		return
 	}
+	req.Name = strings.TrimSpace(req.Name)
+	req.Kind = strings.TrimSpace(req.Kind)
+	req.Target = strings.TrimSpace(req.Target)
+	config, err := a.normalizeContactConfig(r, req.Kind, req.Name, req.Target, req.Config)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.Kind == "pagerduty" && req.Target == "" {
+		req.Target = "https://events.pagerduty.com/v2/enqueue"
+	}
 	if req.Name == "" || req.Kind == "" || req.Target == "" {
 		writeError(w, http.StatusBadRequest, errors.New("contact name, kind, and target are required"))
 		return
@@ -996,12 +1183,12 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 		contactID = req.ID
 	}
 	var rows []map[string]any
-	err := a.state.RPC(r.Context(), "save_contact_endpoint", map[string]any{
+	err = a.state.RPC(r.Context(), "save_contact_endpoint", map[string]any{
 		"contact_id":     contactID,
 		"contact_name":   req.Name,
 		"contact_kind":   req.Kind,
 		"contact_target": req.Target,
-		"contact_config": req.Config,
+		"contact_config": config,
 	}, statePrincipal(r), r.Header.Get("Authorization"), &rows)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err)
@@ -1009,6 +1196,520 @@ func (a *App) saveContactEndpoint(w http.ResponseWriter, r *http.Request) {
 	}
 	a.recordAuditEvent(r, "contact_endpoint.save", "contact_endpoint", targetIDFromRows(rows), map[string]any{"name": req.Name, "kind": req.Kind})
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) testContactEndpoint(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID     string         `json:"id"`
+		Name   string         `json:"name"`
+		Kind   string         `json:"kind"`
+		Target string         `json:"target"`
+		Config map[string]any `json:"config"`
+		Action string         `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	contact, err := a.contactFromTestRequest(r, req.ID, req.Kind, req.Target, req.Config)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	action := strings.TrimSpace(req.Action)
+	if action == "" {
+		action = "trigger"
+	}
+	if action == "validate" {
+		result := a.validateContactForTest(r, contact)
+		a.recordAuditEvent(r, "contact_endpoint.validate", "contact_endpoint", strings.TrimSpace(req.ID), map[string]any{"kind": contact.Kind, "status": result.Status})
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status":     result.Status,
+			"statusCode": result.StatusCode,
+			"error":      result.Error,
+			"payload":    map[string]any{"validated": true, "kind": contact.Kind, "target": contact.Target},
+		})
+		return
+	}
+	tester := alert.NewDeliveryTester(alert.SMTPConfig{
+		Host:     a.cfg.Alerts.SMTPHost,
+		Port:     a.cfg.Alerts.SMTPPort,
+		User:     a.cfg.Alerts.SMTPUser,
+		Password: a.cfg.Alerts.SMTPPassword,
+		From:     a.cfg.Alerts.SMTPFrom,
+	}, a.resolveTenantSecretForRequest(r), a.logger)
+	result, payload := tester.TestContactAction(r.Context(), statePrincipal(r).TenantID, contact, action)
+	if _, err := a.state.RecordContactTestNotification(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), contact.Kind, contact.Target, result.Status, result.StatusCode, result.Error, payload); err != nil {
+		a.logger.Warn("contact test notification record failed", "kind", contact.Kind, "target", contact.Target, "error", err)
+	}
+	a.recordAuditEvent(r, "contact_endpoint.test", "contact_endpoint", strings.TrimSpace(req.ID), map[string]any{"kind": contact.Kind, "status": result.Status})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"status":     result.Status,
+		"statusCode": result.StatusCode,
+		"error":      result.Error,
+		"payload":    payload,
+	})
+}
+
+func (a *App) validateContactForTest(r *http.Request, contact alert.ContactEndpoint) alert.DeliveryResult {
+	switch contact.Kind {
+	case "email":
+		if strings.TrimSpace(contact.Target) == "" || !strings.Contains(contact.Target, "@") {
+			return alert.DeliveryResult{Status: "failed", Error: "email target is required"}
+		}
+		if strings.TrimSpace(a.cfg.Alerts.SMTPHost) == "" || strings.TrimSpace(a.cfg.Alerts.SMTPFrom) == "" {
+			return alert.DeliveryResult{Status: "skipped", Error: "email delivery is not configured"}
+		}
+		return alert.DeliveryResult{Status: "success"}
+	case "webhook":
+		parsed, err := url.Parse(strings.TrimSpace(contact.Target))
+		if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+			return alert.DeliveryResult{Status: "failed", Error: "webhook target must be a valid URL"}
+		}
+		if parsed.Scheme != "https" && parsed.Scheme != "http" {
+			return alert.DeliveryResult{Status: "failed", Error: "webhook target must use http or https"}
+		}
+		if result := a.validateOptionalContactSecret(r, contact, "tokenSecretRef", "webhook bearer token"); result.Status != "success" {
+			return result
+		}
+		if strings.TrimSpace(contact.Config["headerName"]) != "" {
+			if !safeHTTPHeaderName(contact.Config["headerName"]) {
+				return alert.DeliveryResult{Status: "failed", Error: "webhook header name is invalid"}
+			}
+			if result := a.validateOptionalContactSecret(r, contact, "headerValueSecretRef", "webhook header value"); result.Status != "success" {
+				return result
+			}
+		}
+		return alert.DeliveryResult{Status: "success"}
+	case "pagerduty":
+		if boolString(contact.Config["restSyncEnabled"]) {
+			if strings.TrimSpace(contact.Config["serviceId"]) == "" {
+				return alert.DeliveryResult{Status: "failed", Error: "PagerDuty REST service ID is required"}
+			}
+			if strings.TrimSpace(contact.Config["fromEmail"]) == "" {
+				return alert.DeliveryResult{Status: "failed", Error: "PagerDuty REST From email is required"}
+			}
+			if value := strings.TrimSpace(contact.Config["apiBaseURL"]); value != "" {
+				if err := validatePagerDutyRESTURL(value); err != nil {
+					return alert.DeliveryResult{Status: "failed", Error: err.Error()}
+				}
+			}
+			if result := a.validateOptionalContactSecret(r, contact, "restApiKeySecretRef", "PagerDuty REST API key"); result.Status != "success" {
+				return result
+			}
+			return alert.DeliveryResult{Status: "success"}
+		}
+		if err := validatePagerDutyEventsURL(contact.Target); err != nil {
+			return alert.DeliveryResult{Status: "failed", Error: err.Error()}
+		}
+		ref := strings.TrimSpace(contact.Config["routingKeySecretRef"])
+		if ref == "" {
+			return alert.DeliveryResult{Status: "failed", Error: "PagerDuty Events integration key secret is required"}
+		}
+		if _, ok := a.resolveTenantSecretForRequest(r)(r.Context(), statePrincipal(r).TenantID, ref); !ok {
+			return alert.DeliveryResult{Status: "failed", Error: "PagerDuty Events integration key secret is not available: " + ref}
+		}
+		return alert.DeliveryResult{Status: "success"}
+	default:
+		return alert.DeliveryResult{Status: "failed", Error: fmt.Sprintf("unsupported contact kind: %s", contact.Kind)}
+	}
+}
+
+func (a *App) validateOptionalContactSecret(r *http.Request, contact alert.ContactEndpoint, key string, label string) alert.DeliveryResult {
+	ref := strings.TrimSpace(contact.Config[key])
+	if ref == "" {
+		return alert.DeliveryResult{Status: "success"}
+	}
+	if _, ok := a.resolveTenantSecretForRequest(r)(r.Context(), statePrincipal(r).TenantID, ref); !ok {
+		return alert.DeliveryResult{Status: "failed", Error: label + " secret is not available: " + ref}
+	}
+	return alert.DeliveryResult{Status: "success"}
+}
+
+func (a *App) contactFromTestRequest(r *http.Request, id string, kind string, target string, config map[string]any) (alert.ContactEndpoint, error) {
+	id = strings.TrimSpace(id)
+	if id != "" && strings.TrimSpace(kind) == "" && strings.TrimSpace(target) == "" {
+		var rows []map[string]any
+		if err := a.state.RPC(r.Context(), "list_contact_endpoints", map[string]any{}, statePrincipal(r), r.Header.Get("Authorization"), &rows); err != nil {
+			return alert.ContactEndpoint{}, err
+		}
+		for _, row := range rows {
+			if fmt.Sprint(row["id"]) == id {
+				return alert.ContactEndpoint{
+					Kind:   fmt.Sprint(row["kind"]),
+					Target: fmt.Sprint(row["target"]),
+					Config: stringMapFromAny(row["config"]),
+				}, nil
+			}
+		}
+		return alert.ContactEndpoint{}, errors.New("contact endpoint was not found")
+	}
+	kind = strings.TrimSpace(kind)
+	target = strings.TrimSpace(target)
+	if kind == "pagerduty" && target == "" {
+		target = "https://events.pagerduty.com/v2/enqueue"
+	}
+	if kind == "" || target == "" {
+		return alert.ContactEndpoint{}, errors.New("contact kind and target are required")
+	}
+	if kind == "pagerduty" {
+		if err := validatePagerDutyEventsURL(target); err != nil {
+			return alert.ContactEndpoint{}, err
+		}
+	}
+	return alert.ContactEndpoint{Kind: kind, Target: target, Config: stringMapFromAny(config)}, nil
+}
+
+func (a *App) resolveTenantSecretForRequest(r *http.Request) func(context.Context, string, string) (string, bool) {
+	user := statePrincipal(r)
+	bearer := r.Header.Get("Authorization")
+	return func(ctx context.Context, tenantID string, secretName string) (string, bool) {
+		if a.cfg.Secrets.EncryptionKey != "" && a.state.Enabled() {
+			row, err := a.state.GetTenantSecret(ctx, user, bearer, strings.TrimSpace(secretName))
+			if err == nil {
+				value, decryptErr := secrets.DecryptString(row.Ciphertext, row.Nonce, a.cfg.Secrets.EncryptionKey)
+				if decryptErr == nil {
+					return value, true
+				}
+				a.logger.Warn("tenant secret decrypt failed", "tenant", tenantID, "secret", secretName, "error", decryptErr)
+			}
+		}
+		return alert.ResolveSecretRefFromEnv(ctx, tenantID, secretName)
+	}
+}
+
+func stringMapFromAny(input any) map[string]string {
+	output := map[string]string{}
+	if input == nil {
+		return output
+	}
+	switch typed := input.(type) {
+	case map[string]string:
+		for key, value := range typed {
+			output[key] = value
+		}
+	case map[string]any:
+		for key, value := range typed {
+			if text, ok := value.(string); ok {
+				output[key] = strings.TrimSpace(text)
+			}
+		}
+	}
+	return output
+}
+
+func (a *App) normalizeContactConfig(r *http.Request, kind string, name string, target string, input map[string]any) (map[string]any, error) {
+	switch kind {
+	case "email", "webhook", "pagerduty":
+	default:
+		return nil, errors.New("contact kind is not supported")
+	}
+	output := map[string]any{}
+	for key, value := range input {
+		if text, ok := value.(string); ok {
+			output[key] = strings.TrimSpace(text)
+		}
+	}
+	if kind == "webhook" {
+		return a.normalizeWebhookContactConfig(r, name, output)
+	}
+	if kind != "pagerduty" {
+		return output, nil
+	}
+	if value, _ := output["routingKey"].(string); value != "" {
+		return nil, errors.New("PagerDuty routing key must be stored as a secret ref, not inline config")
+	}
+	if value, _ := output["apiKey"].(string); value != "" {
+		return nil, errors.New("PagerDuty API key must be stored as a secret ref, not inline config")
+	}
+	mode, _ := output["mode"].(string)
+	if mode == "" {
+		mode = "events_v2"
+		output["mode"] = mode
+	}
+	if mode != "events_v2" {
+		return nil, errors.New("PagerDuty REST incident sync is not implemented yet; use events_v2")
+	}
+	if target != "" {
+		if err := validatePagerDutyEventsURL(target); err != nil {
+			return nil, err
+		}
+	}
+	if value, _ := output["routingKeyValue"].(string); value != "" {
+		ref, _ := output["routingKeySecretRef"].(string)
+		if ref == "" {
+			ref = defaultSecretRef(name, "pagerduty-routing-key")
+		}
+		if err := a.saveEncryptedTenantSecret(r, "", ref, "PagerDuty Events API routing key", value); err != nil {
+			return nil, err
+		}
+		output["routingKeySecretRef"] = ref
+	}
+	delete(output, "routingKeyValue")
+	if value, _ := output["restApiKeyValue"].(string); value != "" {
+		ref, _ := output["restApiKeySecretRef"].(string)
+		if ref == "" {
+			ref = defaultSecretRef(name, "pagerduty-rest-api-key")
+		}
+		if err := a.saveEncryptedTenantSecret(r, "", ref, "PagerDuty REST API key", value); err != nil {
+			return nil, err
+		}
+		output["restApiKeySecretRef"] = ref
+	}
+	delete(output, "restApiKeyValue")
+	restSyncEnabled := boolString(output["restSyncEnabled"])
+	if restSyncEnabled {
+		output["restSyncEnabled"] = "true"
+		autoSyncEnabled := true
+		if rawAutoSync, ok := output["autoSyncEnabled"]; ok {
+			autoSyncEnabled = boolString(rawAutoSync)
+		}
+		if autoSyncEnabled {
+			output["autoSyncEnabled"] = "true"
+		} else {
+			output["autoSyncEnabled"] = "false"
+		}
+		syncIntervalSeconds := 0
+		if value, ok := numericValue(output["syncIntervalSeconds"]); ok {
+			syncIntervalSeconds = int(value)
+		} else if strings.TrimSpace(fmt.Sprint(output["syncIntervalSeconds"])) != "" {
+			return nil, errors.New("PagerDuty auto sync interval must be a number of seconds")
+		}
+		if syncIntervalSeconds < 0 {
+			return nil, errors.New("PagerDuty auto sync interval cannot be negative")
+		}
+		if syncIntervalSeconds > 0 && syncIntervalSeconds < 30 {
+			return nil, errors.New("PagerDuty auto sync interval must be 0 or at least 30 seconds")
+		}
+		output["syncIntervalSeconds"] = fmt.Sprint(syncIntervalSeconds)
+		if value, _ := output["restApiKeySecretRef"].(string); value == "" {
+			return nil, errors.New("PagerDuty REST API key secret ref is required when REST sync is enabled")
+		}
+		if value, _ := output["serviceId"].(string); value == "" {
+			return nil, errors.New("PagerDuty REST service ID is required when REST sync is enabled")
+		}
+		if value, _ := output["fromEmail"].(string); value == "" {
+			return nil, errors.New("PagerDuty REST From email is required when REST sync is enabled")
+		}
+		if value, _ := output["apiBaseURL"].(string); value != "" {
+			if err := validatePagerDutyRESTURL(value); err != nil {
+				return nil, err
+			}
+		}
+	} else if value, _ := output["routingKeySecretRef"].(string); value == "" {
+		return nil, errors.New("PagerDuty Events integration key secret ref is required")
+	}
+	if value, _ := output["severity"].(string); value == "" {
+		output["severity"] = "error"
+	}
+	return output, nil
+}
+
+func (a *App) normalizeWebhookContactConfig(r *http.Request, name string, output map[string]any) (map[string]any, error) {
+	if value, _ := output["tokenValue"].(string); value != "" {
+		ref, _ := output["tokenSecretRef"].(string)
+		if ref == "" {
+			ref = defaultSecretRef(name, "webhook-token")
+		}
+		if err := a.saveEncryptedTenantSecret(r, "", ref, "Webhook bearer token", value); err != nil {
+			return nil, err
+		}
+		output["tokenSecretRef"] = ref
+	}
+	delete(output, "tokenValue")
+	if headerName, _ := output["headerName"].(string); headerName != "" {
+		if !safeHTTPHeaderName(headerName) {
+			return nil, errors.New("webhook header name is invalid")
+		}
+		output["headerName"] = headerName
+	}
+	if value, _ := output["headerValue"].(string); value != "" {
+		headerName, _ := output["headerName"].(string)
+		if headerName == "" {
+			return nil, errors.New("webhook header name is required when a header value is provided")
+		}
+		ref, _ := output["headerValueSecretRef"].(string)
+		if ref == "" {
+			ref = defaultSecretRef(name, headerName+"-header")
+		}
+		if err := a.saveEncryptedTenantSecret(r, "", ref, "Webhook custom header value", value); err != nil {
+			return nil, err
+		}
+		output["headerValueSecretRef"] = ref
+	}
+	delete(output, "headerValue")
+	return output, nil
+}
+
+func validatePagerDutyEventsURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "https" {
+		return errors.New("PagerDuty Events API URL must use https")
+	}
+	if parsed.Host != "events.pagerduty.com" {
+		return errors.New("PagerDuty Events API URL must use events.pagerduty.com")
+	}
+	return nil
+}
+
+func validatePagerDutyRESTURL(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return err
+	}
+	if parsed.Scheme != "https" {
+		return errors.New("PagerDuty REST API URL must use https")
+	}
+	if parsed.Host != "api.pagerduty.com" {
+		return errors.New("PagerDuty REST API URL must use api.pagerduty.com")
+	}
+	return nil
+}
+
+func boolString(input any) bool {
+	value := strings.ToLower(strings.TrimSpace(fmt.Sprint(input)))
+	return value == "true" || value == "1" || value == "yes" || value == "on"
+}
+
+func (a *App) listTenantSecrets(w http.ResponseWriter, r *http.Request) {
+	rows, err := a.state.ListTenantSecrets(r.Context(), statePrincipal(r), r.Header.Get("Authorization"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) saveTenantSecret(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	var req struct {
+		ID          string `json:"id"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+		Value       string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	rows, err := a.saveEncryptedTenantSecretRows(r, strings.TrimSpace(req.ID), strings.TrimSpace(req.Name), strings.TrimSpace(req.Description), req.Value)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	a.recordAuditEvent(r, "tenant_secret.save", "tenant_secret", targetIDFromSecretRows(rows), map[string]any{"name": strings.TrimSpace(req.Name)})
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) deleteTenantSecret(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin") {
+		return
+	}
+	var req struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	secret, ok, err := a.tenantSecretByID(r, strings.TrimSpace(req.ID))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	if ok {
+		usages, err := a.state.ListTenantSecretUsage(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), secret.Name)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, err)
+			return
+		}
+		if len(usages) > 0 {
+			writeError(w, http.StatusConflict, fmt.Errorf("secret is still in use: %s", tenantSecretUsageSummary(usages)))
+			return
+		}
+	}
+	rows, err := a.state.DeleteTenantSecret(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), strings.TrimSpace(req.ID))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	a.recordAuditEvent(r, "tenant_secret.delete", "tenant_secret", strings.TrimSpace(req.ID), nil)
+	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) tenantSecretByID(r *http.Request, id string) (state.TenantSecret, bool, error) {
+	if id == "" {
+		return state.TenantSecret{}, false, nil
+	}
+	rows, err := a.state.ListTenantSecrets(r.Context(), statePrincipal(r), r.Header.Get("Authorization"))
+	if err != nil {
+		return state.TenantSecret{}, false, err
+	}
+	for _, row := range rows {
+		if row.ID == id {
+			return row, true, nil
+		}
+	}
+	return state.TenantSecret{}, false, nil
+}
+
+func tenantSecretUsageSummary(usages []state.TenantSecretUsage) string {
+	parts := make([]string, 0, len(usages))
+	for _, usage := range usages {
+		parts = append(parts, strings.TrimSpace(usage.ResourceName+" "+usage.Field))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (a *App) saveEncryptedTenantSecret(r *http.Request, id string, name string, description string, value string) error {
+	_, err := a.saveEncryptedTenantSecretRows(r, id, name, description, value)
+	return err
+}
+
+func (a *App) saveEncryptedTenantSecretRows(r *http.Request, id string, name string, description string, value string) ([]state.TenantSecret, error) {
+	if strings.TrimSpace(name) == "" {
+		return nil, errors.New("secret name is required")
+	}
+	if value == "" {
+		return nil, errors.New("secret value is required")
+	}
+	ciphertext, nonce, err := secrets.EncryptString(value, a.cfg.Secrets.EncryptionKey)
+	if err != nil {
+		return nil, err
+	}
+	return a.state.SaveTenantSecret(r.Context(), statePrincipal(r), r.Header.Get("Authorization"), id, name, description, ciphertext, nonce, secrets.KeyVersion)
+}
+
+func defaultSecretRef(name string, suffix string) string {
+	base := strings.ToLower(strings.TrimSpace(name + "-" + suffix))
+	base = strings.Trim(secretNameCleaner.ReplaceAllString(base, "-"), "-")
+	if base == "" {
+		return suffix
+	}
+	return base
+}
+
+var secretNameCleaner = regexp.MustCompile(`[^a-z0-9]+`)
+var httpHeaderNamePattern = regexp.MustCompile(`^[!#$%&'*+\-.^_` + "`" + `|~0-9A-Za-z]+$`)
+
+func safeHTTPHeaderName(name string) bool {
+	name = strings.TrimSpace(name)
+	return name != "" && httpHeaderNamePattern.MatchString(name)
+}
+
+func targetIDFromSecretRows(rows []state.TenantSecret) string {
+	if len(rows) == 0 {
+		return ""
+	}
+	return rows[0].ID
 }
 
 func (a *App) deleteContactEndpoint(w http.ResponseWriter, r *http.Request) {
@@ -1060,6 +1761,14 @@ func (a *App) listAlertNotifications(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) resolveAlertIncident(w http.ResponseWriter, r *http.Request) {
+	a.updateAlertIncidentStatus(w, r, "resolve_alert_incident", "resolve", "alert_incident.resolve")
+}
+
+func (a *App) acknowledgeAlertIncident(w http.ResponseWriter, r *http.Request) {
+	a.updateAlertIncidentStatus(w, r, "acknowledge_alert_incident", "acknowledge", "alert_incident.acknowledge")
+}
+
+func (a *App) updateAlertIncidentStatus(w http.ResponseWriter, r *http.Request, rpcName string, pagerDutyAction string, auditAction string) {
 	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
 		return
 	}
@@ -1076,8 +1785,9 @@ func (a *App) resolveAlertIncident(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := statePrincipal(r)
+	mappedPagerDutyIncident, hasPagerDutyMapping := a.findTenantPagerDutyIncident(r, req.ID)
 	var rows []map[string]any
-	if err := a.state.RPC(r.Context(), "resolve_alert_incident", map[string]any{
+	if err := a.state.RPC(r.Context(), rpcName, map[string]any{
 		"actor_subject":  user.Subject,
 		"actor_provider": user.Provider,
 		"incident_id":    req.ID,
@@ -1085,8 +1795,59 @@ func (a *App) resolveAlertIncident(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, err)
 		return
 	}
-	a.recordAuditEvent(r, "alert_incident.resolve", "alert_incident", req.ID, nil)
+	if hasPagerDutyMapping {
+		tester := alert.NewDeliveryTester(alert.SMTPConfig{}, a.resolveTenantSecretForRequest(r), a.logger)
+		result := tester.UpdatePagerDutyRemoteIncident(r.Context(), mappedPagerDutyIncident, pagerDutyAction)
+		if _, err := a.state.UpdateAlertIncidentSync(r.Context(), a.cfg.Alerts.WorkerKey, mappedPagerDutyIncident.TenantID, mappedPagerDutyIncident.ID, result.ExternalProvider, result.ExternalIncidentID, result.ExternalIncidentURL, result.ExternalSyncStatus, result.Error); err != nil {
+			a.logger.Warn("PagerDuty incident status sync record failed", "incident", req.ID, "action", pagerDutyAction, "error", err)
+		}
+	}
+	a.recordAuditEvent(r, auditAction, "alert_incident", req.ID, nil)
 	writeJSON(w, http.StatusOK, rows)
+}
+
+func (a *App) findTenantPagerDutyIncident(r *http.Request, incidentID string) (state.PagerDutySyncedIncident, bool) {
+	user := statePrincipal(r)
+	incident, ok, err := a.state.GetTenantPagerDutyIncident(r.Context(), user, r.Header.Get("Authorization"), incidentID)
+	if err != nil {
+		a.logger.Warn("PagerDuty mapped incident lookup failed", "incident", incidentID, "error", err)
+		return state.PagerDutySyncedIncident{}, false
+	}
+	return incident, ok
+}
+
+func (a *App) syncPagerDutyIncidents(w http.ResponseWriter, r *http.Request) {
+	if !a.requireStateRole(w, r, "owner", "admin", "editor") {
+		return
+	}
+	user := statePrincipal(r)
+	incidents, err := a.state.ListTenantPagerDutySyncedIncidents(r.Context(), user, r.Header.Get("Authorization"))
+	if err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	tester := alert.NewDeliveryTester(alert.SMTPConfig{}, a.resolveTenantSecretForRequest(r), a.logger)
+	results := tester.ReconcilePagerDutyIncidents(r.Context(), incidents, func(ctx context.Context, incident state.PagerDutySyncedIncident, remote alert.PagerDutyRemoteIncident, result alert.DeliveryResult) error {
+		status := remote.Status
+		if result.Status == "failed" {
+			status = ""
+		}
+		_, err := a.state.ReconcilePagerDutyIncident(ctx, a.cfg.Alerts.WorkerKey, incident.TenantID, incident.ID, status, result.ExternalIncidentURL, result.ExternalSyncStatus, result.Error)
+		return err
+	})
+	a.recordAuditEvent(r, "pagerduty.sync", "alert_incident", "", map[string]any{"count": len(results)})
+	loadErr := ""
+	if len(incidents) == 0 {
+		loadErr = "no mapped PagerDuty incidents found"
+	}
+	if results == nil {
+		results = []alert.PagerDutyReconcileResult{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"count":   len(results),
+		"message": loadErr,
+		"results": results,
+	})
 }
 
 func (a *App) listInvites(w http.ResponseWriter, r *http.Request) {

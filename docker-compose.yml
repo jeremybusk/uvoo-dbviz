@@ -39,6 +39,7 @@ services:
       DBVIZ_ALERT_SMTP_USER: ${DBVIZ_ALERT_SMTP_USER:-}
       DBVIZ_ALERT_SMTP_FROM: ${DBVIZ_ALERT_SMTP_FROM:-}
       DBVIZ_ALERT_SMTP_PASSWORD: ${DBVIZ_ALERT_SMTP_PASSWORD:-}
+      DBVIZ_SECRETS_ENCRYPTION_KEY: ${DBVIZ_SECRETS_ENCRYPTION_KEY:-dev-local-test-secret-key}
 
   clickhouse:
     image: clickhouse/clickhouse-server:25.5-alpine

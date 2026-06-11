@@ -33,6 +33,7 @@ import React from 'react';
 import {
   AlertIncident,
   AlertNotification,
+  AlertPreviewResult,
   AlertRule,
   AuditEvent,
   ContactEndpoint,
@@ -44,13 +45,15 @@ import {
   PublicConfig,
   QueryHistory,
   SavedQuery,
+  SystemReadiness,
+  TenantSecret,
   TenantInvite,
   TenantMember,
   TenantMembership,
   UserProfile,
   Principal
 } from '../api';
-import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, VisualizationType } from '../types';
+import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, ThemeMode, VisualizationType } from '../types';
 
 type Role = 'owner' | 'admin' | 'editor' | 'viewer';
 type RowAction = {
@@ -168,6 +171,164 @@ export function AccessSection(props: {
       </Space>
     </Section>
   );
+}
+
+export function SettingsSection(props: {
+  user: Principal | null;
+  config: PublicConfig | null;
+  dataSources: DataSource[];
+  preferencesStatus: string;
+  themeMode: ThemeMode;
+  refreshSeconds: number;
+  relativeRange: RelativeRange;
+  eventLimit: number;
+  dataset: string;
+  sourceId: string;
+  visualization: VisualizationType;
+  onTheme: (value: ThemeMode) => void;
+  onRefreshSeconds: (value: number) => void;
+  onRelativeRange: (value: number, unit: RelativeRangeUnit) => void;
+  onEventLimit: (value: number) => void;
+  onDataset: (value: string) => void;
+  onSourceId: (value: string) => void;
+  onVisualization: (value: VisualizationType) => void;
+  onSave: () => void;
+}) {
+  return (
+    <Section title="Settings">
+      <Field label="Theme">
+        <Segmented
+          block
+          value={props.themeMode}
+          options={[
+            { label: 'Light', value: 'light' },
+            { label: 'Dark', value: 'dark' }
+          ]}
+          onChange={(value) => props.onTheme(value as ThemeMode)}
+        />
+      </Field>
+      <Field label="Refresh">
+        <Segmented
+          block
+          value={props.refreshSeconds}
+          options={[
+            { label: 'Off', value: 0 },
+            { label: '10s', value: 10 },
+            { label: '30s', value: 30 },
+            { label: '1m', value: 60 },
+            { label: '5m', value: 300 }
+          ]}
+          onChange={(value) => props.onRefreshSeconds(Number(value))}
+        />
+      </Field>
+      <Field label="Default range">
+        <Space.Compact className="full relative-range">
+          <InputNumber
+            className="relative-range-value"
+            min={1}
+            max={999}
+            value={props.relativeRange.value}
+            onChange={(value) => props.onRelativeRange(Number(value || 1), props.relativeRange.unit)}
+          />
+          <Select
+            className="relative-range-unit"
+            value={props.relativeRange.unit}
+            onChange={(unit: RelativeRangeUnit) => props.onRelativeRange(props.relativeRange.value, unit)}
+          >
+            <Select.Option value="minutes">minutes</Select.Option>
+            <Select.Option value="hours">hours</Select.Option>
+            <Select.Option value="days">days</Select.Option>
+            <Select.Option value="weeks">weeks</Select.Option>
+            <Select.Option value="months">months</Select.Option>
+            <Select.Option value="years">years</Select.Option>
+          </Select>
+        </Space.Compact>
+      </Field>
+      <Field label="Event rows">
+        <InputNumber className="full" min={10} max={1000} value={props.eventLimit} onChange={(value) => props.onEventLimit(Number(value || 200))} />
+      </Field>
+      <Field label="Dataset">
+        <Select value={props.dataset} onChange={props.onDataset}>
+          {props.config?.datasets.map((item) => <Select.Option key={item.id} value={item.id}>{item.name}</Select.Option>)}
+        </Select>
+      </Field>
+      <Field label="Source">
+        <Select value={props.sourceId} onChange={props.onSourceId}>
+          <Select.Option value="">Server default</Select.Option>
+          {props.dataSources.map((source) => <Select.Option key={source.id} value={source.id}>{source.name}</Select.Option>)}
+        </Select>
+      </Field>
+      <Field label="Visualization">
+        <Select value={props.visualization} onChange={props.onVisualization}>
+          <Select.Option value="line">Line</Select.Option>
+          <Select.Option value="area">Area</Select.Option>
+          <Select.Option value="bar">Bar</Select.Option>
+        </Select>
+      </Field>
+      <Flex align="center" gap={8} wrap="wrap">
+        <Button icon={<SaveOutlined />} disabled={!props.user} onClick={props.onSave}>Save now</Button>
+        {props.preferencesStatus && <Typography.Text type="secondary">{props.preferencesStatus}</Typography.Text>}
+      </Flex>
+    </Section>
+  );
+}
+
+export function SystemSection(props: {
+  readiness: SystemReadiness | null;
+  config: PublicConfig | null;
+  onRefresh: () => void;
+}) {
+  const status = props.readiness?.status || 'warning';
+  return (
+    <Section title="Status">
+      <Alert
+        type={status === 'failed' ? 'error' : status === 'warning' ? 'warning' : 'success'}
+        showIcon
+        message={status === 'ok' ? 'System readiness OK' : status === 'failed' ? 'System readiness failed' : 'System readiness has warnings'}
+      />
+      <Flex gap={8} align="center" wrap="wrap">
+        <Tag color={readinessColor(status)}>{status}</Tag>
+        {props.readiness?.checkedAt && <Typography.Text type="secondary">{new Date(props.readiness.checkedAt).toLocaleString()}</Typography.Text>}
+        <Button size="small" onClick={props.onRefresh}>Refresh</Button>
+      </Flex>
+      {!props.readiness && <Alert type="warning" showIcon message="Readiness has not been loaded yet." />}
+      <ActionList items={props.readiness?.components || []} empty="No readiness components" list render={(component) => (
+        <List.Item key={component.name}>
+          <List.Item.Meta
+            title={<Flex gap={6} align="center" wrap="wrap"><span>{component.name}</span><Tag color={readinessColor(component.status)}>{component.status}</Tag></Flex>}
+            description={component.detail}
+          />
+        </List.Item>
+      )} />
+      <Collapse
+        size="small"
+        ghost
+        items={[{
+          key: 'delivery',
+          label: 'Alert delivery',
+          children: (
+            <Space direction="vertical" size={4} className="full">
+              <Typography.Text type="secondary">Alerts {props.config?.alertDelivery.alertsEnabled ? 'enabled' : 'disabled'}</Typography.Text>
+              <Typography.Text type="secondary">SMTP {props.config?.alertDelivery.smtpConfigured ? `configured${props.config.alertDelivery.smtpHasAuth ? ' with auth' : ''}` : 'not configured'}</Typography.Text>
+            </Space>
+          )
+        }]}
+      />
+    </Section>
+  );
+}
+
+function readinessColor(status: string): string {
+  switch (status) {
+    case 'ok':
+      return 'green';
+    case 'failed':
+      return 'red';
+    case 'warning':
+      return 'orange';
+    default:
+      return 'default';
+  }
 }
 
 function orderedClaimEntries(claims: JwtClaims): [string, unknown][] {
@@ -639,15 +800,22 @@ export function AlertsSection(props: {
   contacts: ContactEndpoint[];
   editingAlertId: string;
   alertName: string;
+  alertConditionType: string;
+  alertField: string;
+  alertTextValue: string;
   alertThreshold: string;
   alertOperator: string;
   alertFor: string;
   alertInterval: number;
   alertEnabled: boolean;
   alertPreview: string;
+  alertPreviewResult: AlertPreviewResult | null;
   selectedContact: string;
   queryMode: string;
   onName: (value: string) => void;
+  onConditionType: (value: string) => void;
+  onField: (value: string) => void;
+  onTextValue: (value: string) => void;
   onThreshold: (value: string) => void;
   onOperator: (value: string) => void;
   onFor: (value: string) => void;
@@ -673,23 +841,54 @@ export function AlertsSection(props: {
       rule.enabled ? 'enabled' : 'disabled'
     ].some((value) => value.toLowerCase().includes(term)));
   }, [alertSearch, props.alertRules]);
+  const previewRows = Array.isArray(props.alertPreviewResult?.rows) ? props.alertPreviewResult.rows : [];
+  const previewMatches = Array.isArray(props.alertPreviewResult?.matches) ? props.alertPreviewResult.matches : [];
+  const previewMatchCount = Number(props.alertPreviewResult?.match_count ?? previewMatches.length);
 
   return (
     <Section title="Alerts">
       {props.editingAlertId && <Tag color="blue">Editing existing rule</Tag>}
       <Field label="Rule"><Input value={props.alertName} onChange={(event) => props.onName(event.target.value)} /></Field>
       <Field label="Query"><Tag>{props.queryMode === 'sql' ? 'Current SQL query' : 'Current builder query'}</Tag></Field>
+      <Field label="Evaluator">
+        <Select value={props.alertConditionType} onChange={props.onConditionType}>
+          <Select.Option value="numeric_threshold">Threshold</Select.Option>
+          <Select.Option value="row_count">Row count</Select.Option>
+          <Select.Option value="any_rows">Rows exist</Select.Option>
+          <Select.Option value="no_data">No data</Select.Option>
+          <Select.Option value="text_match">Text match</Select.Option>
+          <Select.Option value="sql_result">Advanced SQL</Select.Option>
+        </Select>
+      </Field>
       <Field label="Condition">
-        <Space.Compact className="full">
-          <Select className="operator-select" value={props.alertOperator} onChange={props.onOperator}>
-            <Select.Option value="gt">&gt;</Select.Option>
-            <Select.Option value="gte">&gt;=</Select.Option>
-            <Select.Option value="lt">&lt;</Select.Option>
-            <Select.Option value="lte">&lt;=</Select.Option>
-            <Select.Option value="eq">=</Select.Option>
-          </Select>
-          <InputNumber className="full" min={0} value={Number(props.alertThreshold)} onChange={(value) => props.onThreshold(String(value ?? 0))} />
-        </Space.Compact>
+        {props.alertConditionType === 'text_match' ? (
+          <Space.Compact className="full">
+            <Input className="query-filter-name" value={props.alertField} onChange={(event) => props.onField(event.target.value)} placeholder="message" />
+            <Select className="operator-select" value={props.alertOperator} onChange={props.onOperator}>
+              <Select.Option value="contains">contains</Select.Option>
+              <Select.Option value="not_contains">not contains</Select.Option>
+              <Select.Option value="eq">=</Select.Option>
+              <Select.Option value="neq">!=</Select.Option>
+              <Select.Option value="regex">regex</Select.Option>
+            </Select>
+            <Input className="full" value={props.alertTextValue} onChange={(event) => props.onTextValue(event.target.value)} />
+          </Space.Compact>
+        ) : alertNeedsThreshold(props.alertConditionType) ? (
+          <Space.Compact className="full">
+            {props.alertConditionType === 'numeric_threshold' && <Input className="query-filter-name" value={props.alertField} onChange={(event) => props.onField(event.target.value)} placeholder="value" />}
+            <Select className="operator-select" value={props.alertOperator} onChange={props.onOperator}>
+              <Select.Option value="gt">&gt;</Select.Option>
+              <Select.Option value="gte">&gt;=</Select.Option>
+              <Select.Option value="lt">&lt;</Select.Option>
+              <Select.Option value="lte">&lt;=</Select.Option>
+              <Select.Option value="eq">=</Select.Option>
+              <Select.Option value="neq">!=</Select.Option>
+            </Select>
+            <InputNumber className="full" min={0} value={Number(props.alertThreshold)} onChange={(value) => props.onThreshold(String(value ?? 0))} />
+          </Space.Compact>
+        ) : (
+          <Tag>{props.alertConditionType === 'no_data' ? 'query returns no rows' : 'query returns rows'}</Tag>
+        )}
       </Field>
       <Field label="For">
         <Input value={props.alertFor} onChange={(event) => props.onFor(event.target.value)} placeholder="0s, 5m, 1h" />
@@ -707,6 +906,26 @@ export function AlertsSection(props: {
         </Select>
       </Field>
       {props.alertPreview && <Alert type={props.alertPreview.startsWith('Firing') ? 'warning' : 'success'} showIcon message={props.alertPreview} />}
+      {props.alertPreviewResult && (
+        <Collapse
+          size="small"
+          ghost
+          items={[
+            {
+              key: 'matches',
+              label: `Preview details (${previewMatchCount} matches, ${previewRows.length} rows)`,
+              children: (
+                <Space direction="vertical" size={8} className="full">
+                  {previewMatches.length > 0 && (
+                    <pre className="json-preview">{JSON.stringify(previewMatches.slice(0, 5), null, 2)}</pre>
+                  )}
+                  <pre className="json-preview">{JSON.stringify(previewRows.slice(0, 5), null, 2)}</pre>
+                </Space>
+              )
+            }
+          ]}
+        />
+      )}
       <Flex gap={8} wrap="wrap">
         <Button onClick={props.onNew}>New</Button>
         <Button disabled={!props.user} onClick={props.onTest}>Test</Button>
@@ -746,8 +965,22 @@ export function AlertsSection(props: {
 }
 
 function describeAlertCondition(rule: AlertRule): string {
+  const condition = normalizeAlertCondition(rule.condition);
   const hold = rule.condition?.for ? ` for ${rule.condition.for}` : '';
-  return `value ${operatorSymbol(rule.condition?.operator || 'gt')} ${rule.condition?.threshold ?? 0}${hold}`;
+  switch (condition.type) {
+    case 'row_count':
+      return `row count ${operatorSymbol(condition.operator)} ${condition.threshold}${hold}`;
+    case 'any_rows':
+      return `rows exist${hold}`;
+    case 'sql_result':
+      return `SQL returns rows${hold}`;
+    case 'no_data':
+      return `no data${hold}`;
+    case 'text_match':
+      return `text ${condition.field || 'message'} ${operatorSymbol(condition.operator)} ${condition.value || ''}${hold}`;
+    default:
+      return `${condition.field || 'value'} ${operatorSymbol(condition.operator)} ${condition.threshold}${hold}`;
+  }
 }
 
 function operatorSymbol(operator: string): string {
@@ -760,9 +993,33 @@ function operatorSymbol(operator: string): string {
       return '<=';
     case 'eq':
       return '=';
+    case 'neq':
+      return '!=';
+    case 'contains':
+      return 'contains';
+    case 'not_contains':
+      return 'does not contain';
+    case 'regex':
+      return 'matches';
     default:
       return '>';
   }
+}
+
+function alertNeedsThreshold(type: string): boolean {
+  return type === 'numeric_threshold' || type === 'row_count' || !type;
+}
+
+function normalizeAlertCondition(condition: AlertRule['condition']) {
+  const type = condition?.type || 'numeric_threshold';
+  return {
+    type,
+    operator: condition?.operator || (type === 'text_match' ? 'contains' : 'gt'),
+    field: condition?.field || (type === 'text_match' ? 'message' : 'value'),
+    threshold: condition?.threshold ?? 0,
+    value: condition?.value || '',
+    for: condition?.for || ''
+  };
 }
 
 function describeQueryMode(query: unknown): string {
@@ -770,20 +1027,133 @@ function describeQueryMode(query: unknown): string {
   return 'Builder';
 }
 
+export function SecretsSection(props: {
+  user: Principal | null;
+  secrets: TenantSecret[];
+  secretUsages: Record<string, string[]>;
+  editingSecretId: string;
+  secretName: string;
+  secretDescription: string;
+  secretValue: string;
+  onName: (value: string) => void;
+  onDescription: (value: string) => void;
+  onValue: (value: string) => void;
+  onNew: () => void;
+  onSave: () => void;
+  onOpen: (secret: TenantSecret) => void;
+  onDelete: (secret: TenantSecret) => void;
+}) {
+  return (
+    <Section title="Secrets">
+      {props.editingSecretId && <Tag color="blue">Editing existing secret</Tag>}
+      <Field label="Name"><Input value={props.secretName} onChange={(event) => props.onName(event.target.value)} placeholder="pagerduty-prod-events-key" /></Field>
+      <Field label="Description"><Input value={props.secretDescription} onChange={(event) => props.onDescription(event.target.value)} placeholder="PagerDuty Events API integration key" /></Field>
+      <Field label="Secret value"><Input.Password value={props.secretValue} onChange={(event) => props.onValue(event.target.value)} placeholder={props.editingSecretId ? 'Enter a new value to rotate' : 'Paste secret value'} /></Field>
+      <Flex gap={8} wrap="wrap">
+        <Button onClick={props.onNew}>New</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user || !props.secretName.trim() || !props.secretValue} onClick={props.onSave}>{props.editingSecretId ? 'Rotate secret' : 'Save secret'}</Button>
+      </Flex>
+      <ActionList items={props.secrets} empty="No secrets" list render={(secret) => (
+        <List.Item key={secret.id}>
+          {(() => {
+            const usages = props.secretUsages[secret.name] || [];
+            return (
+          <Flex gap={8} align="start" className="action-row full">
+            <RowActions items={[
+              { key: 'edit', label: 'Edit', onClick: () => props.onOpen(secret) },
+              { key: 'copy-name', label: 'Copy name', onClick: () => copyText(secret.name) },
+              { key: 'copy-id', label: 'Copy ID', onClick: () => copyText(secret.id) },
+              {
+                key: 'delete',
+                label: 'Delete',
+                danger: true,
+                confirm: {
+                  title: 'Delete secret?',
+                  content: 'This deletes the encrypted value for this tenant.',
+                  okText: 'Delete'
+                },
+                disabled: usages.length > 0,
+                onClick: () => props.onDelete(secret)
+              }
+            ]} />
+            <List.Item.Meta
+              title={<Flex gap={6} align="center" wrap="wrap"><span>{secret.name}</span><Tag>{secret.key_version}</Tag>{usages.length > 0 && <Tag color="orange">used {usages.length}</Tag>}</Flex>}
+              description={[secret.description, usages.length > 0 ? `used by ${usages.join(', ')}` : '', `id ${secret.id}`, `updated ${new Date(secret.updated_at).toLocaleString()}`].filter(Boolean).join(' - ')}
+            />
+          </Flex>
+            );
+          })()}
+        </List.Item>
+      )} />
+    </Section>
+  );
+}
+
 export function ContactsSection(props: {
   user: Principal | null;
   contacts: ContactEndpoint[];
+  notifications: AlertNotification[];
+  secrets: TenantSecret[];
   editingContactId: string;
   contactName: string;
   contactTarget: string;
   contactKind: ContactEndpoint['kind'];
+  contactStatus: string;
+  smtpConfigured: boolean;
+  smtpHasAuth: boolean;
+  webhookTokenSecretRef: string;
+  webhookTokenValue: string;
+  webhookHeaderName: string;
+  webhookHeaderValueSecretRef: string;
+  webhookHeaderValue: string;
+  webhookBodyTemplate: string;
+  pagerDutyRoutingKeySecretRef: string;
+  pagerDutyRoutingKeyValue: string;
+  pagerDutyRestApiKeySecretRef: string;
+  pagerDutyRestApiKeyValue: string;
+  pagerDutySeverity: string;
+  pagerDutySourceField: string;
+  pagerDutyComponent: string;
+  pagerDutyGroup: string;
+  pagerDutyClass: string;
+  pagerDutyServiceID: string;
+  pagerDutyRestSyncEnabled: boolean;
+  pagerDutyAutoSyncEnabled: boolean;
+  pagerDutySyncInterval: number;
+  pagerDutyFromEmail: string;
+  pagerDutyApiBaseURL: string;
   onName: (value: string) => void;
   onTarget: (value: string) => void;
   onKind: (value: ContactEndpoint['kind']) => void;
+  onWebhookTokenSecretRef: (value: string) => void;
+  onWebhookTokenValue: (value: string) => void;
+  onWebhookHeaderName: (value: string) => void;
+  onWebhookHeaderValueSecretRef: (value: string) => void;
+  onWebhookHeaderValue: (value: string) => void;
+  onWebhookBodyTemplate: (value: string) => void;
+  onPagerDutyRoutingKeySecretRef: (value: string) => void;
+  onPagerDutyRoutingKeyValue: (value: string) => void;
+  onPagerDutyRestApiKeySecretRef: (value: string) => void;
+  onPagerDutyRestApiKeyValue: (value: string) => void;
+  onPagerDutySeverity: (value: string) => void;
+  onPagerDutySourceField: (value: string) => void;
+  onPagerDutyComponent: (value: string) => void;
+  onPagerDutyGroup: (value: string) => void;
+  onPagerDutyClass: (value: string) => void;
+  onPagerDutyServiceID: (value: string) => void;
+  onPagerDutyRestSyncEnabled: (value: boolean) => void;
+  onPagerDutyAutoSyncEnabled: (value: boolean) => void;
+  onPagerDutySyncInterval: (value: number) => void;
+  onPagerDutyFromEmail: (value: string) => void;
+  onPagerDutyApiBaseURL: (value: string) => void;
   onNew: () => void;
   onOpen: (contact: ContactEndpoint) => void;
   onUseForAlert: (contact: ContactEndpoint) => void;
   onSave: () => void;
+  onTest: () => void;
+  onTestSaved: (contact: ContactEndpoint) => void;
+  onValidateSaved: (contact: ContactEndpoint) => void;
+  onResolveTestSaved: (contact: ContactEndpoint) => void;
   onDelete: (contact: ContactEndpoint) => void;
 }) {
   const [contactSearch, setContactSearch] = React.useState('');
@@ -796,6 +1166,12 @@ export function ContactsSection(props: {
       contact.target
     ].some((value) => value.toLowerCase().includes(term)));
   }, [contactSearch, props.contacts]);
+  const secretOptions = props.secrets.map((secret) => ({
+    label: secret.name,
+    value: secret.name
+  }));
+  const historyByContact = React.useMemo(() => contactNotificationHistory(props.contacts, props.notifications), [props.contacts, props.notifications]);
+  const saveBlockReason = contactSaveBlockReason(props);
 
   return (
     <Section title="Contacts">
@@ -809,10 +1185,129 @@ export function ContactsSection(props: {
         </Select>
       </Field>
       <Field label="Target"><Input value={props.contactTarget} onChange={(event) => props.onTarget(event.target.value)} placeholder={contactTargetPlaceholder(props.contactKind)} /></Field>
+      {props.contactKind === 'email' && (
+        <Alert
+          type={props.smtpConfigured ? 'success' : 'warning'}
+          showIcon
+          message={props.smtpConfigured ? `SMTP delivery configured${props.smtpHasAuth ? ' with auth' : ''}` : 'SMTP delivery is not configured'}
+        />
+      )}
+      {props.contactKind === 'webhook' && (
+        <>
+          <Field label="Bearer token secret">
+            <Select
+              allowClear
+              showSearch
+              value={props.webhookTokenSecretRef || undefined}
+              onChange={(value) => props.onWebhookTokenSecretRef(value || '')}
+              options={secretOptions}
+              placeholder="Optional"
+            />
+          </Field>
+          <Field label="Paste bearer token">
+            <Input.Password value={props.webhookTokenValue} onChange={(event) => props.onWebhookTokenValue(event.target.value)} placeholder="Paste to encrypt and store" />
+          </Field>
+          <Field label="Custom header name">
+            <Input value={props.webhookHeaderName} onChange={(event) => props.onWebhookHeaderName(event.target.value)} placeholder="X-API-Key" />
+          </Field>
+          <Field label="Custom header value secret">
+            <Select
+              allowClear
+              showSearch
+              value={props.webhookHeaderValueSecretRef || undefined}
+              onChange={(value) => props.onWebhookHeaderValueSecretRef(value || '')}
+              options={secretOptions}
+              placeholder="Optional"
+            />
+          </Field>
+          <Field label="Paste custom header value">
+            <Input.Password value={props.webhookHeaderValue} onChange={(event) => props.onWebhookHeaderValue(event.target.value)} placeholder="Paste to encrypt and store" />
+          </Field>
+          <Field label="Body template">
+            <Input.TextArea
+              autoSize={{ minRows: 4, maxRows: 8 }}
+              value={props.webhookBodyTemplate}
+              onChange={(event) => props.onWebhookBodyTemplate(event.target.value)}
+              placeholder={'{"summary":"{{ruleName}}","value":"{{value}}","service":"{{row.service_name}}"}'}
+            />
+          </Field>
+        </>
+      )}
+      {props.contactKind === 'pagerduty' && (
+        <>
+          <Field label="Events integration key secret">
+            <Select
+              allowClear
+              showSearch
+              value={props.pagerDutyRoutingKeySecretRef || undefined}
+              onChange={(value) => props.onPagerDutyRoutingKeySecretRef(value || '')}
+              options={secretOptions}
+              placeholder="Select a saved secret"
+            />
+          </Field>
+          <Field label="Paste Events integration key">
+            <Input.Password value={props.pagerDutyRoutingKeyValue} onChange={(event) => props.onPagerDutyRoutingKeyValue(event.target.value)} placeholder="Paste to encrypt and store" />
+          </Field>
+          <Field label="REST API key secret">
+            <Select
+              allowClear
+              showSearch
+              value={props.pagerDutyRestApiKeySecretRef || undefined}
+              onChange={(value) => props.onPagerDutyRestApiKeySecretRef(value || '')}
+              options={secretOptions}
+              placeholder="Optional, for incident sync"
+            />
+          </Field>
+          <Field label="Paste REST API key">
+            <Input.Password value={props.pagerDutyRestApiKeyValue} onChange={(event) => props.onPagerDutyRestApiKeyValue(event.target.value)} placeholder="Optional for future incident sync" />
+          </Field>
+          <Field label="Severity">
+            <Select value={props.pagerDutySeverity} onChange={props.onPagerDutySeverity}>
+              <Select.Option value="critical">critical</Select.Option>
+              <Select.Option value="error">error</Select.Option>
+              <Select.Option value="warning">warning</Select.Option>
+              <Select.Option value="info">info</Select.Option>
+            </Select>
+          </Field>
+          <Field label="Source field"><Input value={props.pagerDutySourceField} onChange={(event) => props.onPagerDutySourceField(event.target.value)} placeholder="service_name" /></Field>
+          <Field label="Component"><Input value={props.pagerDutyComponent} onChange={(event) => props.onPagerDutyComponent(event.target.value)} /></Field>
+          <Field label="Group"><Input value={props.pagerDutyGroup} onChange={(event) => props.onPagerDutyGroup(event.target.value)} /></Field>
+          <Field label="Class"><Input value={props.pagerDutyClass} onChange={(event) => props.onPagerDutyClass(event.target.value)} /></Field>
+          <Field label="REST sync">
+            <Switch checked={props.pagerDutyRestSyncEnabled} onChange={props.onPagerDutyRestSyncEnabled} />
+          </Field>
+          <Field label="Auto sync from PagerDuty">
+            <Switch checked={props.pagerDutyAutoSyncEnabled} disabled={!props.pagerDutyRestSyncEnabled} onChange={props.onPagerDutyAutoSyncEnabled} />
+          </Field>
+          <Field label="Auto sync interval">
+            <InputNumber
+              className="full"
+              min={0}
+              max={86400}
+              disabled={!props.pagerDutyRestSyncEnabled || !props.pagerDutyAutoSyncEnabled}
+              value={props.pagerDutySyncInterval}
+              onChange={(value) => props.onPagerDutySyncInterval(Number(value || 0))}
+              addonAfter="seconds"
+            />
+            <Typography.Text type="secondary">0 uses the global alert worker interval.</Typography.Text>
+          </Field>
+          <Field label="REST service ID"><Input value={props.pagerDutyServiceID} onChange={(event) => props.onPagerDutyServiceID(event.target.value)} placeholder="Optional, for incident sync" /></Field>
+          <Field label="REST From email"><Input value={props.pagerDutyFromEmail} onChange={(event) => props.onPagerDutyFromEmail(event.target.value)} placeholder="your-email@domain.com" /></Field>
+          <Field label="REST API URL"><Input value={props.pagerDutyApiBaseURL} onChange={(event) => props.onPagerDutyApiBaseURL(event.target.value)} placeholder="https://api.pagerduty.com" /></Field>
+          <Alert
+            type={pagerDutyRestReady(props) ? 'success' : props.pagerDutyRestSyncEnabled ? 'warning' : 'info'}
+            showIcon
+            message={pagerDutyRestReady(props) ? 'PagerDuty REST incident sync ready' : props.pagerDutyRestSyncEnabled ? saveBlockReason || 'REST sync needs PagerDuty REST settings.' : 'Events API delivery works with the integration key. Turn on REST sync to create and resolve incidents through the REST API.'}
+          />
+        </>
+      )}
       <Flex gap={8} wrap="wrap">
         <Button onClick={props.onNew}>New</Button>
-        <Button icon={<SaveOutlined />} disabled={!props.user || !props.contactTarget} onClick={props.onSave}>{props.editingContactId ? 'Update contact' : 'Save contact'}</Button>
+        <Button icon={<SaveOutlined />} disabled={!props.user || Boolean(saveBlockReason)} onClick={props.onSave}>{props.editingContactId ? 'Update contact' : 'Save contact'}</Button>
+        <Button icon={<PlayCircleOutlined />} disabled={!props.user || Boolean(saveBlockReason)} onClick={props.onTest}>Save and test</Button>
       </Flex>
+      {saveBlockReason && <Typography.Text type="secondary">{saveBlockReason}</Typography.Text>}
+      {props.contactStatus && <Alert type={props.contactStatus.startsWith('Success') ? 'success' : props.contactStatus.startsWith('Skipped') ? 'warning' : 'error'} showIcon message={props.contactStatus} />}
       <Field label="Find contact">
         <Input.Search allowClear value={contactSearch} onChange={(event) => setContactSearch(event.target.value)} />
       </Field>
@@ -822,6 +1317,9 @@ export function ContactsSection(props: {
             <RowActions items={[
               { key: 'edit', label: 'Edit', onClick: () => props.onOpen(contact) },
               { key: 'use', label: 'Use in alert', onClick: () => props.onUseForAlert(contact) },
+              { key: 'validate', label: 'Validate', onClick: () => props.onValidateSaved(contact) },
+              { key: 'test', label: 'Test', onClick: () => props.onTestSaved(contact) },
+              { key: 'resolve', label: 'Test resolve', disabled: contact.kind !== 'pagerduty', onClick: () => props.onResolveTestSaved(contact) },
               {
                 key: 'delete',
                 label: 'Delete',
@@ -835,8 +1333,8 @@ export function ContactsSection(props: {
               }
             ]} />
             <List.Item.Meta
-              title={<Flex gap={6} align="center" wrap="wrap"><span>{contact.name}</span><Tag>{contact.kind}</Tag></Flex>}
-              description={contact.target}
+              title={<ContactTitle contact={contact} history={historyByContact[contact.id]} />}
+              description={<ContactDescription contact={contact} history={historyByContact[contact.id]} />}
             />
           </Flex>
         </List.Item>
@@ -850,20 +1348,284 @@ function contactTargetPlaceholder(kind: ContactEndpoint['kind']): string {
     case 'email':
       return 'alerts@example.com';
     case 'pagerduty':
-      return 'PagerDuty integration URL';
+      return 'https://events.pagerduty.com/v2/enqueue';
     default:
       return 'https://example.com/alerts';
   }
 }
 
-export function IncidentsSection({ incidents, onResolve }: { incidents: AlertIncident[]; onResolve: (incident: AlertIncident) => void }) {
+function ContactTitle({ contact, history }: { contact: ContactEndpoint; history?: AlertNotification[] }) {
+  const latest = history?.[0];
+  return (
+    <Flex gap={6} align="center" wrap="wrap">
+      <span>{contact.name}</span>
+      <Tag>{contact.kind}</Tag>
+      {latest && <Tag color={notificationStatusColor(latest.status)}>{latest.status}</Tag>}
+    </Flex>
+  );
+}
+
+function ContactDescription({ contact, history }: { contact: ContactEndpoint; history?: AlertNotification[] }) {
+  const latest = history?.[0];
+  return (
+    <Space direction="vertical" size={4} className="full">
+      <Typography.Text type="secondary">{contact.target}</Typography.Text>
+      {latest ? (
+        <Typography.Text type="secondary">
+          Last delivery {new Date(latest.created_at).toLocaleString()}{latest.status_code > 0 ? ` - HTTP ${latest.status_code}` : ''}{latest.error ? ` - ${latest.error}` : ''}
+        </Typography.Text>
+      ) : (
+        <Typography.Text type="secondary">No delivery history yet</Typography.Text>
+      )}
+      {history && history.length > 0 && (
+        <Collapse
+          size="small"
+          ghost
+          items={[{
+            key: 'history',
+            label: `Recent deliveries (${history.length})`,
+            children: (
+              <Space direction="vertical" size={6} className="full">
+                {history.slice(0, 5).map((item) => (
+                  <Flex key={item.id} gap={6} wrap="wrap">
+                    <Tag color={notificationStatusColor(item.status)}>{item.status}</Tag>
+                    {item.status_code > 0 && <Tag>HTTP {item.status_code}</Tag>}
+                    <Typography.Text type="secondary">{new Date(item.created_at).toLocaleString()}</Typography.Text>
+                  </Flex>
+                ))}
+              </Space>
+            )
+          }]}
+        />
+      )}
+    </Space>
+  );
+}
+
+function contactNotificationHistory(contacts: ContactEndpoint[], notifications: AlertNotification[]): Record<string, AlertNotification[]> {
+  const byContact: Record<string, AlertNotification[]> = {};
+  contacts.forEach((contact) => {
+    byContact[contact.id] = notifications.filter((notification) => (
+      notification.contact_kind === contact.kind && notification.contact_target === contact.target
+    )).slice(0, 10);
+  });
+  return byContact;
+}
+
+function contactSaveBlockReason(props: {
+  contactKind: ContactEndpoint['kind'];
+  contactTarget: string;
+  pagerDutyRoutingKeySecretRef: string;
+  pagerDutyRoutingKeyValue: string;
+  pagerDutyRestSyncEnabled?: boolean;
+  pagerDutyRestApiKeySecretRef?: string;
+  pagerDutyRestApiKeyValue?: string;
+  pagerDutyServiceID?: string;
+  pagerDutyFromEmail?: string;
+  pagerDutySyncInterval?: number;
+}): string {
+  if (props.contactKind === 'pagerduty') {
+    if (props.pagerDutyRestSyncEnabled) {
+      const missing = [
+        props.pagerDutyRestApiKeySecretRef?.trim() || props.pagerDutyRestApiKeyValue?.trim() ? '' : 'REST API key secret or pasted key',
+        props.pagerDutyServiceID?.trim() ? '' : 'REST service ID',
+        props.pagerDutyFromEmail?.trim() ? '' : 'REST From email'
+      ].filter(Boolean);
+      const interval = Number(props.pagerDutySyncInterval || 0);
+      if (interval > 0 && interval < 30) return 'PagerDuty auto sync interval must be 0 or at least 30 seconds.';
+      return missing.length > 0 ? `REST sync is missing: ${missing.join(', ')}.` : '';
+    }
+    return props.pagerDutyRoutingKeySecretRef.trim() || props.pagerDutyRoutingKeyValue.trim() ? '' : 'PagerDuty Events delivery needs an integration key secret or pasted integration key.';
+  }
+  return props.contactTarget.trim() ? '' : 'Contact target is required.';
+}
+
+function pagerDutyRestReady(props: {
+  pagerDutyRestSyncEnabled: boolean;
+  pagerDutyRestApiKeySecretRef: string;
+  pagerDutyRestApiKeyValue: string;
+  pagerDutyServiceID: string;
+  pagerDutyFromEmail: string;
+}): boolean {
+  return Boolean(
+    props.pagerDutyRestSyncEnabled &&
+    (props.pagerDutyRestApiKeySecretRef.trim() || props.pagerDutyRestApiKeyValue.trim()) &&
+    props.pagerDutyServiceID.trim() &&
+    props.pagerDutyFromEmail.trim()
+  );
+}
+
+export function IncidentsSection({ incidents, onAcknowledge, onResolve, onSyncPagerDuty }: { incidents: AlertIncident[]; onAcknowledge: (incident: AlertIncident) => void; onResolve: (incident: AlertIncident) => void; onSyncPagerDuty: () => void }) {
   return (
     <Section title="Incidents">
+      <Flex gap={8} wrap="wrap">
+        <Button size="small" onClick={onSyncPagerDuty}>Sync PagerDuty</Button>
+      </Flex>
       <ActionList items={incidents.slice(0, 8)} empty="No incidents" render={(incident) => (
-        <List.Item key={incident.id} actions={incident.status === 'firing' ? [<Button key="resolve" size="small" onClick={() => onResolve(incident)}>Resolve</Button>] : []}>
+        <List.Item key={incident.id}>
+          <Flex gap={8} align="start" className="action-row full">
+            <RowActions items={incidentActions(incident, onAcknowledge, onResolve)} />
           <List.Item.Meta
-            title={<Space><Tag color={incident.status === 'firing' ? 'red' : 'green'}>{incident.status}</Tag><span>{incident.value} x{incident.occurrence_count || 1}</span></Space>}
-            description={new Date(incident.last_seen_at || incident.created_at).toLocaleString()}
+            title={
+              <Space wrap>
+                <Tag color={incidentStatusColor(incident.status)}>{incidentStatusLabel(incident.status)}</Tag>
+                {incident.rule_name && <Typography.Text strong>{incident.rule_name}</Typography.Text>}
+                <Typography.Text strong>{incidentTitle(incident)}</Typography.Text>
+                {incident.contact_name && <Tag>{incident.contact_name}</Tag>}
+                {incident.external_provider && <Tag>{incident.external_provider}</Tag>}
+                {incident.external_sync_status && <Tag color={incident.external_sync_status === 'failed' ? 'red' : 'blue'}>{incident.external_sync_status}</Tag>}
+              </Space>
+            }
+            description={
+              <Space direction="vertical" size={4} className="full">
+                <Typography.Text type="secondary">value {incident.value} · {incident.occurrence_count || 1} occurrence{(incident.occurrence_count || 1) === 1 ? '' : 's'} · {new Date(incident.last_seen_at || incident.created_at).toLocaleString()}</Typography.Text>
+                {incident.external_incident_url && (
+                  <Typography.Link href={incident.external_incident_url} target="_blank" rel="noreferrer">{incident.external_incident_id || incident.external_incident_url}</Typography.Link>
+                )}
+                {incident.external_sync_error && <Typography.Text type="danger">{incident.external_sync_error}</Typography.Text>}
+              </Space>
+            }
+          />
+          </Flex>
+        </List.Item>
+      )} list />
+    </Section>
+  );
+}
+
+function incidentActions(incident: AlertIncident, onAcknowledge: (incident: AlertIncident) => void, onResolve: (incident: AlertIncident) => void) {
+  if (incident.status === 'firing') {
+    return [
+      { key: 'ack', label: 'Acknowledge', onClick: () => onAcknowledge(incident) },
+      {
+        key: 'resolve',
+        label: 'Resolve',
+        confirm: {
+          title: 'Resolve incident?',
+          content: 'This also sends a resolve update to PagerDuty when the incident has a PagerDuty REST mapping.',
+          okText: 'Resolve'
+        },
+        onClick: () => onResolve(incident)
+      }
+    ];
+  }
+  if (incident.status === 'acknowledged') {
+    return [{
+      key: 'resolve',
+      label: 'Resolve',
+      confirm: {
+        title: 'Resolve incident?',
+        content: 'This also sends a resolve update to PagerDuty when the incident has a PagerDuty REST mapping.',
+        okText: 'Resolve'
+      },
+      onClick: () => onResolve(incident)
+    }];
+  }
+  return [];
+}
+
+function incidentStatusColor(status: string) {
+  switch (status) {
+    case 'resolved':
+      return 'green';
+    case 'acknowledged':
+      return 'orange';
+    case 'firing':
+    case 'notify_failed':
+      return 'red';
+    default:
+      return undefined;
+  }
+}
+
+function incidentStatusLabel(status: string) {
+  switch (status) {
+    case 'firing':
+      return 'open';
+    case 'acknowledged':
+      return 'ack';
+    case 'resolved':
+      return 'resolved';
+    default:
+      return status;
+  }
+}
+
+function incidentTitle(incident: AlertIncident) {
+  const row = typeof incident.payload.row === 'object' && incident.payload.row !== null ? incident.payload.row as Record<string, unknown> : {};
+  return firstText(
+    incident.payload.summary,
+    incident.payload.message,
+    row.message,
+    incident.rule_name,
+    `${firstText(incident.payload.ruleName, 'Alert')} fired with value ${incident.value}`
+  );
+}
+
+function firstText(...values: unknown[]) {
+  for (const value of values) {
+    const text = String(value ?? '').trim();
+    if (text && text !== '<nil>') return text;
+  }
+  return '';
+}
+
+export function NotificationsSection({ notifications }: { notifications: AlertNotification[] }) {
+  const [statusFilter, setStatusFilter] = React.useState('all');
+  const [kindFilter, setKindFilter] = React.useState('all');
+  const [notificationSearch, setNotificationSearch] = React.useState('');
+  const kinds = React.useMemo(() => Array.from(new Set(notifications.map((notification) => notification.contact_kind).filter(Boolean))).sort(), [notifications]);
+  const filteredNotifications = React.useMemo(() => {
+    const term = notificationSearch.trim().toLowerCase();
+    return notifications.filter((notification) => {
+      if (statusFilter !== 'all' && notification.status !== statusFilter) return false;
+      if (kindFilter !== 'all' && notification.contact_kind !== kindFilter) return false;
+      if (!term) return true;
+      return [
+        notification.contact_kind,
+        notification.contact_target,
+        notification.status,
+        notification.error,
+        notification.alert_rule_id ? 'alert' : 'contact test'
+      ].some((value) => String(value || '').toLowerCase().includes(term));
+    });
+  }, [kindFilter, notificationSearch, notifications, statusFilter]);
+
+  return (
+    <Section title="Notifications">
+      <Flex gap={8} wrap="wrap">
+        <Select size="small" value={statusFilter} onChange={setStatusFilter} className="role-select">
+          <Select.Option value="all">All statuses</Select.Option>
+          <Select.Option value="failed">Failed</Select.Option>
+          <Select.Option value="skipped">Skipped</Select.Option>
+          <Select.Option value="success">Success</Select.Option>
+        </Select>
+        <Select size="small" value={kindFilter} onChange={setKindFilter} className="role-select">
+          <Select.Option value="all">All kinds</Select.Option>
+          {kinds.map((kind) => <Select.Option key={kind} value={kind}>{kind}</Select.Option>)}
+        </Select>
+      </Flex>
+      <Field label="Find notification">
+        <Input.Search allowClear value={notificationSearch} onChange={(event) => setNotificationSearch(event.target.value)} />
+      </Field>
+      <ActionList items={filteredNotifications.slice(0, 25)} empty="No notifications" render={(notification) => (
+        <List.Item key={notification.id}>
+          <List.Item.Meta
+            title={<Space wrap><Tag color={notificationStatusColor(notification.status)}>{notification.status}</Tag><Tag>{notification.contact_kind}</Tag><Tag>{notification.alert_rule_id ? 'alert' : 'test'}</Tag>{notification.status_code > 0 && <Tag>HTTP {notification.status_code}</Tag>}</Space>}
+            description={
+              <Space direction="vertical" size={4} className="full">
+                <Typography.Text type="secondary">{[notification.contact_target, notification.error, new Date(notification.created_at).toLocaleString()].filter(Boolean).join(' - ')}</Typography.Text>
+                <Collapse
+                  size="small"
+                  ghost
+                  items={[{
+                    key: 'details',
+                    label: 'Details',
+                    children: <pre className="json-preview">{JSON.stringify(notification.payload, null, 2)}</pre>
+                  }]}
+                />
+              </Space>
+            }
           />
         </List.Item>
       )} list />
@@ -871,19 +1633,17 @@ export function IncidentsSection({ incidents, onResolve }: { incidents: AlertInc
   );
 }
 
-export function NotificationsSection({ notifications }: { notifications: AlertNotification[] }) {
-  return (
-    <Section title="Notifications">
-      <ActionList items={notifications.slice(0, 8)} empty="No notifications" render={(notification) => (
-        <List.Item key={notification.id}>
-          <List.Item.Meta
-            title={<Space><Tag color={notification.status === 'failed' ? 'red' : 'green'}>{notification.status}</Tag><span>{notification.contact_kind}</span></Space>}
-            description={[notification.contact_target, notification.error, new Date(notification.created_at).toLocaleString()].filter(Boolean).join(' - ')}
-          />
-        </List.Item>
-      )} list />
-    </Section>
-  );
+function notificationStatusColor(status: string): string {
+  switch (status) {
+    case 'failed':
+      return 'red';
+    case 'skipped':
+      return 'orange';
+    case 'success':
+      return 'green';
+    default:
+      return 'default';
+  }
 }
 
 export function InvitesSection(props: {
@@ -1025,9 +1785,9 @@ export function AuditSection({ auditEvents }: { auditEvents: AuditEvent[] }) {
 }
 
 export function ControlSections(props: {
-  items: { key: string; label: string; children: React.ReactNode }[];
+  items: { key: string; label: React.ReactNode; children: React.ReactNode }[];
 }) {
-  return <Collapse bordered={false} defaultActiveKey={['access', 'query']} items={props.items} />;
+  return <Collapse bordered={false} defaultActiveKey={['access', 'settings', 'query']} items={props.items} />;
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
@@ -1107,6 +1867,10 @@ function defaultRowActionIcon(key: string): React.ReactNode {
   if (key.includes('load') || key.includes('use')) return <PlayCircleOutlined />;
   if (key.includes('toggle')) return <CheckCircleOutlined />;
   return undefined;
+}
+
+function copyText(value: string) {
+  navigator.clipboard?.writeText(value).catch(() => undefined);
 }
 
 function firstDimension(config: PublicConfig | null, datasetID: string): string {

@@ -41,3 +41,26 @@ func TestValidateCanExplicitlyAllowInsecureProductionDefaults(t *testing.T) {
 		t.Fatalf("Validate() = %v", err)
 	}
 }
+
+func TestPublicConfigIncludesAlertDeliveryReadiness(t *testing.T) {
+	cfg := Config{
+		Auth: AuthConfig{DevMode: true},
+		Alerts: AlertConfig{
+			Enabled:  true,
+			SMTPHost: "smtp.example.com",
+			SMTPFrom: "alerts@example.com",
+			SMTPUser: "dbviz",
+		},
+	}
+
+	public := cfg.Public()
+	if !public.AlertDelivery.AlertsEnabled {
+		t.Fatal("alerts enabled flag was not exposed")
+	}
+	if !public.AlertDelivery.SMTPConfigured {
+		t.Fatal("smtp configured flag was not exposed")
+	}
+	if !public.AlertDelivery.SMTPHasAuth {
+		t.Fatal("smtp auth flag was not exposed")
+	}
+}

@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
     display_name text NOT NULL DEFAULT '',
     provider text NOT NULL,
     role text NOT NULL DEFAULT 'viewer' CHECK (role IN ('owner', 'admin', 'editor', 'viewer')),
+    preferences jsonb NOT NULL DEFAULT '{}'::jsonb,
     disabled_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now(),
     UNIQUE(provider, subject),
@@ -100,6 +101,19 @@ CREATE TABLE IF NOT EXISTS contact_endpoints (
     created_at timestamptz NOT NULL DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS tenant_secrets (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+    name text NOT NULL,
+    description text NOT NULL DEFAULT '',
+    ciphertext text NOT NULL,
+    nonce text NOT NULL,
+    key_version text NOT NULL DEFAULT 'v1',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (tenant_id, name)
+);
+
 CREATE TABLE IF NOT EXISTS alert_rules (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -117,7 +131,7 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
     tenant_id uuid NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
     alert_rule_id uuid REFERENCES alert_rules(id) ON DELETE SET NULL,
     fingerprint text NOT NULL DEFAULT '',
-    status text NOT NULL DEFAULT 'firing' CHECK (status IN ('firing', 'resolved', 'notify_failed')),
+    status text NOT NULL DEFAULT 'firing' CHECK (status IN ('firing', 'acknowledged', 'resolved', 'notify_failed')),
     value double precision NOT NULL DEFAULT 0,
     payload jsonb NOT NULL DEFAULT '{}'::jsonb,
     occurrence_count integer NOT NULL DEFAULT 1,
@@ -125,8 +139,21 @@ CREATE TABLE IF NOT EXISTS alert_incidents (
     last_seen_at timestamptz NOT NULL DEFAULT now(),
     last_notified_at timestamptz,
     resolved_at timestamptz,
+    external_provider text NOT NULL DEFAULT '',
+    external_incident_id text NOT NULL DEFAULT '',
+    external_incident_url text NOT NULL DEFAULT '',
+    external_sync_status text NOT NULL DEFAULT '',
+    external_sync_error text NOT NULL DEFAULT '',
+    external_last_synced_at timestamptz,
     created_at timestamptz NOT NULL DEFAULT now()
 );
+
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_provider text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_incident_id text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_incident_url text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_sync_status text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_sync_error text NOT NULL DEFAULT '';
+ALTER TABLE IF EXISTS alert_incidents ADD COLUMN IF NOT EXISTS external_last_synced_at timestamptz;
 
 CREATE TABLE IF NOT EXISTS alert_notifications (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -170,6 +197,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
 );
 
 ALTER TABLE users ADD COLUMN IF NOT EXISTS disabled_at timestamptz;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS preferences jsonb NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE data_sources ADD COLUMN IF NOT EXISTS updated_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS fingerprint text NOT NULL DEFAULT '';
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS occurrence_count integer NOT NULL DEFAULT 1;
@@ -177,6 +205,8 @@ ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS first_seen_at timestamptz N
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS last_seen_at timestamptz NOT NULL DEFAULT now();
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS last_notified_at timestamptz;
 ALTER TABLE alert_incidents ADD COLUMN IF NOT EXISTS resolved_at timestamptz;
+ALTER TABLE alert_incidents DROP CONSTRAINT IF EXISTS alert_incidents_status_check;
+ALTER TABLE alert_incidents ADD CONSTRAINT alert_incidents_status_check CHECK (status IN ('firing', 'acknowledged', 'resolved', 'notify_failed'));
 
 UPDATE alert_incidents
 SET fingerprint = COALESCE(NULLIF(payload->>'fingerprint', ''), COALESCE(alert_rule_id::text, 'legacy') || ':' || id::text)
@@ -188,16 +218,18 @@ CREATE INDEX IF NOT EXISTS data_sources_tenant_id_idx ON data_sources(tenant_id)
 CREATE INDEX IF NOT EXISTS dashboards_tenant_id_idx ON dashboards(tenant_id);
 CREATE INDEX IF NOT EXISTS saved_queries_tenant_updated_idx ON saved_queries(tenant_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS charts_dashboard_id_idx ON charts(dashboard_id);
+CREATE INDEX IF NOT EXISTS tenant_secrets_tenant_updated_idx ON tenant_secrets(tenant_id, updated_at DESC);
 CREATE INDEX IF NOT EXISTS alert_rules_enabled_idx ON alert_rules(tenant_id, enabled);
 CREATE INDEX IF NOT EXISTS alert_incidents_tenant_created_idx ON alert_incidents(tenant_id, created_at DESC);
+DROP INDEX IF EXISTS alert_incidents_open_fingerprint_idx;
 CREATE UNIQUE INDEX IF NOT EXISTS alert_incidents_open_fingerprint_idx ON alert_incidents(tenant_id, fingerprint)
-    WHERE status = 'firing' AND resolved_at IS NULL;
+    WHERE status IN ('firing', 'acknowledged') AND resolved_at IS NULL;
 CREATE INDEX IF NOT EXISTS alert_notifications_tenant_created_idx ON alert_notifications(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS query_history_tenant_created_idx ON query_history(tenant_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS audit_events_tenant_created_idx ON audit_events(tenant_id, created_at DESC);
 
 GRANT USAGE ON SCHEMA public TO dbviz_web;
-GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, alert_rules, alert_incidents, alert_notifications, query_history, audit_events TO dbviz_web;
+GRANT SELECT, INSERT, UPDATE, DELETE ON tenants, users, tenant_invites, data_sources, dashboards, saved_queries, charts, contact_endpoints, tenant_secrets, alert_rules, alert_incidents, alert_notifications, query_history, audit_events TO dbviz_web;
 
 INSERT INTO tenants (slug, name)
 VALUES ('dev', 'Development')
@@ -235,6 +267,7 @@ ALTER TABLE dashboards ENABLE ROW LEVEL SECURITY;
 ALTER TABLE saved_queries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE charts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contact_endpoints ENABLE ROW LEVEL SECURITY;
+ALTER TABLE tenant_secrets ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_rules ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_incidents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE alert_notifications ENABLE ROW LEVEL SECURITY;
@@ -336,6 +369,11 @@ CREATE POLICY charts_tenant_isolation ON charts
 
 DROP POLICY IF EXISTS contact_endpoints_tenant_isolation ON contact_endpoints;
 CREATE POLICY contact_endpoints_tenant_isolation ON contact_endpoints
+    FOR ALL USING (tenant_id = request_tenant_id())
+    WITH CHECK (tenant_id = request_tenant_id());
+
+DROP POLICY IF EXISTS tenant_secrets_tenant_isolation ON tenant_secrets;
+CREATE POLICY tenant_secrets_tenant_isolation ON tenant_secrets
     FOR ALL USING (tenant_id = request_tenant_id())
     WITH CHECK (tenant_id = request_tenant_id());
 
@@ -707,6 +745,137 @@ GRANT EXECUTE ON FUNCTION list_saved_queries() TO dbviz_web;
 GRANT EXECUTE ON FUNCTION save_saved_query(uuid, text, text, jsonb) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION delete_saved_query(uuid) TO dbviz_web;
 
+CREATE OR REPLACE FUNCTION list_tenant_secrets()
+RETURNS TABLE(id uuid, name text, description text, key_version text, created_at timestamptz, updated_at timestamptz)
+LANGUAGE sql STABLE
+AS $$
+    SELECT s.id, s.name, s.description, s.key_version, s.created_at, s.updated_at
+    FROM tenant_secrets s
+    WHERE s.tenant_id = request_tenant_id()
+    ORDER BY s.updated_at DESC;
+$$;
+
+CREATE OR REPLACE FUNCTION get_tenant_secret(secret_name text)
+RETURNS TABLE(name text, ciphertext text, nonce text, key_version text)
+LANGUAGE sql STABLE
+AS $$
+    SELECT s.name, s.ciphertext, s.nonce, s.key_version
+    FROM tenant_secrets s
+    WHERE s.tenant_id = request_tenant_id()
+      AND s.name = secret_name
+    LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION list_tenant_secret_usage(secret_name text)
+RETURNS TABLE(resource_type text, resource_id uuid, resource_name text, field text)
+LANGUAGE sql STABLE
+AS $$
+    SELECT 'contact'::text, c.id, c.name, 'PagerDuty Events integration key'::text
+    FROM contact_endpoints c
+    WHERE c.tenant_id = request_tenant_id()
+      AND c.config->>'routingKeySecretRef' = secret_name
+    UNION ALL
+    SELECT 'contact'::text, c.id, c.name, 'PagerDuty REST API key'::text
+    FROM contact_endpoints c
+    WHERE c.tenant_id = request_tenant_id()
+      AND c.config->>'restApiKeySecretRef' = secret_name
+    UNION ALL
+    SELECT 'contact'::text, c.id, c.name, 'Webhook bearer token'::text
+    FROM contact_endpoints c
+    WHERE c.tenant_id = request_tenant_id()
+      AND c.config->>'tokenSecretRef' = secret_name
+    UNION ALL
+    SELECT 'contact'::text, c.id, c.name, 'Webhook custom header'::text
+    FROM contact_endpoints c
+    WHERE c.tenant_id = request_tenant_id()
+      AND c.config->>'headerValueSecretRef' = secret_name
+    UNION ALL
+    SELECT 'data_source'::text, d.id, d.name, 'Password'::text
+    FROM data_sources d
+    WHERE d.tenant_id = request_tenant_id()
+      AND d.config->>'passwordSecretRef' = secret_name
+    ORDER BY 1, 3, 4;
+$$;
+
+CREATE OR REPLACE FUNCTION save_tenant_secret(secret_id uuid, secret_name text, secret_description text, secret_ciphertext text, secret_nonce text, secret_key_version text)
+RETURNS TABLE(id uuid, name text, description text, key_version text, created_at timestamptz, updated_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_id uuid;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    IF NULLIF(trim(secret_name), '') IS NULL THEN
+        RAISE EXCEPTION 'secret name is required';
+    END IF;
+
+    IF NULLIF(secret_ciphertext, '') IS NULL OR NULLIF(secret_nonce, '') IS NULL THEN
+        RAISE EXCEPTION 'encrypted secret value is required';
+    END IF;
+
+    IF secret_id IS NULL THEN
+        INSERT INTO tenant_secrets (tenant_id, name, description, ciphertext, nonce, key_version)
+        VALUES (
+            request_tenant_id(),
+            trim(secret_name),
+            COALESCE(secret_description, ''),
+            secret_ciphertext,
+            secret_nonce,
+            COALESCE(NULLIF(secret_key_version, ''), 'v1')
+        )
+        ON CONFLICT ON CONSTRAINT tenant_secrets_tenant_id_name_key DO UPDATE
+        SET description = EXCLUDED.description,
+            ciphertext = EXCLUDED.ciphertext,
+            nonce = EXCLUDED.nonce,
+            key_version = EXCLUDED.key_version,
+            updated_at = now()
+        RETURNING tenant_secrets.id INTO saved_id;
+    ELSE
+        UPDATE tenant_secrets
+        SET name = trim(secret_name),
+            description = COALESCE(secret_description, ''),
+            ciphertext = secret_ciphertext,
+            nonce = secret_nonce,
+            key_version = COALESCE(NULLIF(secret_key_version, ''), 'v1'),
+            updated_at = now()
+        WHERE tenant_secrets.id = secret_id
+          AND tenant_secrets.tenant_id = request_tenant_id()
+        RETURNING tenant_secrets.id INTO saved_id;
+    END IF;
+
+    RETURN QUERY
+    SELECT s.id, s.name, s.description, s.key_version, s.created_at, s.updated_at
+    FROM tenant_secrets s
+    WHERE s.id = saved_id;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION delete_tenant_secret(secret_id uuid)
+RETURNS TABLE(id uuid, name text, description text, key_version text, created_at timestamptz, updated_at timestamptz)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    RETURN QUERY
+    DELETE FROM tenant_secrets s
+    WHERE s.id = secret_id
+      AND s.tenant_id = request_tenant_id()
+    RETURNING s.id, s.name, s.description, s.key_version, s.created_at, s.updated_at;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_tenant_secrets() TO dbviz_web;
+GRANT EXECUTE ON FUNCTION get_tenant_secret(text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION list_tenant_secret_usage(text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION save_tenant_secret(uuid, text, text, text, text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION delete_tenant_secret(uuid) TO dbviz_web;
+
 CREATE OR REPLACE FUNCTION list_contact_endpoints()
 RETURNS TABLE(id uuid, name text, kind text, target text, config jsonb, created_at timestamptz)
 LANGUAGE sql STABLE
@@ -787,6 +956,8 @@ CREATE OR REPLACE FUNCTION list_alert_incidents(incident_limit integer DEFAULT 1
 RETURNS TABLE(
     id uuid,
     alert_rule_id uuid,
+    rule_name text,
+    contact_name text,
     fingerprint text,
     status text,
     value double precision,
@@ -796,6 +967,12 @@ RETURNS TABLE(
     last_seen_at timestamptz,
     last_notified_at timestamptz,
     resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
     created_at timestamptz
 )
 LANGUAGE sql STABLE
@@ -803,6 +980,8 @@ AS $$
     SELECT
         i.id,
         i.alert_rule_id,
+        COALESCE(a.name, '') AS rule_name,
+        COALESCE(c.name, '') AS contact_name,
         i.fingerprint,
         i.status,
         i.value,
@@ -812,8 +991,16 @@ AS $$
         i.last_seen_at,
         i.last_notified_at,
         i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
         i.created_at
     FROM alert_incidents i
+    LEFT JOIN alert_rules a ON a.id = i.alert_rule_id AND a.tenant_id = i.tenant_id
+    LEFT JOIN contact_endpoints c ON c.id = a.contact_endpoint_id AND c.tenant_id = i.tenant_id
     WHERE i.tenant_id = request_tenant_id()
     ORDER BY i.last_seen_at DESC
     LIMIT LEAST(GREATEST(COALESCE(incident_limit, 100), 1), 500);
@@ -851,6 +1038,146 @@ AS $$
     LIMIT LEAST(GREATEST(COALESCE(notification_limit, 100), 1), 500);
 $$;
 
+CREATE OR REPLACE FUNCTION record_contact_test_notification(
+    notification_contact_kind text,
+    notification_contact_target text,
+    delivery_status text,
+    delivery_status_code integer,
+    delivery_error text,
+    delivery_payload jsonb
+)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    alert_incident_id uuid,
+    contact_kind text,
+    contact_target text,
+    status text,
+    status_code integer,
+    error text,
+    payload jsonb,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    normalized_status text;
+    saved_id uuid;
+BEGIN
+    IF request_tenant_id() IS NULL THEN
+        RAISE EXCEPTION 'tenant context is required';
+    END IF;
+
+    normalized_status := COALESCE(NULLIF(delivery_status, ''), 'failed');
+    IF normalized_status NOT IN ('success', 'failed', 'skipped') THEN
+        normalized_status := 'failed';
+    END IF;
+
+    INSERT INTO alert_notifications (
+        tenant_id,
+        contact_kind,
+        contact_target,
+        status,
+        status_code,
+        error,
+        payload
+    )
+    VALUES (
+        request_tenant_id(),
+        COALESCE(notification_contact_kind, ''),
+        COALESCE(notification_contact_target, ''),
+        normalized_status,
+        GREATEST(COALESCE(delivery_status_code, 0), 0),
+        LEFT(COALESCE(delivery_error, ''), 2000),
+        COALESCE(delivery_payload, '{}'::jsonb)
+    )
+    RETURNING alert_notifications.id INTO saved_id;
+
+    RETURN QUERY
+    SELECT
+        n.id,
+        n.alert_rule_id,
+        n.alert_incident_id,
+        n.contact_kind,
+        n.contact_target,
+        n.status,
+        n.status_code,
+        n.error,
+        n.payload,
+        n.created_at
+    FROM alert_notifications n
+    WHERE n.id = saved_id;
+END;
+$$;
+
+DROP FUNCTION IF EXISTS acknowledge_alert_incident(text, text, uuid);
+
+CREATE OR REPLACE FUNCTION acknowledge_alert_incident(actor_subject text, actor_provider text, incident_id uuid)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    value double precision,
+    payload jsonb,
+    occurrence_count integer,
+    first_seen_at timestamptz,
+    last_seen_at timestamptz,
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF NOT current_user_has_role(actor_subject, actor_provider, ARRAY['owner', 'admin', 'editor']) THEN
+        RAISE EXCEPTION 'insufficient role';
+    END IF;
+
+    UPDATE alert_incidents
+    SET status = 'acknowledged',
+        last_seen_at = now(),
+        resolved_at = NULL,
+        payload = alert_incidents.payload || jsonb_build_object('acknowledgedBy', actor_subject, 'acknowledgedManually', true, 'acknowledgedAt', now())
+    WHERE alert_incidents.id = incident_id
+      AND alert_incidents.tenant_id = request_tenant_id()
+      AND alert_incidents.status IN ('firing', 'acknowledged')
+      AND alert_incidents.resolved_at IS NULL
+    RETURNING alert_incidents.id INTO incident_id;
+
+    RETURN QUERY
+    SELECT
+        i.id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.value,
+        i.payload,
+        i.occurrence_count,
+        i.first_seen_at,
+        i.last_seen_at,
+        i.last_notified_at,
+        i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
+        i.created_at
+    FROM alert_incidents i
+    WHERE i.id = incident_id;
+END;
+$$;
+
+DROP FUNCTION IF EXISTS resolve_alert_incident(text, text, uuid);
+
 CREATE OR REPLACE FUNCTION resolve_alert_incident(actor_subject text, actor_provider text, incident_id uuid)
 RETURNS TABLE(
     id uuid,
@@ -864,6 +1191,12 @@ RETURNS TABLE(
     last_seen_at timestamptz,
     last_notified_at timestamptz,
     resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
     created_at timestamptz
 )
 LANGUAGE plpgsql
@@ -895,6 +1228,12 @@ BEGIN
         i.last_seen_at,
         i.last_notified_at,
         i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
         i.created_at
     FROM alert_incidents i
     WHERE i.id = incident_id;
@@ -981,6 +1320,8 @@ GRANT EXECUTE ON FUNCTION save_alert_rule(uuid, text, jsonb, jsonb, integer, boo
 GRANT EXECUTE ON FUNCTION delete_alert_rule(uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_incidents(integer) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION list_alert_notifications(integer) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION record_contact_test_notification(text, text, text, integer, text, jsonb) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION acknowledge_alert_incident(text, text, uuid) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION resolve_alert_incident(text, text, uuid) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_enabled_alert_rules_for_worker(worker_key text)
@@ -1027,6 +1368,38 @@ $$;
 
 GRANT EXECUTE ON FUNCTION list_enabled_alert_rules_for_worker(text) TO dbviz_web;
 
+CREATE OR REPLACE FUNCTION get_tenant_secret_for_worker(worker_key text, tenant_slug text, secret_name text)
+RETURNS TABLE(name text, ciphertext text, nonce text, key_version text)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    SELECT tenants.id INTO resolved_tenant_id
+    FROM tenants
+    WHERE tenants.slug = tenant_slug;
+
+    IF resolved_tenant_id IS NULL THEN
+        RAISE EXCEPTION 'tenant not found: %', tenant_slug;
+    END IF;
+
+    RETURN QUERY
+    SELECT s.name, s.ciphertext, s.nonce, s.key_version
+    FROM tenant_secrets s
+    WHERE s.tenant_id = resolved_tenant_id
+      AND s.name = secret_name
+    LIMIT 1;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_tenant_secret_for_worker(text, text, text) TO dbviz_web;
+
 DROP FUNCTION IF EXISTS record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb);
 DROP FUNCTION IF EXISTS record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer);
 
@@ -1052,6 +1425,12 @@ RETURNS TABLE(
     last_seen_at timestamptz,
     last_notified_at timestamptz,
     resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
     created_at timestamptz,
     deduped boolean,
     should_notify boolean
@@ -1095,7 +1474,7 @@ BEGIN
             FROM alert_incidents i
             WHERE i.tenant_id = resolved_tenant_id
               AND i.fingerprint = normalized_fingerprint
-              AND i.status = 'firing'
+              AND i.status IN ('firing', 'acknowledged')
               AND i.resolved_at IS NULL
             ORDER BY i.last_seen_at DESC
             LIMIT 1
@@ -1110,7 +1489,9 @@ BEGIN
         SELECT
             i.id, i.alert_rule_id, i.fingerprint, i.status, i.value, i.payload,
             i.occurrence_count, i.first_seen_at, i.last_seen_at, i.last_notified_at,
-            i.resolved_at, i.created_at, true, false
+            i.resolved_at, i.external_provider, i.external_incident_id, i.external_incident_url,
+            i.external_sync_status, i.external_sync_error, i.external_last_synced_at,
+            i.created_at, true, false
         FROM alert_incidents i
         WHERE i.id = saved_id;
         RETURN;
@@ -1121,7 +1502,7 @@ BEGIN
         FROM alert_incidents i
         WHERE i.tenant_id = resolved_tenant_id
           AND i.fingerprint = normalized_fingerprint
-          AND i.status = 'firing'
+          AND i.status IN ('firing', 'acknowledged')
           AND i.resolved_at IS NULL
         ORDER BY i.last_seen_at DESC
         LIMIT 1;
@@ -1146,7 +1527,9 @@ BEGIN
             SELECT
                 i.id, i.alert_rule_id, i.fingerprint, i.status, i.value, i.payload,
                 i.occurrence_count, i.first_seen_at, i.last_seen_at, i.last_notified_at,
-                i.resolved_at, i.created_at, true, notify_now
+                i.resolved_at, i.external_provider, i.external_incident_id, i.external_incident_url,
+                i.external_sync_status, i.external_sync_error, i.external_last_synced_at,
+                i.created_at, true, notify_now
             FROM alert_incidents i
             WHERE i.id = saved_id;
             RETURN;
@@ -1169,13 +1552,343 @@ BEGIN
     SELECT
         i.id, i.alert_rule_id, i.fingerprint, i.status, i.value, i.payload,
         i.occurrence_count, i.first_seen_at, i.last_seen_at, i.last_notified_at,
-        i.resolved_at, i.created_at, false, normalized_status = 'firing'
+        i.resolved_at, i.external_provider, i.external_incident_id, i.external_incident_url,
+        i.external_sync_status, i.external_sync_error, i.external_last_synced_at,
+        i.created_at, false, normalized_status = 'firing'
     FROM alert_incidents i
     WHERE i.id = saved_id;
 END;
 $$;
 
 GRANT EXECUTE ON FUNCTION record_alert_incident_for_worker(text, uuid, text, text, double precision, jsonb, text, integer) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION update_alert_incident_sync_for_worker(
+    worker_key text,
+    tenant_slug text,
+    incident_id uuid,
+    sync_external_provider text,
+    sync_external_incident_id text,
+    sync_external_incident_url text,
+    sync_status text,
+    sync_error text
+)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    value double precision,
+    payload jsonb,
+    occurrence_count integer,
+    first_seen_at timestamptz,
+    last_seen_at timestamptz,
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    SELECT tenants.id INTO resolved_tenant_id
+    FROM tenants
+    WHERE tenants.slug = tenant_slug;
+
+    IF resolved_tenant_id IS NULL THEN
+        RAISE EXCEPTION 'tenant not found: %', tenant_slug;
+    END IF;
+
+    UPDATE alert_incidents
+    SET external_provider = LEFT(COALESCE(NULLIF(sync_external_provider, ''), alert_incidents.external_provider), 80),
+        external_incident_id = LEFT(COALESCE(NULLIF(sync_external_incident_id, ''), alert_incidents.external_incident_id), 200),
+        external_incident_url = LEFT(COALESCE(NULLIF(sync_external_incident_url, ''), alert_incidents.external_incident_url), 1000),
+        external_sync_status = LEFT(COALESCE(NULLIF(sync_status, ''), 'unknown'), 80),
+        external_sync_error = LEFT(COALESCE(sync_error, ''), 2000),
+        external_last_synced_at = now()
+    WHERE alert_incidents.id = incident_id
+      AND alert_incidents.tenant_id = resolved_tenant_id;
+
+    RETURN QUERY
+    SELECT
+        i.id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.value,
+        i.payload,
+        i.occurrence_count,
+        i.first_seen_at,
+        i.last_seen_at,
+        i.last_notified_at,
+        i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
+        i.created_at
+    FROM alert_incidents i
+    WHERE i.id = incident_id
+      AND i.tenant_id = resolved_tenant_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION update_alert_incident_sync_for_worker(text, text, uuid, text, text, text, text, text) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION list_pagerduty_synced_incidents_for_worker(worker_key text)
+RETURNS TABLE(
+    id uuid,
+    tenant_id text,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    external_incident_id text,
+    external_incident_url text,
+    contact_target text,
+    contact_config jsonb
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    RETURN QUERY
+    SELECT
+        i.id,
+        t.slug AS tenant_id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.external_incident_id,
+        i.external_incident_url,
+        c.target AS contact_target,
+        COALESCE(c.config, '{}'::jsonb) AS contact_config
+    FROM alert_incidents i
+    JOIN tenants t ON t.id = i.tenant_id
+    JOIN alert_rules a ON a.id = i.alert_rule_id
+    JOIN contact_endpoints c ON c.id = a.contact_endpoint_id
+    WHERE c.kind = 'pagerduty'
+      AND COALESCE(c.config->>'restSyncEnabled', '') IN ('true', '1', 'yes', 'on')
+      AND COALESCE(NULLIF(c.config->>'autoSyncEnabled', ''), 'true') IN ('true', '1', 'yes', 'on')
+      AND i.external_provider = 'pagerduty'
+      AND i.external_incident_id <> ''
+      AND i.status IN ('firing', 'acknowledged')
+      AND i.resolved_at IS NULL
+      AND (
+          CASE
+              WHEN COALESCE(c.config->>'syncIntervalSeconds', '') ~ '^[0-9]+$' THEN (c.config->>'syncIntervalSeconds')::integer
+              ELSE 0
+          END = 0
+          OR i.external_last_synced_at IS NULL
+          OR now() - i.external_last_synced_at >= make_interval(secs => GREATEST(
+              CASE
+                  WHEN COALESCE(c.config->>'syncIntervalSeconds', '') ~ '^[0-9]+$' THEN (c.config->>'syncIntervalSeconds')::integer
+                  ELSE 0
+              END,
+              30
+          ))
+      )
+    ORDER BY i.last_seen_at DESC
+    LIMIT 500;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents_for_worker(text) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION list_pagerduty_synced_incidents()
+RETURNS TABLE(
+    id uuid,
+    tenant_id text,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    external_incident_id text,
+    external_incident_url text,
+    contact_target text,
+    contact_config jsonb
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        i.id,
+        t.slug AS tenant_id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.external_incident_id,
+        i.external_incident_url,
+        c.target AS contact_target,
+        COALESCE(c.config, '{}'::jsonb) AS contact_config
+    FROM alert_incidents i
+    JOIN tenants t ON t.id = i.tenant_id
+    JOIN alert_rules a ON a.id = i.alert_rule_id
+    JOIN contact_endpoints c ON c.id = a.contact_endpoint_id
+    WHERE i.tenant_id = request_tenant_id()
+      AND c.kind = 'pagerduty'
+      AND COALESCE(c.config->>'restSyncEnabled', '') IN ('true', '1', 'yes', 'on')
+      AND i.external_provider = 'pagerduty'
+      AND i.external_incident_id <> ''
+      AND i.status IN ('firing', 'acknowledged')
+      AND i.resolved_at IS NULL
+    ORDER BY i.last_seen_at DESC
+    LIMIT 100;
+$$;
+
+GRANT EXECUTE ON FUNCTION list_pagerduty_synced_incidents() TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION get_pagerduty_incident_contact(incident_id uuid)
+RETURNS TABLE(
+    id uuid,
+    tenant_id text,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    external_incident_id text,
+    external_incident_url text,
+    contact_target text,
+    contact_config jsonb
+)
+LANGUAGE sql STABLE
+AS $$
+    SELECT
+        i.id,
+        t.slug AS tenant_id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.external_incident_id,
+        i.external_incident_url,
+        c.target AS contact_target,
+        COALESCE(c.config, '{}'::jsonb) AS contact_config
+    FROM alert_incidents i
+    JOIN tenants t ON t.id = i.tenant_id
+    JOIN alert_rules a ON a.id = i.alert_rule_id
+    JOIN contact_endpoints c ON c.id = a.contact_endpoint_id
+    WHERE i.tenant_id = request_tenant_id()
+      AND i.id = incident_id
+      AND c.kind = 'pagerduty'
+      AND i.status IN ('firing', 'acknowledged')
+      AND i.resolved_at IS NULL
+    LIMIT 1;
+$$;
+
+GRANT EXECUTE ON FUNCTION get_pagerduty_incident_contact(uuid) TO dbviz_web;
+
+CREATE OR REPLACE FUNCTION reconcile_pagerduty_incident_for_worker(
+    worker_key text,
+    tenant_slug text,
+    incident_id uuid,
+    remote_status text,
+    sync_external_incident_url text,
+    sync_status text,
+    sync_error text
+)
+RETURNS TABLE(
+    id uuid,
+    alert_rule_id uuid,
+    fingerprint text,
+    status text,
+    value double precision,
+    payload jsonb,
+    occurrence_count integer,
+    first_seen_at timestamptz,
+    last_seen_at timestamptz,
+    last_notified_at timestamptz,
+    resolved_at timestamptz,
+    external_provider text,
+    external_incident_id text,
+    external_incident_url text,
+    external_sync_status text,
+    external_sync_error text,
+    external_last_synced_at timestamptz,
+    created_at timestamptz
+)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+    resolved_tenant_id uuid;
+    normalized_remote_status text;
+    normalized_sync_status text;
+BEGIN
+    IF worker_key IS NULL OR worker_key <> COALESCE(current_setting('app.alert_worker_key', true), 'dev-alert-worker-key') THEN
+        RAISE EXCEPTION 'invalid alert worker key';
+    END IF;
+
+    SELECT tenants.id INTO resolved_tenant_id
+    FROM tenants
+    WHERE tenants.slug = tenant_slug;
+
+    IF resolved_tenant_id IS NULL THEN
+        RAISE EXCEPTION 'tenant not found: %', tenant_slug;
+    END IF;
+
+    normalized_remote_status := lower(COALESCE(remote_status, ''));
+    normalized_sync_status := COALESCE(NULLIF(sync_status, ''), 'remote_' || COALESCE(NULLIF(normalized_remote_status, ''), 'unknown'));
+
+    UPDATE alert_incidents
+    SET status = CASE
+            WHEN normalized_remote_status = 'resolved' THEN 'resolved'
+            WHEN normalized_remote_status = 'acknowledged' THEN 'acknowledged'
+            WHEN normalized_remote_status = 'triggered' THEN 'firing'
+            ELSE alert_incidents.status
+        END,
+        resolved_at = CASE WHEN normalized_remote_status = 'resolved' THEN COALESCE(alert_incidents.resolved_at, now()) ELSE alert_incidents.resolved_at END,
+        last_seen_at = now(),
+        payload = alert_incidents.payload || jsonb_build_object('pagerDutyRemoteStatus', normalized_remote_status, 'pagerDutyReconciledAt', now()),
+        external_incident_url = LEFT(COALESCE(NULLIF(sync_external_incident_url, ''), alert_incidents.external_incident_url), 1000),
+        external_sync_status = LEFT(normalized_sync_status, 80),
+        external_sync_error = LEFT(COALESCE(sync_error, ''), 2000),
+        external_last_synced_at = now()
+    WHERE alert_incidents.id = incident_id
+      AND alert_incidents.tenant_id = resolved_tenant_id;
+
+    RETURN QUERY
+    SELECT
+        i.id,
+        i.alert_rule_id,
+        i.fingerprint,
+        i.status,
+        i.value,
+        i.payload,
+        i.occurrence_count,
+        i.first_seen_at,
+        i.last_seen_at,
+        i.last_notified_at,
+        i.resolved_at,
+        i.external_provider,
+        i.external_incident_id,
+        i.external_incident_url,
+        i.external_sync_status,
+        i.external_sync_error,
+        i.external_last_synced_at,
+        i.created_at
+    FROM alert_incidents i
+    WHERE i.id = incident_id
+      AND i.tenant_id = resolved_tenant_id;
+END;
+$$;
+
+GRANT EXECUTE ON FUNCTION reconcile_pagerduty_incident_for_worker(text, text, uuid, text, text, text, text) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION record_alert_notification_for_worker(
     worker_key text,
@@ -1333,6 +2046,38 @@ AS $$
     LIMIT 1;
 $$;
 
+CREATE OR REPLACE FUNCTION current_user_preferences(user_subject text, user_provider text)
+RETURNS jsonb
+LANGUAGE sql STABLE
+AS $$
+    SELECT COALESCE(u.preferences, '{}'::jsonb)
+    FROM users u
+    WHERE u.tenant_id = request_tenant_id()
+      AND u.subject = user_subject
+      AND u.provider = user_provider
+      AND u.disabled_at IS NULL
+    LIMIT 1;
+$$;
+
+CREATE OR REPLACE FUNCTION save_current_user_preferences(user_subject text, user_provider text, user_preferences jsonb)
+RETURNS jsonb
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    saved_preferences jsonb;
+BEGIN
+    UPDATE users
+    SET preferences = COALESCE(user_preferences, '{}'::jsonb)
+    WHERE users.tenant_id = request_tenant_id()
+      AND users.subject = user_subject
+      AND users.provider = user_provider
+      AND users.disabled_at IS NULL
+    RETURNING users.preferences INTO saved_preferences;
+
+    RETURN COALESCE(saved_preferences, '{}'::jsonb);
+END;
+$$;
+
 CREATE OR REPLACE FUNCTION current_user_has_role(user_subject text, user_provider text, allowed_roles text[])
 RETURNS boolean
 LANGUAGE sql STABLE
@@ -1349,6 +2094,8 @@ AS $$
 $$;
 
 GRANT EXECUTE ON FUNCTION current_user_profile(text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION current_user_preferences(text, text) TO dbviz_web;
+GRANT EXECUTE ON FUNCTION save_current_user_preferences(text, text, jsonb) TO dbviz_web;
 GRANT EXECUTE ON FUNCTION current_user_has_role(text, text, text[]) TO dbviz_web;
 
 CREATE OR REPLACE FUNCTION list_user_memberships(user_subject text, user_provider text)

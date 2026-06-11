@@ -5,8 +5,10 @@ import { BulbOutlined, ColumnWidthOutlined, CopyOutlined, DeleteOutlined, DownOu
 import {
   AlertIncident,
   AlertNotification,
+  AlertPreviewResult,
   AlertRule,
   AuditEvent,
+  ContactTestResult,
   ContactEndpoint,
   DataSource,
   Dashboard,
@@ -14,12 +16,16 @@ import {
   Principal,
   Provider,
   PublicConfig,
+  PagerDutySyncResult,
   QueryHistory,
   QueryRow,
   SavedQuery,
+  SystemReadiness,
+  TenantSecret,
   TenantInvite,
   TenantMember,
   TenantMembership,
+  UserPreferences,
   UserProfile,
   apiGet,
   apiPost,
@@ -48,7 +54,10 @@ import {
   NotificationsSection,
   QuerySection,
   SavedQueriesSection,
-  SourceSection
+  SecretsSection,
+  SettingsSection,
+  SourceSection,
+  SystemSection
 } from './components/ControlSections';
 import { JwtClaims, QueryState, RelativeRange, RelativeRangeUnit, ThemeMode, VisualizationType } from './types';
 import 'antd/dist/reset.css';
@@ -65,6 +74,8 @@ function App() {
   const [themeMode, setThemeMode] = useState<ThemeMode>(readThemePreference);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarWide, setSidebarWide] = useState(false);
+  const [preferencesLoaded, setPreferencesLoaded] = useState(false);
+  const [preferencesStatus, setPreferencesStatus] = useState('');
   const [config, setConfig] = useState<PublicConfig | null>(null);
   const [user, setUser] = useState<Principal | null>(null);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -112,16 +123,48 @@ function App() {
   const [inviteToken, setInviteToken] = useState('');
   const [alertName, setAlertName] = useState('High signal volume');
   const [editingAlertId, setEditingAlertId] = useState('');
+  const [alertConditionType, setAlertConditionType] = useState('numeric_threshold');
+  const [alertField, setAlertField] = useState('value');
+  const [alertTextValue, setAlertTextValue] = useState('');
   const [alertThreshold, setAlertThreshold] = useState('100');
   const [alertOperator, setAlertOperator] = useState('gt');
   const [alertFor, setAlertFor] = useState('');
   const [alertInterval, setAlertInterval] = useState(60);
   const [alertEnabled, setAlertEnabled] = useState(true);
   const [alertPreview, setAlertPreview] = useState('');
+  const [alertPreviewResult, setAlertPreviewResult] = useState<AlertPreviewResult | null>(null);
+  const [systemReadiness, setSystemReadiness] = useState<SystemReadiness | null>(null);
+  const [secrets, setSecrets] = useState<TenantSecret[]>([]);
+  const [editingSecretId, setEditingSecretId] = useState('');
+  const [secretName, setSecretName] = useState('');
+  const [secretDescription, setSecretDescription] = useState('');
+  const [secretValue, setSecretValue] = useState('');
   const [contactName, setContactName] = useState('Primary webhook');
   const [contactTarget, setContactTarget] = useState('');
   const [contactKind, setContactKind] = useState<ContactEndpoint['kind']>('webhook');
+  const [contactWebhookTokenSecretRef, setContactWebhookTokenSecretRef] = useState('');
+  const [contactWebhookTokenValue, setContactWebhookTokenValue] = useState('');
+  const [contactWebhookHeaderName, setContactWebhookHeaderName] = useState('');
+  const [contactWebhookHeaderValueSecretRef, setContactWebhookHeaderValueSecretRef] = useState('');
+  const [contactWebhookHeaderValue, setContactWebhookHeaderValue] = useState('');
+  const [contactWebhookBodyTemplate, setContactWebhookBodyTemplate] = useState('');
+  const [contactRoutingKeySecretRef, setContactRoutingKeySecretRef] = useState('');
+  const [contactRoutingKeyValue, setContactRoutingKeyValue] = useState('');
+  const [contactRestApiKeySecretRef, setContactRestApiKeySecretRef] = useState('');
+  const [contactRestApiKeyValue, setContactRestApiKeyValue] = useState('');
+  const [contactPagerDutySeverity, setContactPagerDutySeverity] = useState('error');
+  const [contactPagerDutySourceField, setContactPagerDutySourceField] = useState('service_name');
+  const [contactPagerDutyComponent, setContactPagerDutyComponent] = useState('uvoo-dbviz');
+  const [contactPagerDutyGroup, setContactPagerDutyGroup] = useState('observability');
+  const [contactPagerDutyClass, setContactPagerDutyClass] = useState('alert');
+  const [contactPagerDutyServiceID, setContactPagerDutyServiceID] = useState('');
+  const [contactPagerDutyRestSyncEnabled, setContactPagerDutyRestSyncEnabled] = useState(false);
+  const [contactPagerDutyAutoSyncEnabled, setContactPagerDutyAutoSyncEnabled] = useState(true);
+  const [contactPagerDutySyncInterval, setContactPagerDutySyncInterval] = useState(0);
+  const [contactPagerDutyFromEmail, setContactPagerDutyFromEmail] = useState('');
+  const [contactPagerDutyApiBaseURL, setContactPagerDutyApiBaseURL] = useState('https://api.pagerduty.com');
   const [editingContactId, setEditingContactId] = useState('');
+  const [contactStatus, setContactStatus] = useState('');
   const [selectedContact, setSelectedContact] = useState('');
   const [relativeRange, setRelativeRange] = useState<RelativeRange>({ value: 1, unit: 'hours' });
   const [query, setQuery] = useState<QueryState>(() => {
@@ -152,21 +195,55 @@ function App() {
     devLogin();
   }, [config, user]);
 
+  useEffect(() => {
+    const onUnhandledRejection = (event: PromiseRejectionEvent) => {
+      reportError(event.reason);
+      event.preventDefault();
+    };
+    const onWindowError = (event: ErrorEvent) => {
+      reportError(event.error || event.message);
+    };
+    window.addEventListener('unhandledrejection', onUnhandledRejection);
+    window.addEventListener('error', onWindowError);
+    return () => {
+      window.removeEventListener('unhandledrejection', onUnhandledRejection);
+      window.removeEventListener('error', onWindowError);
+    };
+  }, [messageApi]);
+
   const dataset = useMemo(() => config?.datasets.find((item) => item.id === query.dataset), [config, query.dataset]);
   const jwtClaims = useMemo(() => decodeJwtClaims(getToken()), [user]);
 
   useEffect(() => {
     if (!config || !user) return;
+    setPreferencesLoaded(false);
+    loadUserPreferences().catch((err) => {
+      setPreferencesLoaded(true);
+      setError(err.message);
+    });
     loadAccessState().catch((err) => setError(err.message));
     loadDataSources().catch((err) => setError(err.message));
     loadQueryHistory().catch(() => undefined);
     loadSavedQueries().catch(() => undefined);
     loadDashboards().catch((err) => setError(err.message));
     loadAlertState().catch((err) => setError(err.message));
+    loadSystemReadiness().catch(() => setSystemReadiness(null));
     loadInvites().catch(() => undefined);
     loadMembers().catch(() => setMembers([]));
     loadAuditEvents().catch(() => setAuditEvents([]));
   }, [config, user, activeTenant]);
+
+  useEffect(() => {
+    if (!user || !preferencesLoaded) return;
+    setPreferencesStatus('Saving preferences...');
+    const timeout = window.setTimeout(() => {
+      saveUserPreferences().catch((err) => {
+        setPreferencesStatus('Preferences not saved');
+        setError(err.message);
+      });
+    }, 800);
+    return () => window.clearTimeout(timeout);
+  }, [user, preferencesLoaded, themeMode, refreshSeconds, relativeRange.value, relativeRange.unit, query.dataset, query.sourceId, query.limit, panelVisualization]);
 
   useEffect(() => {
     if (!user || refreshSeconds <= 0) return;
@@ -230,6 +307,12 @@ function App() {
     setUser(principal);
     if (!getActiveTenant()) selectTenant(principal.tenantId);
     apiPost('/api/session/sync', {}).then(() => loadAccessState()).catch(() => undefined);
+  }
+
+  function reportError(err: unknown) {
+    const text = errorText(err);
+    setError(text);
+    messageApi.error(text);
   }
 
   async function loadData(nextQuery: QueryState = query) {
@@ -310,12 +393,27 @@ function App() {
   }
 
   async function loadAccessState() {
-    const [nextMemberships, nextProfile] = await Promise.all([
+    const [nextMemberships, nextProfile, nextSecrets] = await Promise.all([
       apiGet<TenantMembership[]>('/api/session/memberships'),
-      apiGet<UserProfile>('/api/session/profile')
+      apiGet<UserProfile>('/api/session/profile'),
+      apiGet<TenantSecret[]>('/api/secrets')
     ]);
     setMemberships(nextMemberships);
     setProfile(nextProfile);
+    setSecrets(nextSecrets);
+  }
+
+  async function loadUserPreferences() {
+    const preferences = await apiGet<UserPreferences>('/api/session/preferences');
+    applyUserPreferences(preferences);
+    setPreferencesLoaded(true);
+    setPreferencesStatus('Preferences loaded');
+  }
+
+  async function saveUserPreferences() {
+    const saved = await apiPost<UserPreferences>('/api/session/preferences', currentUserPreferences());
+    setPreferencesStatus('Preferences saved');
+    return saved;
   }
 
   async function loadMembers() {
@@ -453,20 +551,93 @@ function App() {
     if (!selectedContact && endpoints[0]) setSelectedContact(endpoints[0].id);
   }
 
-  async function saveContact() {
+  async function loadSystemReadiness() {
+    setSystemReadiness(await apiGet<SystemReadiness>('/api/system/readiness'));
+  }
+
+  async function saveSecret() {
+    const saved = await apiPost<TenantSecret[]>('/api/secrets', {
+      id: editingSecretId || null,
+      name: secretName,
+      description: secretDescription,
+      value: secretValue
+    });
+    setSecrets((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id && item.name !== saved[0]?.name)]);
+    setSecretValue('');
+    if (saved[0]) {
+      setEditingSecretId(saved[0].id);
+      setSecretName(saved[0].name);
+      setSecretDescription(saved[0].description || '');
+    }
+    loadAuditEvents().catch(() => undefined);
+    messageApi.success('Secret saved');
+  }
+
+  async function deleteSecret(secret: TenantSecret) {
+    const deleted = await apiPost<TenantSecret[]>('/api/secrets/delete', { id: secret.id });
+    setSecrets((current) => current.filter((item) => item.id !== secret.id));
+    if (editingSecretId === secret.id) newSecret();
+    loadAuditEvents().catch(() => undefined);
+    if (deleted.length === 0) setError('Secret was not deleted. It may already be gone or belong to another tenant.');
+    else messageApi.success('Secret deleted');
+  }
+
+  async function saveContact(): Promise<ContactEndpoint | null> {
     const saved = await apiPost<ContactEndpoint[]>('/api/alerts/contacts', {
       id: editingContactId || null,
       name: contactName,
       kind: contactKind,
-      target: contactTarget,
-      config: {}
+      target: contactKind === 'pagerduty' && !contactTarget.trim() ? 'https://events.pagerduty.com/v2/enqueue' : contactTarget,
+      config: contactConfigPayload()
     });
     setContacts((current) => [...saved, ...current.filter((item) => item.id !== saved[0]?.id)]);
     loadAuditEvents().catch(() => undefined);
     if (saved[0]) {
       setEditingContactId(saved[0].id);
       setSelectedContact(saved[0].id);
+      setContactWebhookTokenValue('');
+      setContactWebhookHeaderValue('');
+      setContactWebhookTokenSecretRef(String(saved[0].config.tokenSecretRef || contactWebhookTokenSecretRef));
+      setContactWebhookHeaderValueSecretRef(String(saved[0].config.headerValueSecretRef || contactWebhookHeaderValueSecretRef));
+      setContactWebhookBodyTemplate(String(saved[0].config.bodyTemplate || contactWebhookBodyTemplate));
+      setContactRoutingKeyValue('');
+      setContactRestApiKeyValue('');
+      setContactRoutingKeySecretRef(String(saved[0].config.routingKeySecretRef || contactRoutingKeySecretRef));
+      setContactRestApiKeySecretRef(String(saved[0].config.restApiKeySecretRef || contactRestApiKeySecretRef));
+      setContactPagerDutyRestSyncEnabled(String(saved[0].config.restSyncEnabled || '').toLowerCase() === 'true' || contactPagerDutyRestSyncEnabled);
+      setContactPagerDutyAutoSyncEnabled(contactAutoSyncEnabled(saved[0].config, contactPagerDutyAutoSyncEnabled));
+      setContactPagerDutySyncInterval(contactSyncInterval(saved[0].config, contactPagerDutySyncInterval));
+      setContactPagerDutyServiceID(String(saved[0].config.serviceId || contactPagerDutyServiceID));
+      setContactPagerDutyFromEmail(String(saved[0].config.fromEmail || contactPagerDutyFromEmail));
+      setContactPagerDutyApiBaseURL(String(saved[0].config.apiBaseURL || contactPagerDutyApiBaseURL || 'https://api.pagerduty.com'));
+      await loadAccessState().catch(() => undefined);
+      return saved[0];
     }
+    return null;
+  }
+
+  async function testCurrentContact() {
+    setContactStatus('');
+    const contact = await saveContact();
+    if (contact) await testContact(contact);
+  }
+
+  async function testContact(contact: ContactEndpoint) {
+    return testContactAction(contact, 'trigger');
+  }
+
+  async function testContactAction(contact: ContactEndpoint, action: 'trigger' | 'resolve' | 'validate') {
+    setContactStatus('Testing contact...');
+    const result = await apiPost<ContactTestResult>('/api/alerts/contacts/test', { id: contact.id, action });
+    const statusCode = result.statusCode ? ` HTTP ${result.statusCode}` : '';
+    const detail = result.error ? `: ${result.error}` : statusCode;
+    const label = action === 'validate' ? 'contact validation' : action === 'resolve' ? 'contact resolve test' : 'contact test';
+    const text = `${capitalize(result.status)} ${label}${detail}`;
+    setContactStatus(text);
+    if (result.status === 'success') messageApi.success(text);
+    else if (result.status === 'skipped') messageApi.warning(text);
+    else messageApi.error(text);
+    loadAlertState().catch(() => undefined);
   }
 
   async function deleteContact(contact: ContactEndpoint) {
@@ -485,7 +656,7 @@ function App() {
       id: editingAlertId || null,
       name: alertName,
       query: queryPayload(),
-      condition: { operator: alertOperator, threshold: Number(alertThreshold), for: alertFor.trim() },
+      condition: currentAlertCondition(),
       intervalSeconds: alertInterval,
       enabled: alertEnabled,
       contactEndpointId: selectedContact || null
@@ -509,7 +680,7 @@ function App() {
       id: rule.id,
       name: rule.name,
       query: rule.query,
-      condition: rule.condition || { operator: 'gt', threshold: 0 },
+      condition: normalizeAlertConditionPayload(rule.condition),
       intervalSeconds: rule.interval_seconds || 60,
       enabled: !rule.enabled,
       contactEndpointId: rule.contact_endpoint_id || null
@@ -520,17 +691,43 @@ function App() {
 
   async function testAlert() {
     setAlertPreview('');
-    const result = await apiPost<{ value: number; operator: string; threshold: number; firing: boolean }>('/api/alerts/test', {
+    setAlertPreviewResult(null);
+    const result = await apiPost<AlertPreviewResult>('/api/alerts/test', {
       query: queryPayload(),
-      condition: { operator: alertOperator, threshold: Number(alertThreshold), for: alertFor.trim() }
+      condition: currentAlertCondition()
     });
-    setAlertPreview(`${result.firing ? 'Firing' : 'OK'}: value ${formatNumber(result.value)} ${operatorLabel(result.operator)} ${formatNumber(result.threshold)}`);
+    const normalizedResult = normalizeAlertPreviewResult(result);
+    setAlertPreviewResult(normalizedResult);
+    setAlertPreview(alertPreviewText(normalizedResult));
   }
 
   async function resolveIncident(incident: AlertIncident) {
     const saved = await apiPost<AlertIncident[]>('/api/alerts/incidents/resolve', { id: incident.id });
     setIncidents((current) => current.map((item) => item.id === incident.id ? (saved[0] || item) : item));
+    await loadAlertState();
     loadAuditEvents().catch(() => undefined);
+  }
+
+  async function acknowledgeIncident(incident: AlertIncident) {
+    const saved = await apiPost<AlertIncident[]>('/api/alerts/incidents/acknowledge', { id: incident.id });
+    setIncidents((current) => current.map((item) => item.id === incident.id ? (saved[0] || item) : item));
+    await loadAlertState();
+    loadAuditEvents().catch(() => undefined);
+  }
+
+  async function syncPagerDutyIncidents() {
+    const result = await apiPost<PagerDutySyncResult>('/api/alerts/pagerduty/sync', {});
+    await loadAlertState();
+    loadAuditEvents().catch(() => undefined);
+    const syncResults = Array.isArray(result.results) ? result.results : [];
+    const failed = syncResults.filter((item) => item.Status === 'failed').length;
+    if (result.count === 0) {
+      messageApi.info(result.message || 'No mapped PagerDuty incidents found');
+    } else if (failed > 0) {
+      messageApi.warning(`PagerDuty sync finished with ${failed} failed of ${result.count}`);
+    } else {
+      messageApi.success(`PagerDuty sync checked ${result.count} incident${result.count === 1 ? '' : 's'}`);
+    }
   }
 
   async function loadInvites() {
@@ -783,6 +980,9 @@ function App() {
   function newAlertRule() {
     setEditingAlertId('');
     setAlertName('High signal volume');
+    setAlertConditionType('numeric_threshold');
+    setAlertField('value');
+    setAlertTextValue('');
     setAlertOperator('gt');
     setAlertThreshold('100');
     setAlertFor('');
@@ -790,6 +990,7 @@ function App() {
     setAlertEnabled(true);
     setSelectedContact('');
     setAlertPreview('');
+    setAlertPreviewResult(null);
   }
 
   function newSavedQuery() {
@@ -813,6 +1014,42 @@ function App() {
     setContactName('Primary webhook');
     setContactKind('webhook');
     setContactTarget('');
+    setContactWebhookTokenSecretRef('');
+    setContactWebhookTokenValue('');
+    setContactWebhookHeaderName('');
+    setContactWebhookHeaderValueSecretRef('');
+    setContactWebhookHeaderValue('');
+    setContactWebhookBodyTemplate('');
+    setContactRoutingKeySecretRef('');
+    setContactRoutingKeyValue('');
+    setContactRestApiKeySecretRef('');
+    setContactRestApiKeyValue('');
+    setContactPagerDutySeverity('error');
+    setContactPagerDutySourceField('service_name');
+    setContactPagerDutyComponent('uvoo-dbviz');
+    setContactPagerDutyGroup('observability');
+    setContactPagerDutyClass('alert');
+    setContactPagerDutyServiceID('');
+    setContactPagerDutyRestSyncEnabled(false);
+    setContactPagerDutyAutoSyncEnabled(true);
+    setContactPagerDutySyncInterval(0);
+    setContactPagerDutyFromEmail('');
+    setContactPagerDutyApiBaseURL('https://api.pagerduty.com');
+    setContactStatus('');
+  }
+
+  function newSecret() {
+    setEditingSecretId('');
+    setSecretName('');
+    setSecretDescription('');
+    setSecretValue('');
+  }
+
+  function openSecret(secret: TenantSecret) {
+    setEditingSecretId(secret.id);
+    setSecretName(secret.name);
+    setSecretDescription(secret.description || '');
+    setSecretValue('');
   }
 
   function openContact(contact: ContactEndpoint) {
@@ -820,6 +1057,28 @@ function App() {
     setContactName(contact.name);
     setContactKind(contact.kind);
     setContactTarget(contact.target);
+    setContactWebhookTokenSecretRef(String(contact.config.tokenSecretRef || ''));
+    setContactWebhookTokenValue('');
+    setContactWebhookHeaderName(String(contact.config.headerName || ''));
+    setContactWebhookHeaderValueSecretRef(String(contact.config.headerValueSecretRef || ''));
+    setContactWebhookHeaderValue('');
+    setContactWebhookBodyTemplate(String(contact.config.bodyTemplate || ''));
+    setContactRoutingKeySecretRef(String(contact.config.routingKeySecretRef || ''));
+    setContactRoutingKeyValue('');
+    setContactRestApiKeySecretRef(String(contact.config.restApiKeySecretRef || ''));
+    setContactRestApiKeyValue('');
+    setContactPagerDutySeverity(String(contact.config.severity || 'error'));
+    setContactPagerDutySourceField(String(contact.config.sourceField || 'service_name'));
+    setContactPagerDutyComponent(String(contact.config.component || 'uvoo-dbviz'));
+    setContactPagerDutyGroup(String(contact.config.group || 'observability'));
+    setContactPagerDutyClass(String(contact.config.class || 'alert'));
+    setContactPagerDutyServiceID(String(contact.config.serviceId || ''));
+    setContactPagerDutyRestSyncEnabled(String(contact.config.restSyncEnabled || '').toLowerCase() === 'true');
+    setContactPagerDutyAutoSyncEnabled(contactAutoSyncEnabled(contact.config, true));
+    setContactPagerDutySyncInterval(contactSyncInterval(contact.config, 0));
+    setContactPagerDutyFromEmail(String(contact.config.fromEmail || ''));
+    setContactPagerDutyApiBaseURL(String(contact.config.apiBaseURL || 'https://api.pagerduty.com'));
+    setContactStatus('');
   }
 
   function useContactForAlert(contact: ContactEndpoint) {
@@ -828,11 +1087,15 @@ function App() {
   }
 
   function openAlertRule(rule: AlertRule) {
+    const condition = normalizeAlertConditionPayload(rule.condition);
     setEditingAlertId(rule.id);
     setAlertName(rule.name);
-    setAlertOperator(rule.condition?.operator || 'gt');
-    setAlertThreshold(String(rule.condition?.threshold ?? 0));
-    setAlertFor(rule.condition?.for || '');
+    setAlertConditionType(condition.type || 'numeric_threshold');
+    setAlertField(condition.field || defaultAlertField(condition.type || 'numeric_threshold'));
+    setAlertTextValue(condition.value || '');
+    setAlertOperator(condition.operator || defaultAlertOperator(condition.type || 'numeric_threshold'));
+    setAlertThreshold(String(condition.threshold ?? 0));
+    setAlertFor(condition.for || '');
     setAlertInterval(rule.interval_seconds || 60);
     setAlertEnabled(rule.enabled);
     setSelectedContact(rule.contact_endpoint_id || '');
@@ -903,9 +1166,135 @@ function App() {
     return apiQueryPayload(nextQuery);
   }
 
+  function currentAlertCondition(): AlertRule['condition'] {
+    return {
+      type: alertConditionType as AlertRule['condition']['type'],
+      operator: alertOperator,
+      field: alertField.trim() || defaultAlertField(alertConditionType),
+      threshold: Number(alertThreshold),
+      value: alertTextValue,
+      for: alertFor.trim()
+    };
+  }
+
+  function contactConfigPayload(): Record<string, unknown> {
+    if (contactKind === 'webhook') {
+      return {
+        tokenSecretRef: contactWebhookTokenSecretRef.trim(),
+        tokenValue: contactWebhookTokenValue,
+        headerName: contactWebhookHeaderName.trim(),
+        headerValueSecretRef: contactWebhookHeaderValueSecretRef.trim(),
+        headerValue: contactWebhookHeaderValue,
+        bodyTemplate: contactWebhookBodyTemplate.trim()
+      };
+    }
+    if (contactKind !== 'pagerduty') return {};
+    return {
+      mode: 'events_v2',
+      routingKeySecretRef: contactRoutingKeySecretRef.trim(),
+      routingKeyValue: contactRoutingKeyValue,
+      restApiKeySecretRef: contactRestApiKeySecretRef.trim(),
+      restApiKeyValue: contactRestApiKeyValue,
+      severity: contactPagerDutySeverity,
+      sourceField: contactPagerDutySourceField.trim(),
+      component: contactPagerDutyComponent.trim(),
+      group: contactPagerDutyGroup.trim(),
+      class: contactPagerDutyClass.trim(),
+      serviceId: contactPagerDutyServiceID.trim(),
+      restSyncEnabled: contactPagerDutyRestSyncEnabled ? 'true' : 'false',
+      autoSyncEnabled: contactPagerDutyAutoSyncEnabled ? 'true' : 'false',
+      syncIntervalSeconds: contactPagerDutySyncInterval,
+      fromEmail: contactPagerDutyFromEmail.trim(),
+      apiBaseURL: contactPagerDutyApiBaseURL.trim() || 'https://api.pagerduty.com'
+    };
+  }
+
+  function changeContactKind(kind: ContactEndpoint['kind']) {
+    setContactKind(kind);
+    if (kind === 'pagerduty') {
+      if (!contactTarget.trim()) setContactTarget('https://events.pagerduty.com/v2/enqueue');
+      return;
+    }
+    if (contactTarget === 'https://events.pagerduty.com/v2/enqueue') setContactTarget('');
+  }
+
+  function changeAlertConditionType(nextType: string) {
+    setAlertConditionType(nextType);
+    setAlertOperator(defaultAlertOperator(nextType));
+    setAlertField(defaultAlertField(nextType));
+    if (nextType !== 'text_match') setAlertTextValue('');
+  }
+
   function changeTheme(nextTheme: ThemeMode) {
     setThemeMode(nextTheme);
     writeThemePreference(nextTheme);
+  }
+
+  function currentUserPreferences(): UserPreferences {
+    return {
+      themeMode,
+      refreshSeconds,
+      relativeRange,
+      eventLimit: query.limit,
+      dataset: query.dataset,
+      sourceId: query.sourceId || '',
+      visualization: panelVisualization
+    };
+  }
+
+  function applyUserPreferences(preferences: UserPreferences) {
+    if (preferences.themeMode === 'light' || preferences.themeMode === 'dark') {
+      changeTheme(preferences.themeMode);
+    }
+    if (isAllowedRefresh(preferences.refreshSeconds)) {
+      setRefreshSeconds(preferences.refreshSeconds);
+    }
+    if (preferences.relativeRange && isAllowedRangeUnit(preferences.relativeRange.unit)) {
+      const value = Math.max(1, Math.min(999, Math.trunc(preferences.relativeRange.value || 1)));
+      applyRelativeRange(value, preferences.relativeRange.unit);
+    }
+    if (isAllowedVisualization(preferences.visualization)) {
+      setPanelVisualization(preferences.visualization);
+    }
+    updateQuery((current) => {
+      const datasetID = preferences.dataset && config?.datasets.some((item) => item.id === preferences.dataset)
+        ? preferences.dataset
+        : current.dataset;
+      const sourceID = typeof preferences.sourceId === 'string' ? preferences.sourceId : current.sourceId;
+      return {
+        ...current,
+        dataset: datasetID,
+        sourceId: sourceID,
+        sql: current.mode === 'sql' && datasetID !== current.dataset ? defaultSQL(datasetID) : current.sql,
+        groupBy: datasetID !== current.dataset ? defaultGroupBy(config, datasetID) : current.groupBy,
+        measure: datasetID !== current.dataset ? defaultMeasure(config, datasetID) : current.measure,
+        aggregation: datasetID !== current.dataset ? defaultAggregation(config, datasetID) : current.aggregation,
+        filters: datasetID !== current.dataset ? {} : current.filters,
+        filterOps: datasetID !== current.dataset ? {} : current.filterOps,
+        limit: clampEventLimit(preferences.eventLimit ?? current.limit)
+      };
+    });
+  }
+
+  function changeDefaultDataset(datasetID: string) {
+    updateQuery((current) => ({
+      ...current,
+      dataset: datasetID,
+      sql: current.mode === 'sql' ? defaultSQL(datasetID) : current.sql,
+      groupBy: defaultGroupBy(config, datasetID),
+      measure: defaultMeasure(config, datasetID),
+      aggregation: defaultAggregation(config, datasetID),
+      filters: {},
+      filterOps: {}
+    }));
+  }
+
+  function changeDefaultSource(sourceID: string) {
+    setQuery((current) => ({ ...current, sourceId: sourceID }));
+  }
+
+  function changeDefaultEventLimit(limit: number) {
+    updateQuery((current) => ({ ...current, limit: clampEventLimit(limit) }));
   }
 
   function applyRelativeRange(value: number, unit: RelativeRangeUnit) {
@@ -955,9 +1344,13 @@ function App() {
   }
 
   const dashboardDirty = dashboardIsDirty(dashboardName, dashboardPanels, dashboardSavedSignature, editingDashboardId);
+  const secretUsages = useMemo(() => buildSecretUsages(dataSources, contacts), [dataSources, contacts]);
+  const failedNotificationCount = notifications.filter((notification) => notification.status === 'failed').length;
 
   const controlItems = [
     { key: 'access', label: 'Access', children: <AccessSection config={config} user={user} profile={profile} activeTenant={activeTenant} memberships={memberships} jwtClaims={jwtClaims} tokenInput={tokenInput} onTokenInput={setTokenInput} onLogin={login} onSaveToken={saveToken} onDevLogin={() => devLogin().catch((err) => setError(err.message))} onSelectTenant={selectTenant} onSignOut={signOut} /> },
+    { key: 'settings', label: 'Settings', children: <SettingsSection user={user} config={config} dataSources={dataSources} preferencesStatus={preferencesStatus} themeMode={themeMode} refreshSeconds={refreshSeconds} relativeRange={relativeRange} eventLimit={query.limit} dataset={query.dataset} sourceId={query.sourceId} visualization={panelVisualization} onTheme={changeTheme} onRefreshSeconds={setRefreshSeconds} onRelativeRange={applyRelativeRange} onEventLimit={changeDefaultEventLimit} onDataset={changeDefaultDataset} onSourceId={changeDefaultSource} onVisualization={setPanelVisualization} onSave={() => saveUserPreferences().catch((err) => setError(err.message))} /> },
+    { key: 'status', label: 'Status', children: <SystemSection readiness={systemReadiness} config={config} onRefresh={() => loadSystemReadiness().catch(reportError)} /> },
     { key: 'sources', label: 'Sources', children: <SourceSection user={user} dataSources={dataSources} sourceName={sourceName} sourceURL={sourceURL} sourceDatabase={sourceDatabase} sourceUser={sourceUser} sourceSecretRef={sourceSecretRef} sourceStatus={sourceStatus} editingSourceId={editingSourceId} onName={setSourceName} onURL={setSourceURL} onDatabase={setSourceDatabase} onUser={setSourceUser} onSecretRef={setSourceSecretRef} onNew={newDataSource} onSave={saveDataSource} onTest={testDataSource} onOpen={fillDataSource} onDelete={(source) => deleteDataSource(source).catch((err) => setError(err.message))} /> },
     { key: 'query', label: 'Query', children: <QuerySection config={config} user={user} query={query} dataset={dataset} dataSources={dataSources} relativeRange={relativeRange} onQuery={updateQuery} onSource={fillDataSource} onRun={() => loadData()} onRelativeRange={applyRelativeRange} /> },
     { key: 'history', label: 'History', children: <HistorySection queryHistory={queryHistory} onOpen={(history) => applyQuery(history.query)} /> },
@@ -997,10 +1390,11 @@ function App() {
         onRemovePanel={removePanel}
       />
     },
-    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
-    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} onName={setContactName} onTarget={setContactTarget} onKind={setContactKind} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={saveContact} onDelete={(contact) => deleteContact(contact).catch((err) => setError(err.message))} /> },
-    { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onResolve={resolveIncident} /> },
-    { key: 'notifications', label: 'Notifications', children: <NotificationsSection notifications={notifications} /> },
+    { key: 'alerts', label: 'Alerts', children: <AlertsSection user={user} alertRules={alertRules} contacts={contacts} editingAlertId={editingAlertId} alertName={alertName} alertConditionType={alertConditionType} alertField={alertField} alertTextValue={alertTextValue} alertThreshold={alertThreshold} alertOperator={alertOperator} alertFor={alertFor} alertInterval={alertInterval} alertEnabled={alertEnabled} alertPreview={alertPreview} alertPreviewResult={alertPreviewResult} selectedContact={selectedContact} queryMode={query.mode || 'builder'} onName={setAlertName} onConditionType={changeAlertConditionType} onField={setAlertField} onTextValue={setAlertTextValue} onThreshold={setAlertThreshold} onOperator={setAlertOperator} onFor={setAlertFor} onInterval={setAlertInterval} onEnabled={setAlertEnabled} onContact={setSelectedContact} onNew={newAlertRule} onOpen={openAlertRule} onLoadQuery={loadAlertRuleQuery} onToggle={(rule) => toggleAlert(rule).catch((err) => setError(err.message))} onDelete={(rule) => deleteAlert(rule).catch((err) => setError(err.message))} onTest={() => testAlert().catch((err) => setError(err.message))} onSave={saveAlert} /> },
+    { key: 'secrets', label: 'Secrets', children: <SecretsSection user={user} secrets={secrets} secretUsages={secretUsages} editingSecretId={editingSecretId} secretName={secretName} secretDescription={secretDescription} secretValue={secretValue} onName={setSecretName} onDescription={setSecretDescription} onValue={setSecretValue} onNew={newSecret} onSave={() => saveSecret().catch(reportError)} onOpen={openSecret} onDelete={(secret) => deleteSecret(secret).catch(reportError)} /> },
+    { key: 'contacts', label: 'Contacts', children: <ContactsSection user={user} contacts={contacts} notifications={notifications} secrets={secrets} editingContactId={editingContactId} contactName={contactName} contactTarget={contactTarget} contactKind={contactKind} contactStatus={contactStatus} smtpConfigured={Boolean(config?.alertDelivery.smtpConfigured)} smtpHasAuth={Boolean(config?.alertDelivery.smtpHasAuth)} webhookTokenSecretRef={contactWebhookTokenSecretRef} webhookTokenValue={contactWebhookTokenValue} webhookHeaderName={contactWebhookHeaderName} webhookHeaderValueSecretRef={contactWebhookHeaderValueSecretRef} webhookHeaderValue={contactWebhookHeaderValue} webhookBodyTemplate={contactWebhookBodyTemplate} pagerDutyRoutingKeySecretRef={contactRoutingKeySecretRef} pagerDutyRoutingKeyValue={contactRoutingKeyValue} pagerDutyRestApiKeySecretRef={contactRestApiKeySecretRef} pagerDutyRestApiKeyValue={contactRestApiKeyValue} pagerDutySeverity={contactPagerDutySeverity} pagerDutySourceField={contactPagerDutySourceField} pagerDutyComponent={contactPagerDutyComponent} pagerDutyGroup={contactPagerDutyGroup} pagerDutyClass={contactPagerDutyClass} pagerDutyServiceID={contactPagerDutyServiceID} pagerDutyRestSyncEnabled={contactPagerDutyRestSyncEnabled} pagerDutyAutoSyncEnabled={contactPagerDutyAutoSyncEnabled} pagerDutySyncInterval={contactPagerDutySyncInterval} pagerDutyFromEmail={contactPagerDutyFromEmail} pagerDutyApiBaseURL={contactPagerDutyApiBaseURL} onName={setContactName} onTarget={setContactTarget} onKind={changeContactKind} onWebhookTokenSecretRef={setContactWebhookTokenSecretRef} onWebhookTokenValue={setContactWebhookTokenValue} onWebhookHeaderName={setContactWebhookHeaderName} onWebhookHeaderValueSecretRef={setContactWebhookHeaderValueSecretRef} onWebhookHeaderValue={setContactWebhookHeaderValue} onWebhookBodyTemplate={setContactWebhookBodyTemplate} onPagerDutyRoutingKeySecretRef={setContactRoutingKeySecretRef} onPagerDutyRoutingKeyValue={setContactRoutingKeyValue} onPagerDutyRestApiKeySecretRef={setContactRestApiKeySecretRef} onPagerDutyRestApiKeyValue={setContactRestApiKeyValue} onPagerDutySeverity={setContactPagerDutySeverity} onPagerDutySourceField={setContactPagerDutySourceField} onPagerDutyComponent={setContactPagerDutyComponent} onPagerDutyGroup={setContactPagerDutyGroup} onPagerDutyClass={setContactPagerDutyClass} onPagerDutyServiceID={setContactPagerDutyServiceID} onPagerDutyRestSyncEnabled={setContactPagerDutyRestSyncEnabled} onPagerDutyAutoSyncEnabled={setContactPagerDutyAutoSyncEnabled} onPagerDutySyncInterval={setContactPagerDutySyncInterval} onPagerDutyFromEmail={setContactPagerDutyFromEmail} onPagerDutyApiBaseURL={setContactPagerDutyApiBaseURL} onNew={newContact} onOpen={openContact} onUseForAlert={useContactForAlert} onSave={() => saveContact().catch(reportError)} onTest={() => testCurrentContact().catch(reportError)} onValidateSaved={(contact) => testContactAction(contact, 'validate').catch(reportError)} onResolveTestSaved={(contact) => testContactAction(contact, 'resolve').catch(reportError)} onTestSaved={(contact) => testContact(contact).catch(reportError)} onDelete={(contact) => deleteContact(contact).catch(reportError)} /> },
+    { key: 'incidents', label: 'Incidents', children: <IncidentsSection incidents={incidents} onAcknowledge={acknowledgeIncident} onResolve={resolveIncident} onSyncPagerDuty={() => syncPagerDutyIncidents().catch(reportError)} /> },
+    { key: 'notifications', label: <span>Notifications {failedNotificationCount > 0 && <Tag color="red">{failedNotificationCount}</Tag>}</span>, children: <NotificationsSection notifications={notifications} /> },
     { key: 'invites', label: 'Invites', children: <InvitesSection user={user} invites={invites} inviteEmail={inviteEmail} inviteRole={inviteRole} inviteToken={inviteToken} onEmail={setInviteEmail} onRole={setInviteRole} onToken={setInviteToken} onAccept={acceptInvite} onCreate={createInvite} onDelete={(invite) => deleteInvite(invite).catch((err) => setError(err.message))} /> },
     { key: 'members', label: 'Members', children: <MembersSection members={members} onRole={updateMemberRole} onDeactivate={deactivateMember} /> },
     { key: 'audit', label: 'Audit', children: <AuditSection auditEvents={auditEvents} /> }
@@ -1557,6 +1951,40 @@ function formatNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : value.toFixed(3);
 }
 
+function errorText(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (typeof err === 'string') return err;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return 'Unexpected application error';
+  }
+}
+
+function capitalize(value: string): string {
+  if (!value) return value;
+  return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function buildSecretUsages(dataSources: DataSource[], contacts: ContactEndpoint[]): Record<string, string[]> {
+  const usages: Record<string, string[]> = {};
+  const add = (secretName: unknown, usage: string) => {
+    const name = typeof secretName === 'string' ? secretName.trim() : '';
+    if (!name) return;
+    usages[name] = [...(usages[name] || []), usage];
+  };
+  dataSources.forEach((source) => {
+    add(source.config.passwordSecretRef, `${source.name} password`);
+  });
+  contacts.forEach((contact) => {
+    add(contact.config.routingKeySecretRef, `${contact.name} PagerDuty Events key`);
+    add(contact.config.restApiKeySecretRef, `${contact.name} PagerDuty REST key`);
+    add(contact.config.tokenSecretRef, `${contact.name} webhook bearer token`);
+    add(contact.config.headerValueSecretRef, `${contact.name} webhook header`);
+  });
+  return usages;
+}
+
 function operatorLabel(operator: string): string {
   switch (operator) {
     case 'gte':
@@ -1567,9 +1995,77 @@ function operatorLabel(operator: string): string {
       return '<=';
     case 'eq':
       return '=';
+    case 'neq':
+      return '!=';
+    case 'contains':
+      return 'contains';
+    case 'not_contains':
+      return 'does not contain';
+    case 'regex':
+      return 'matches regex';
     default:
       return '>';
   }
+}
+
+function defaultAlertOperator(type: string): string {
+  switch (type) {
+    case 'text_match':
+      return 'contains';
+    case 'any_rows':
+    case 'sql_result':
+    case 'no_data':
+      return 'exists';
+    default:
+      return 'gt';
+  }
+}
+
+function defaultAlertField(type: string): string {
+  return type === 'text_match' ? 'message' : 'value';
+}
+
+function normalizeAlertConditionPayload(condition?: AlertRule['condition']): AlertRule['condition'] {
+  const type = condition?.type || 'numeric_threshold';
+  return {
+    type,
+    operator: condition?.operator || defaultAlertOperator(type),
+    field: condition?.field || defaultAlertField(type),
+    threshold: Number(condition?.threshold ?? 0),
+    value: condition?.value || '',
+    for: condition?.for || ''
+  };
+}
+
+function normalizeAlertPreviewResult(result: AlertPreviewResult): AlertPreviewResult {
+  return {
+    ...result,
+    match_count: Number(result.match_count ?? 0),
+    rows: Array.isArray(result.rows) ? result.rows : [],
+    matches: Array.isArray(result.matches) ? result.matches : []
+  };
+}
+
+function contactAutoSyncEnabled(config: Record<string, unknown>, fallback: boolean): boolean {
+  const raw = String(config.autoSyncEnabled ?? '').trim().toLowerCase();
+  if (!raw) return fallback;
+  return raw === 'true' || raw === '1' || raw === 'yes' || raw === 'on';
+}
+
+function contactSyncInterval(config: Record<string, unknown>, fallback: number): number {
+  const raw = Number(config.syncIntervalSeconds ?? fallback);
+  if (!Number.isFinite(raw) || raw < 0) return 0;
+  return Math.floor(raw);
+}
+
+function alertPreviewText(result: { value: number; operator: string; threshold: number; firing: boolean; match_count: number; condition: AlertRule['condition'] }): string {
+  const condition = normalizeAlertConditionPayload(result.condition);
+  const prefix = result.firing ? 'Firing' : 'OK';
+  if (condition.type === 'any_rows' || condition.type === 'sql_result') return `${prefix}: ${result.match_count} matching rows`;
+  if (condition.type === 'no_data') return `${prefix}: ${result.match_count > 0 ? 'no rows returned' : 'rows returned'}`;
+  if (condition.type === 'row_count') return `${prefix}: row count ${formatNumber(result.value)} ${operatorLabel(result.operator)} ${formatNumber(result.threshold)}`;
+  if (condition.type === 'text_match') return `${prefix}: ${result.match_count} text matches`;
+  return `${prefix}: ${condition.field || 'value'} ${formatNumber(result.value)} ${operatorLabel(result.operator)} ${formatNumber(result.threshold)}`;
 }
 
 function compactQueryDescription(query: QueryState): string {
@@ -1593,6 +2089,34 @@ function compactFilters(filters: Record<string, string> | undefined): string {
   const active = Object.entries(filters || {}).filter(([, value]) => value.trim() !== '');
   if (active.length === 0) return '';
   return active.map(([key, value]) => `${key}=${value}`).join(', ');
+}
+
+function defaultGroupBy(config: PublicConfig | null, datasetID: string): string {
+  return config?.datasets.find((item) => item.id === datasetID)?.dimensions[0] || '';
+}
+
+function defaultMeasure(config: PublicConfig | null, datasetID: string): string {
+  return config?.datasets.find((item) => item.id === datasetID)?.defaultMeasure || '_rows';
+}
+
+function defaultAggregation(config: PublicConfig | null, datasetID: string): string {
+  return config?.datasets.find((item) => item.id === datasetID)?.defaultAggregation || 'count';
+}
+
+function clampEventLimit(value: number): number {
+  return Math.max(10, Math.min(1000, Math.trunc(value || 200)));
+}
+
+function isAllowedRefresh(value: unknown): value is number {
+  return value === 0 || value === 10 || value === 30 || value === 60 || value === 300;
+}
+
+function isAllowedRangeUnit(value: unknown): value is RelativeRangeUnit {
+  return value === 'minutes' || value === 'hours' || value === 'days' || value === 'weeks' || value === 'months' || value === 'years';
+}
+
+function isAllowedVisualization(value: unknown): value is VisualizationType {
+  return value === 'line' || value === 'area' || value === 'bar';
 }
 
 function activeFilters(filters: Record<string, string> | undefined): [string, string][] {
