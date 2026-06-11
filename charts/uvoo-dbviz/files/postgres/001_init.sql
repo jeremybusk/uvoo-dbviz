@@ -254,7 +254,7 @@ WHERE slug = 'dev'
 ON CONFLICT (tenant_id, name) DO NOTHING;
 
 INSERT INTO data_sources (tenant_id, name, kind, config)
-SELECT id, 'Default ClickHouse', 'clickhouse', '{"url":"http://clickhouse:8123","database":"default","username":"default","passwordSecretRef":"clickhouse-default"}'::jsonb
+SELECT id, 'Default ClickHouse', 'clickhouse', '{"url":"{{ include "uvoo-sqviz.clickhouseURL" . }}","database":"{{ .Values.config.clickhouseDatabase }}","username":"{{ .Values.config.clickhouseUser }}","passwordSecretRef":"clickhouse-default"}'::jsonb
 FROM tenants
 WHERE slug = 'dev'
 ON CONFLICT (tenant_id, name) DO NOTHING;
