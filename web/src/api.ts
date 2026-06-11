@@ -298,6 +298,7 @@ export type TenantInvite = {
 const tokenKey = 'uvoo-sqviz-token';
 const tenantKey = 'uvoo-sqviz-active-tenant';
 const devAuthPausedKey = 'uvoo-sqviz-dev-auth-paused';
+const forceOIDCLoginKey = 'uvoo-sqviz-force-oidc-login';
 
 export function getToken(): string {
   const legacy = localStorage.getItem(tokenKey);
@@ -313,6 +314,16 @@ export function setToken(token: string) {
 export function clearToken() {
   sessionStorage.removeItem(tokenKey);
   localStorage.removeItem(tokenKey);
+}
+
+export function forceNextOIDCLogin() {
+  sessionStorage.setItem(forceOIDCLoginKey, 'true');
+}
+
+export function consumeForceNextOIDCLogin(): boolean {
+  const force = sessionStorage.getItem(forceOIDCLoginKey) === 'true';
+  sessionStorage.removeItem(forceOIDCLoginKey);
+  return force;
 }
 
 export function isDevAuthPaused(): boolean {

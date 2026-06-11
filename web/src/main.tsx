@@ -30,6 +30,8 @@ import {
   apiGet,
   apiPost,
   clearToken,
+  consumeForceNextOIDCLogin,
+  forceNextOIDCLogin,
   getActiveTenant,
   getToken,
   isDevAuthPaused,
@@ -298,6 +300,10 @@ function App() {
       code_challenge_method: 'S256',
       state
     });
+    if (consumeForceNextOIDCLogin()) {
+      params.set('prompt', 'login');
+      params.set('max_age', '0');
+    }
     location.href = `${discovery.authorizationEndpoint}?${params.toString()}`;
   }
 
@@ -937,6 +943,7 @@ function App() {
 
   function signOut() {
     clearToken();
+    forceNextOIDCLogin();
     pauseDevAuth();
     storeActiveTenant('');
     setUser(null);
